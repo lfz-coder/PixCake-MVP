@@ -51,6 +51,17 @@ bool PosixFileSystem::exists(const std::string& path) const {
   return ::stat(path.c_str(), &info) == 0 && S_ISREG(info.st_mode);
 }
 
+IoResult PosixFileSystem::probe_file(const std::string& path) const {
+  struct stat info;
+  if (::stat(path.c_str(), &info) != 0) {
+    return from_errno(errno);
+  }
+  if (!S_ISREG(info.st_mode)) {
+    return io_not_found();
+  }
+  return io_ok();
+}
+
 IoResult PosixFileSystem::read_file(const std::string& path, std::vector<std::uint8_t>& out) {
   Fd fd(::open(path.c_str(), O_RDONLY));
   if (fd.get() < 0) {

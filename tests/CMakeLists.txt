@@ -27,6 +27,11 @@ target_include_directories(test_project_paths PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 target_link_libraries(test_project_paths PRIVATE pixcake_storage pixcake_warnings)
 add_test(NAME test_project_paths COMMAND test_project_paths)
 
+add_executable(test_source_presence kernel/project/test_source_presence.cpp)
+target_include_directories(test_source_presence PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+target_link_libraries(test_source_presence PRIVATE pixcake_storage pixcake_editdoc pixcake_warnings)
+add_test(NAME test_source_presence COMMAND test_source_presence)
+
 add_test(
   NAME arch_dependencies
   COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P ${CMAKE_SOURCE_DIR}/tests/arch/check_dependencies.cmake

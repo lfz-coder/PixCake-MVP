@@ -18,6 +18,7 @@ class SimulatedCrash : public std::runtime_error {
 class FakeFileSystem : public FileSystem {
  public:
   std::map<std::string, std::vector<std::uint8_t>> files;
+  std::map<std::string, ResultCode> probe_errors;
   std::vector<std::string> writes;
   std::vector<std::string> events;
   ResultCode write_error = ResultCode::Ok;
@@ -32,6 +33,17 @@ class FakeFileSystem : public FileSystem {
   }
 
   bool exists(const std::string& path) const override { return files.find(path) != files.end(); }
+
+  IoResult probe_file(const std::string& path) const override {
+    const auto special = probe_errors.find(path);
+    if (special != probe_errors.end()) {
+      return io_error(special->second);
+    }
+    if (files.find(path) == files.end()) {
+      return io_not_found();
+    }
+    return io_ok();
+  }
 
   IoResult read_file(const std::string& path, std::vector<std::uint8_t>& out) override {
     const auto found = files.find(path);

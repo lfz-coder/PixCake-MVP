@@ -19,11 +19,18 @@ class ProjectLibrary {
   ProjectResult add_photo(std::int64_t project_id, std::string absolute_path, std::string file_name,
                           std::vector<std::uint8_t> access_credential);
 
+  ResultCode startup();
+  ResultCode refresh_source_presence();
+  ResultCode source_status(std::int64_t photo_id) const;
+  ResultCode purge_expired_trash();
+
   ResultCode list_projects(std::vector<ProjectRow>& out) const;
   ResultCode list_photos(const std::optional<std::int64_t>& project_id, std::vector<PhotoRow>& out) const;
   ResultCode load_photo(std::int64_t id, std::optional<PhotoRow>& out) const;
 
  private:
+  void note(ResultCode code, const std::string& path) const;
+
   ProjectStore& store_;
   FileSystem& files_;
   const Clock& clock_;

@@ -39,6 +39,8 @@ class FileSystem {
  public:
   virtual ~FileSystem() = default;
   virtual bool exists(const std::string& path) const = 0;
+  // exists 分不清没有文件和没有权限。探测原图只用这个结果。
+  virtual IoResult probe_file(const std::string& path) const = 0;
   virtual IoResult read_file(const std::string& path, std::vector<std::uint8_t>& out) = 0;
   virtual IoResult write_new(const std::string& path, const std::vector<std::uint8_t>& data) = 0;
   virtual IoResult remove_file(const std::string& path) = 0;
@@ -51,6 +53,7 @@ class FileSystem {
 class PosixFileSystem : public FileSystem {
  public:
   bool exists(const std::string& path) const override;
+  IoResult probe_file(const std::string& path) const override;
   IoResult read_file(const std::string& path, std::vector<std::uint8_t>& out) override;
   IoResult write_new(const std::string& path, const std::vector<std::uint8_t>& data) override;
   IoResult remove_file(const std::string& path) override;

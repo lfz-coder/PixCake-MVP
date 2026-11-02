@@ -21,10 +21,83 @@ ProjectResult failed(ResultCode code) {
 
 ProjectLibrary::ProjectLibrary(ProjectStore& store, FileSystem& files, const Clock& clock, LogSink* log)
     : store_(store), files_(files), clock_(clock), log_(log) {
-  (void)files_;
   (void)clock_;
-  (void)log_;
 }
+
+void ProjectLibrary::note(ResultCode code, const std::string& path) const {
+  if (log_ == nullptr) {
+    return;
+  }
+  LogRecord record;
+  record.code = code;
+  record.message = "project";
+  record.path = path;
+  log_->write(record);
+}
+
+ResultCode ProjectLibrary::startup() {
+  const ResultCode purged = purge_expired_trash();
+  if (purged != ResultCode::Ok) {
+    return purged;
+  }
+  return refresh_source_presence();
+}
+
+ResultCode ProjectLibrary::refresh_source_presence() {
+  std::vector<PhotoRow> photos;
+  const ResultCode listed = store_.list_photos(std::nullopt, photos);
+  if (listed != ResultCode::Ok) {
+    return listed;
+  }
+  ResultCode probe_error = ResultCode::Ok;
+  for (const PhotoRow& photo : photos) {
+    const IoResult probe = files_.probe_file(photo.absolute_path);
+    if (probe.ok) {
+      if (photo.presence != kPresenceEditable) {
+        const ResultCode updated = store_.update_photo_presence(photo.id, kPresenceEditable);
+        if (updated != ResultCode::Ok) {
+          return updated;
+        }
+      }
+      continue;
+    }
+    if (probe.not_found) {
+      if (photo.presence != kPresenceMissing) {
+        const ResultCode updated = store_.update_photo_presence(photo.id, kPresenceMissing);
+        if (updated != ResultCode::Ok) {
+          return updated;
+        }
+      }
+      note(ResultCode::SourceMissing, photo.absolute_path);
+      continue;
+    }
+    note(probe.code, photo.absolute_path);
+    if (probe_error == ResultCode::Ok) {
+      probe_error = probe.code;
+    }
+  }
+  return probe_error;
+}
+
+ResultCode ProjectLibrary::source_status(std::int64_t photo_id) const {
+  std::optional<PhotoRow> photo;
+  const ResultCode loaded = store_.load_photo(photo_id, photo);
+  if (loaded != ResultCode::Ok) {
+    return loaded;
+  }
+  if (!photo.has_value()) {
+    return ResultCode::StateConflict;
+  }
+  if (photo->presence == kPresenceMissing) {
+    return ResultCode::SourceMissing;
+  }
+  if (photo->presence == kPresenceEditable) {
+    return ResultCode::Ok;
+  }
+  return ResultCode::StateConflict;
+}
+
+ResultCode ProjectLibrary::purge_expired_trash() { return ResultCode::Ok; }
 
 ProjectResult ProjectLibrary::create_project(std::string name, std::string origin, bool cloud_marked) {
   if (!valid_origin(origin)) {

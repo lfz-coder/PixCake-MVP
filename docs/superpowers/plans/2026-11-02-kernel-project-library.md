@@ -235,7 +235,7 @@ EOF
 
 `probe_file` 是 const，返回已有的 `IoResult`：普通文件为成功；`ENOENT` 或不是普通文件为 `not_found`；`EACCES`、`EPERM`、`EROFS` 为权限不足。
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 断言：
 
@@ -244,13 +244,13 @@ EOF
 - 日志记录的 `code` 是原文件缺失，`path` 是该绝对路径，`message` 是 `project`。凭证文本 `credential-do-not-log` 不出现在 `message` 或 `path`。
 - 另一条路径探测返回权限不足时，它的 presence 仍是 `可编辑`，刷新的总结果是权限不足。已经判成缺失的那张保持缺失。
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cmake -S . -B build && cmake --build build --target test_source_presence && ctest --test-dir build -R '^test_source_presence$' --output-on-failure`
 
 Expected: 编译失败，因为还没有 `refresh_source_presence`。
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 `refresh_source_presence` 列出全部图片：
 
@@ -262,11 +262,11 @@ Expected: 编译失败，因为还没有 `refresh_source_presence`。
 
 刷新不接收 `EditDocument`，不调用 `read_file`。
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Expected: `test_source_presence` 通过。已有内核测试仍通过。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add kernel/persist kernel/project tests/support/fake_file_system.hpp tests/kernel/project/test_source_presence.cpp tests/CMakeLists.txt
