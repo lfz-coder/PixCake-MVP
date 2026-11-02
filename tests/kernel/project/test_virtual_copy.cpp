@@ -485,6 +485,88 @@ void test_expired_copy_index_is_removed_without_the_file() {
   EXPECT(erased.deleter.calls == 0);
 }
 
+void test_restoring_a_copy_brings_the_original_back() {
+  Fixture world;
+  const std::int64_t photo_id = add_project_photo(world, "/pictures/a.png", "a.png");
+  const pixcake::ProjectResult first = world.library->create_virtual_copy(photo_id, "doc-1");
+  const pixcake::ProjectResult second = world.library->create_virtual_copy(photo_id, "doc-2");
+  EXPECT(first.code == pixcake::ResultCode::Ok);
+  EXPECT(second.code == pixcake::ResultCode::Ok);
+  EXPECT(world.library->trash_photo(photo_id).code == pixcake::ResultCode::Ok);
+  const std::int64_t second_time = deleted_at(world, pixcake::kTrashVirtualCopy, second.id);
+  EXPECT(world.library->restore_virtual_copies({first.id}).code == pixcake::ResultCode::Ok);
+  EXPECT(!in_trash(world, pixcake::kTrashVirtualCopy, first.id));
+  EXPECT(!in_trash(world, pixcake::kTrashPhoto, photo_id));
+  EXPECT(deleted_at(world, pixcake::kTrashVirtualCopy, second.id) == second_time);
+
+  Fixture active_original;
+  const std::int64_t active_photo = add_project_photo(active_original, "/pictures/a.png", "a.png");
+  const pixcake::ProjectResult active_copy = active_original.library->create_virtual_copy(active_photo, "doc-active");
+  EXPECT(active_copy.code == pixcake::ResultCode::Ok);
+  EXPECT(active_original.library->trash_virtual_copy(active_copy.id).code == pixcake::ResultCode::Ok);
+  EXPECT(active_original.library->restore_virtual_copies({active_copy.id}).code == pixcake::ResultCode::Ok);
+  EXPECT(!in_trash(active_original, pixcake::kTrashVirtualCopy, active_copy.id));
+  EXPECT(!in_trash(active_original, pixcake::kTrashPhoto, active_photo));
+
+  Fixture blocked;
+  const pixcake::ProjectResult blocked_project =
+      blocked.library->create_project("还在回收站", pixcake::kOriginLocal, false);
+  EXPECT(blocked_project.code == pixcake::ResultCode::Ok);
+  const pixcake::ProjectResult blocked_photo =
+      blocked.library->add_photo(blocked_project.id, "/pictures/a.png", "a.png", {1});
+  EXPECT(blocked_photo.code == pixcake::ResultCode::Ok);
+  const pixcake::ProjectResult blocked_copy = blocked.library->create_virtual_copy(blocked_photo.id, "doc-blocked");
+  EXPECT(blocked_copy.code == pixcake::ResultCode::Ok);
+  EXPECT(blocked.library->trash_project(blocked_project.id).code == pixcake::ResultCode::Ok);
+  const std::int64_t project_time = deleted_at(blocked, pixcake::kTrashProject, blocked_project.id);
+  const std::int64_t photo_time = deleted_at(blocked, pixcake::kTrashPhoto, blocked_photo.id);
+  const std::int64_t copy_time = deleted_at(blocked, pixcake::kTrashVirtualCopy, blocked_copy.id);
+  EXPECT(blocked.library->restore_virtual_copies({blocked_copy.id}).code == pixcake::ResultCode::StateConflict);
+  EXPECT(deleted_at(blocked, pixcake::kTrashProject, blocked_project.id) == project_time);
+  EXPECT(deleted_at(blocked, pixcake::kTrashPhoto, blocked_photo.id) == photo_time);
+  EXPECT(deleted_at(blocked, pixcake::kTrashVirtualCopy, blocked_copy.id) == copy_time);
+
+  Fixture rejected;
+  const std::int64_t rejected_photo = add_project_photo(rejected, "/pictures/a.png", "a.png");
+  const pixcake::ProjectResult kept = rejected.library->create_virtual_copy(rejected_photo, "doc-kept");
+  const pixcake::ProjectResult loose = rejected.library->create_virtual_copy(rejected_photo, "doc-loose");
+  EXPECT(kept.code == pixcake::ResultCode::Ok);
+  EXPECT(loose.code == pixcake::ResultCode::Ok);
+  EXPECT(rejected.library->trash_virtual_copy(kept.id).code == pixcake::ResultCode::Ok);
+  const std::int64_t kept_time = deleted_at(rejected, pixcake::kTrashVirtualCopy, kept.id);
+  EXPECT(rejected.library->restore_virtual_copies({}).code == pixcake::ResultCode::StateConflict);
+  EXPECT(rejected.library->restore_virtual_copies({999}).code == pixcake::ResultCode::StateConflict);
+  EXPECT(rejected.library->restore_virtual_copies({loose.id}).code == pixcake::ResultCode::StateConflict);
+  EXPECT(rejected.library->restore_virtual_copies({kept.id, 999}).code == pixcake::ResultCode::StateConflict);
+  EXPECT(deleted_at(rejected, pixcake::kTrashVirtualCopy, kept.id) == kept_time);
+  EXPECT(!in_trash(rejected, pixcake::kTrashVirtualCopy, loose.id));
+
+  Fixture photo_only;
+  const std::int64_t photo_only_id = add_project_photo(photo_only, "/pictures/a.png", "a.png");
+  const pixcake::ProjectResult photo_only_copy = photo_only.library->create_virtual_copy(photo_only_id, "doc-photo");
+  EXPECT(photo_only_copy.code == pixcake::ResultCode::Ok);
+  EXPECT(photo_only.library->trash_photo(photo_only_id).code == pixcake::ResultCode::Ok);
+  const std::int64_t photo_only_time = deleted_at(photo_only, pixcake::kTrashVirtualCopy, photo_only_copy.id);
+  EXPECT(photo_only.library->restore_photos({photo_only_id}).code == pixcake::ResultCode::Ok);
+  EXPECT(!in_trash(photo_only, pixcake::kTrashPhoto, photo_only_id));
+  EXPECT(deleted_at(photo_only, pixcake::kTrashVirtualCopy, photo_only_copy.id) == photo_only_time);
+
+  Fixture restored_project;
+  const pixcake::ProjectResult whole = restored_project.library->create_project("整本恢复", pixcake::kOriginLocal, false);
+  EXPECT(whole.code == pixcake::ResultCode::Ok);
+  const pixcake::ProjectResult whole_photo =
+      restored_project.library->add_photo(whole.id, "/pictures/a.png", "a.png", {1});
+  EXPECT(whole_photo.code == pixcake::ResultCode::Ok);
+  const pixcake::ProjectResult whole_copy = restored_project.library->create_virtual_copy(whole_photo.id, "doc-whole");
+  EXPECT(whole_copy.code == pixcake::ResultCode::Ok);
+  EXPECT(restored_project.library->trash_project(whole.id).code == pixcake::ResultCode::Ok);
+  const std::int64_t whole_copy_time = deleted_at(restored_project, pixcake::kTrashVirtualCopy, whole_copy.id);
+  EXPECT(restored_project.library->restore_project(whole.id).code == pixcake::ResultCode::Ok);
+  EXPECT(!in_trash(restored_project, pixcake::kTrashProject, whole.id));
+  EXPECT(!in_trash(restored_project, pixcake::kTrashPhoto, whole_photo.id));
+  EXPECT(deleted_at(restored_project, pixcake::kTrashVirtualCopy, whole_copy.id) == whole_copy_time);
+}
+
 }  // namespace
 
 int main() {
@@ -496,5 +578,6 @@ int main() {
   test_trashing_the_original_takes_copies_with_it();
   test_delete_source_file_trashes_copies_without_a_second_path();
   test_expired_copy_index_is_removed_without_the_file();
+  test_restoring_a_copy_brings_the_original_back();
   return g_failures == 0 ? 0 : 1;
 }

@@ -247,7 +247,7 @@ EOF
 - Consumes: `restore_project`、`restore_photos`、回收站行
 - Produces: `ProjectLibrary::restore_virtual_copies`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 断言：
 
@@ -258,25 +258,25 @@ EOF
 - 只恢复原图时，副本仍留在回收站，删除时间不变。
 - 恢复项目后，原图离开回收站，副本仍留在回收站。
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cmake --build build --target test_virtual_copy && ctest --test-dir build -R '^test_virtual_copy$' --output-on-failure`
 
 Expected: 编译失败，因为还没有 `restore_virtual_copies`。
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 `restore_virtual_copies` 先检查每一份副本都存在、都在回收站、所在项目不在回收站。任一不满足则整次返回状态冲突，不写。通过后在一个事务里删掉这些副本的回收站行；原图若在回收站，也删掉原图的回收站行。不删其他副本的回收站行，不清项目的 `deleted_at`。
 
 不修改 `restore_photos` 和 `restore_project` 去连带恢复副本。
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cmake --build build && ctest --test-dir build --output-on-failure`
 
 Expected: 全部通过，包含 `arch_dependencies`。`kernel/project` 源文件没有 `sqlite3.h`、`QOpenGL` 和 Qt 头。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add kernel/project tests/kernel/project/test_virtual_copy.cpp docs/superpowers/plans/2026-11-02-kernel-virtual-copy.md
