@@ -14,6 +14,8 @@ namespace pixcake {
 // 回收站按删除时间加 2592000 秒到期。到期只删索引，不删原图。
 // 只有 delete_source_file 调用 SourceDeleter。
 // 原图只记绝对路径和调用方交来的访问凭证。add_photo 不探测文件，因此不返回原文件缺失。
+// 虚拟副本指向原图，并保存调用方交来的参数文档编号。编号是不透明字符串，这里不打开参数文档。
+// 项目库只回答这些条目是否共用一张原图。张数在账本里计算，这里不减张数，也没有余额。
 class ProjectLibrary {
  public:
   ProjectLibrary(ProjectStore& store, FileSystem& files, const Clock& clock, SourceDeleter& deleter,
@@ -22,6 +24,7 @@ class ProjectLibrary {
   ProjectResult create_project(std::string name, std::string origin, bool cloud_marked);
   ProjectResult add_photo(std::int64_t project_id, std::string absolute_path, std::string file_name,
                           std::vector<std::uint8_t> access_credential);
+  ProjectResult create_virtual_copy(std::int64_t photo_id, std::string document_id);
 
   ResultCode startup();
   ResultCode refresh_source_presence();
@@ -42,6 +45,8 @@ class ProjectLibrary {
   ResultCode list_projects(std::vector<ProjectRow>& out) const;
   ResultCode list_photos(const std::optional<std::int64_t>& project_id, std::vector<PhotoRow>& out) const;
   ResultCode load_photo(std::int64_t id, std::optional<PhotoRow>& out) const;
+  ResultCode load_virtual_copy(std::int64_t id, std::optional<VirtualCopyRow>& out) const;
+  ResultCode list_virtual_copies(std::int64_t photo_id, std::vector<VirtualCopyRow>& out) const;
 
  private:
   void note(ResultCode code, const std::string& path) const;

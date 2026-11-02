@@ -31,6 +31,19 @@ constexpr const char* kSchema =
     "CREATE INDEX IF NOT EXISTS idx_photo_project ON photo(project_id);"
     "CREATE INDEX IF NOT EXISTS idx_trash_subject ON trash(subject, subject_id);";
 
+constexpr const char* kVirtualCopySchema =
+    "CREATE TABLE IF NOT EXISTS virtual_copy ("
+    "id INTEGER PRIMARY KEY,"
+    "project_id INTEGER NOT NULL,"
+    "source_photo_id INTEGER NOT NULL,"
+    "sequence INTEGER NOT NULL,"
+    "document_id TEXT NOT NULL,"
+    "FOREIGN KEY(project_id) REFERENCES project(id),"
+    "FOREIGN KEY(source_photo_id) REFERENCES photo(id));"
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_virtual_copy_document ON virtual_copy(document_id);"
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_virtual_copy_sequence "
+    "ON virtual_copy(source_photo_id, sequence);";
+
 ResultCode map_sqlite(int rc) {
   if (rc == SQLITE_OK || rc == SQLITE_DONE || rc == SQLITE_ROW) {
     return ResultCode::Ok;
@@ -152,6 +165,16 @@ TrashRow read_trash(sqlite3_stmt* stmt) {
   return row;
 }
 
+VirtualCopyRow read_virtual_copy(sqlite3_stmt* stmt) {
+  VirtualCopyRow row;
+  row.id = sqlite3_column_int64(stmt, 0);
+  row.project_id = sqlite3_column_int64(stmt, 1);
+  row.source_photo_id = sqlite3_column_int64(stmt, 2);
+  row.sequence = sqlite3_column_int64(stmt, 3);
+  row.document_id = column_text(stmt, 4);
+  return row;
+}
+
 ResultCode read_user_version(sqlite3* db, int& version) {
   Statement stmt;
   const ResultCode prepared = stmt.prepare(db, "PRAGMA user_version;");
@@ -205,7 +228,7 @@ ResultCode SqliteProjectStore::open(const std::string& path, std::unique_ptr<Sql
     sqlite3_close(db);
     return version_code;
   }
-  if (version != 0 && version != 1) {
+  if (version != 0 && version != 1 && version != 2) {
     sqlite3_close(db);
     return ResultCode::StateConflict;
   }
@@ -220,13 +243,20 @@ ResultCode SqliteProjectStore::open(const std::string& path, std::unique_ptr<Sql
     sqlite3_close(db);
     return wal;
   }
-  if (version == 0) {
-    const ResultCode schema = exec_sql(db, kSchema);
-    if (schema != ResultCode::Ok) {
-      sqlite3_close(db);
-      return schema;
+  if (version == 0 || version == 1) {
+    if (version == 0) {
+      const ResultCode schema = exec_sql(db, kSchema);
+      if (schema != ResultCode::Ok) {
+        sqlite3_close(db);
+        return schema;
+      }
     }
-    const ResultCode stamp = exec_sql(db, "PRAGMA user_version=1;");
+    const ResultCode copies = exec_sql(db, kVirtualCopySchema);
+    if (copies != ResultCode::Ok) {
+      sqlite3_close(db);
+      return copies;
+    }
+    const ResultCode stamp = exec_sql(db, "PRAGMA user_version=2;");
     if (stamp != ResultCode::Ok) {
       sqlite3_close(db);
       return stamp;
@@ -531,6 +561,106 @@ ResultCode SqliteProjectStore::erase_photo(std::int64_t id) {
   }
   const int rc = sqlite3_step(stmt.get());
   return rc == SQLITE_DONE ? ResultCode::Ok : map_sqlite(rc);
+}
+
+ResultCode SqliteProjectStore::insert_virtual_copy(const VirtualCopyDraft& draft, std::int64_t& id) {
+  Statement stmt;
+  const ResultCode prepared = stmt.prepare(
+      impl_->db,
+      "INSERT INTO virtual_copy(project_id, source_photo_id, sequence, document_id) VALUES (?, ?, ?, ?);");
+  if (prepared != ResultCode::Ok) {
+    return prepared;
+  }
+  if (const ResultCode code = bind_int64(stmt.get(), 1, draft.project_id); code != ResultCode::Ok) {
+    return code;
+  }
+  if (const ResultCode code = bind_int64(stmt.get(), 2, draft.source_photo_id); code != ResultCode::Ok) {
+    return code;
+  }
+  if (const ResultCode code = bind_int64(stmt.get(), 3, draft.sequence); code != ResultCode::Ok) {
+    return code;
+  }
+  if (const ResultCode code = bind_text(stmt.get(), 4, draft.document_id); code != ResultCode::Ok) {
+    return code;
+  }
+  const int rc = sqlite3_step(stmt.get());
+  if (rc != SQLITE_DONE) {
+    return map_sqlite(rc);
+  }
+  id = sqlite3_last_insert_rowid(impl_->db);
+  return ResultCode::Ok;
+}
+
+ResultCode SqliteProjectStore::load_virtual_copy(std::int64_t id, std::optional<VirtualCopyRow>& out) {
+  out.reset();
+  Statement stmt;
+  const ResultCode prepared = stmt.prepare(
+      impl_->db,
+      "SELECT id, project_id, source_photo_id, sequence, document_id FROM virtual_copy WHERE id = ?;");
+  if (prepared != ResultCode::Ok) {
+    return prepared;
+  }
+  if (const ResultCode code = bind_int64(stmt.get(), 1, id); code != ResultCode::Ok) {
+    return code;
+  }
+  const int rc = sqlite3_step(stmt.get());
+  if (rc == SQLITE_DONE) {
+    return ResultCode::Ok;
+  }
+  if (rc != SQLITE_ROW) {
+    return map_sqlite(rc);
+  }
+  out = read_virtual_copy(stmt.get());
+  return ResultCode::Ok;
+}
+
+ResultCode SqliteProjectStore::load_virtual_copy_by_document(const std::string& document_id,
+                                                            std::optional<VirtualCopyRow>& out) {
+  out.reset();
+  Statement stmt;
+  const ResultCode prepared = stmt.prepare(
+      impl_->db,
+      "SELECT id, project_id, source_photo_id, sequence, document_id FROM virtual_copy WHERE document_id = ?;");
+  if (prepared != ResultCode::Ok) {
+    return prepared;
+  }
+  if (const ResultCode code = bind_text(stmt.get(), 1, document_id); code != ResultCode::Ok) {
+    return code;
+  }
+  const int rc = sqlite3_step(stmt.get());
+  if (rc == SQLITE_DONE) {
+    return ResultCode::Ok;
+  }
+  if (rc != SQLITE_ROW) {
+    return map_sqlite(rc);
+  }
+  out = read_virtual_copy(stmt.get());
+  return ResultCode::Ok;
+}
+
+ResultCode SqliteProjectStore::list_virtual_copies(std::int64_t source_photo_id, std::vector<VirtualCopyRow>& out) {
+  out.clear();
+  Statement stmt;
+  const ResultCode prepared = stmt.prepare(
+      impl_->db,
+      "SELECT id, project_id, source_photo_id, sequence, document_id FROM virtual_copy "
+      "WHERE source_photo_id = ? ORDER BY sequence;");
+  if (prepared != ResultCode::Ok) {
+    return prepared;
+  }
+  if (const ResultCode code = bind_int64(stmt.get(), 1, source_photo_id); code != ResultCode::Ok) {
+    return code;
+  }
+  while (true) {
+    const int rc = sqlite3_step(stmt.get());
+    if (rc == SQLITE_DONE) {
+      return ResultCode::Ok;
+    }
+    if (rc != SQLITE_ROW) {
+      return map_sqlite(rc);
+    }
+    out.push_back(read_virtual_copy(stmt.get()));
+  }
 }
 
 ResultCode SqliteProjectStore::insert_trash(const std::string& subject, std::int64_t subject_id,

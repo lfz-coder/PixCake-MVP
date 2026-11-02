@@ -26,6 +26,12 @@ class SqliteProjectStore : public ProjectStore {
   ResultCode list_photos(const std::optional<std::int64_t>& project_id, std::vector<PhotoRow>& out) override;
   ResultCode erase_photo(std::int64_t id) override;
 
+  ResultCode insert_virtual_copy(const VirtualCopyDraft& draft, std::int64_t& id) override;
+  ResultCode load_virtual_copy(std::int64_t id, std::optional<VirtualCopyRow>& out) override;
+  ResultCode load_virtual_copy_by_document(const std::string& document_id,
+                                           std::optional<VirtualCopyRow>& out) override;
+  ResultCode list_virtual_copies(std::int64_t source_photo_id, std::vector<VirtualCopyRow>& out) override;
+
   ResultCode insert_trash(const std::string& subject, std::int64_t subject_id, std::int64_t deleted_at) override;
   ResultCode load_trash(const std::string& subject, std::int64_t subject_id, std::optional<TrashRow>& out) override;
   ResultCode list_trash(std::vector<TrashRow>& out) override;

@@ -16,6 +16,7 @@ inline constexpr char kPresenceEditable[] = "可编辑";
 inline constexpr char kPresenceMissing[] = "原文件缺失";
 inline constexpr char kTrashProject[] = "项目";
 inline constexpr char kTrashPhoto[] = "图片";
+inline constexpr char kTrashVirtualCopy[] = "虚拟副本";
 inline constexpr char kDiskFileRemains[] = "磁盘文件还在";
 inline constexpr std::int64_t kTrashRetentionSeconds = 2592000;
 
@@ -41,6 +42,21 @@ struct TrashRow {
   std::string subject;
   std::int64_t subject_id = 0;
   std::int64_t deleted_at = 0;
+};
+
+struct VirtualCopyRow {
+  std::int64_t id = 0;
+  std::int64_t project_id = 0;
+  std::int64_t source_photo_id = 0;
+  std::int64_t sequence = 0;
+  std::string document_id;
+};
+
+struct VirtualCopyDraft {
+  std::int64_t project_id = 0;
+  std::int64_t source_photo_id = 0;
+  std::int64_t sequence = 0;
+  std::string document_id;
 };
 
 struct ProjectDraft {

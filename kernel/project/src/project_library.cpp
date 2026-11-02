@@ -416,6 +416,58 @@ ProjectResult ProjectLibrary::add_photo(std::int64_t project_id, std::string abs
   return result;
 }
 
+ProjectResult ProjectLibrary::create_virtual_copy(std::int64_t photo_id, std::string document_id) {
+  if (document_id.empty()) {
+    return failed(ResultCode::StateConflict);
+  }
+  std::optional<PhotoRow> photo;
+  const ResultCode loaded = store_.load_photo(photo_id, photo);
+  if (loaded != ResultCode::Ok) {
+    return failed(loaded);
+  }
+  if (!photo.has_value()) {
+    return failed(ResultCode::StateConflict);
+  }
+  std::optional<TrashRow> photo_trash;
+  const ResultCode photo_trash_code = store_.load_trash(kTrashPhoto, photo_id, photo_trash);
+  if (photo_trash_code != ResultCode::Ok) {
+    return failed(photo_trash_code);
+  }
+  if (photo_trash.has_value()) {
+    return failed(ResultCode::StateConflict);
+  }
+  std::optional<TrashRow> project_trash;
+  const ResultCode project_trash_code = store_.load_trash(kTrashProject, photo->project_id, project_trash);
+  if (project_trash_code != ResultCode::Ok) {
+    return failed(project_trash_code);
+  }
+  if (project_trash.has_value()) {
+    return failed(ResultCode::StateConflict);
+  }
+  std::optional<VirtualCopyRow> existing_document;
+  const ResultCode found_document = store_.load_virtual_copy_by_document(document_id, existing_document);
+  if (found_document != ResultCode::Ok) {
+    return failed(found_document);
+  }
+  if (existing_document.has_value()) {
+    return failed(ResultCode::StateConflict);
+  }
+
+  std::vector<VirtualCopyRow> copies;
+  const ResultCode listed = store_.list_virtual_copies(photo_id, copies);
+  if (listed != ResultCode::Ok) {
+    return failed(listed);
+  }
+  VirtualCopyDraft draft;
+  draft.project_id = photo->project_id;
+  draft.source_photo_id = photo_id;
+  draft.sequence = copies.empty() ? 1 : copies.back().sequence + 1;
+  draft.document_id = std::move(document_id);
+  ProjectResult result;
+  result.code = store_.insert_virtual_copy(draft, result.id);
+  return result;
+}
+
 ResultCode ProjectLibrary::list_projects(std::vector<ProjectRow>& out) const {
   return store_.list_projects(out);
 }
@@ -427,6 +479,14 @@ ResultCode ProjectLibrary::list_photos(const std::optional<std::int64_t>& projec
 
 ResultCode ProjectLibrary::load_photo(std::int64_t id, std::optional<PhotoRow>& out) const {
   return store_.load_photo(id, out);
+}
+
+ResultCode ProjectLibrary::load_virtual_copy(std::int64_t id, std::optional<VirtualCopyRow>& out) const {
+  return store_.load_virtual_copy(id, out);
+}
+
+ResultCode ProjectLibrary::list_virtual_copies(std::int64_t photo_id, std::vector<VirtualCopyRow>& out) const {
+  return store_.list_virtual_copies(photo_id, out);
 }
 
 }  // namespace pixcake

@@ -26,6 +26,12 @@ class ProjectStore {
                                  std::vector<PhotoRow>& out) = 0;
   virtual ResultCode erase_photo(std::int64_t id) = 0;
 
+  virtual ResultCode insert_virtual_copy(const VirtualCopyDraft& draft, std::int64_t& id) = 0;
+  virtual ResultCode load_virtual_copy(std::int64_t id, std::optional<VirtualCopyRow>& out) = 0;
+  virtual ResultCode load_virtual_copy_by_document(const std::string& document_id,
+                                                   std::optional<VirtualCopyRow>& out) = 0;
+  virtual ResultCode list_virtual_copies(std::int64_t source_photo_id, std::vector<VirtualCopyRow>& out) = 0;
+
   virtual ResultCode insert_trash(const std::string& subject, std::int64_t subject_id,
                                   std::int64_t deleted_at) = 0;
   virtual ResultCode load_trash(const std::string& subject, std::int64_t subject_id,
