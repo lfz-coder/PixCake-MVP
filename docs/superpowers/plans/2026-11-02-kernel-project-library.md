@@ -149,7 +149,7 @@ EOF
 - Consumes: `ResultCode`、`Clock`
 - Produces: `ProjectLibrary::create_project`、`ProjectLibrary::add_photo`、`SqliteProjectStore::open`。记录字段见下面的头文件。访问凭证类型是 `std::vector<std::uint8_t>`。
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `tests/kernel/project/test_project_paths.cpp` 断言：
 
@@ -162,13 +162,13 @@ EOF
 - 把普通文本写到库路径上再打开，返回输入输出失败，文件内容仍以 `hello` 开头。
 - `user_version` 为 2 的库打开时返回状态冲突，版本仍是 2。
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cmake -S . -B build && cmake --build build --target test_project_paths && ctest --test-dir build -R '^test_project_paths$' --output-on-failure`
 
 Expected: 编译失败，因为还没有 `ProjectLibrary`。
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 记录字面量只允许这些值：来源 `本地`、`云上传`、`云下载`；在场 `可编辑`、`原文件缺失`；回收站主体 `项目`、`图片`。`kTrashRetentionSeconds` 为 `2592000`。`kDiskFileRemains` 为 `磁盘文件还在`。
 
@@ -203,11 +203,11 @@ CREATE TABLE IF NOT EXISTS trash (
 
 `create_project` 写入名称、来源和云标识，`deleted_at` 为空。`add_photo` 要求项目存在、项目不在回收站、路径以 `/` 开头、文件名非空。presence 写成 `可编辑`。它不调用文件系统。
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Expected: `test_project_paths` 通过。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add kernel/project storage tests/support/temp_dir.hpp tests/kernel/project/test_project_paths.cpp tests/CMakeLists.txt CMakeLists.txt
