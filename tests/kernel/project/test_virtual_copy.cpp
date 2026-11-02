@@ -306,6 +306,185 @@ void test_shares_original_without_a_charge() {
   }
 }
 
+std::int64_t deleted_at(Fixture& world, const char* subject, std::int64_t id) {
+  std::optional<pixcake::TrashRow> row;
+  EXPECT(world.library->load_trash(subject, id, row) == pixcake::ResultCode::Ok);
+  EXPECT(row.has_value());
+  return row.has_value() ? row->deleted_at : -1;
+}
+
+bool in_trash(Fixture& world, const char* subject, std::int64_t id) {
+  std::optional<pixcake::TrashRow> row;
+  EXPECT(world.library->load_trash(subject, id, row) == pixcake::ResultCode::Ok);
+  return row.has_value();
+}
+
+void test_trashing_a_copy_leaves_the_original() {
+  Fixture world;
+  const std::int64_t photo_id = add_project_photo(world, "/pictures/a.png", "a.png");
+  const pixcake::ProjectResult first = world.library->create_virtual_copy(photo_id, "doc-1");
+  const pixcake::ProjectResult second = world.library->create_virtual_copy(photo_id, "doc-2");
+  EXPECT(first.code == pixcake::ResultCode::Ok);
+  EXPECT(second.code == pixcake::ResultCode::Ok);
+
+  EXPECT(world.library->trash_virtual_copy(first.id).code == pixcake::ResultCode::Ok);
+  EXPECT(in_trash(world, pixcake::kTrashVirtualCopy, first.id));
+  EXPECT(!in_trash(world, pixcake::kTrashPhoto, photo_id));
+  EXPECT(!in_trash(world, pixcake::kTrashVirtualCopy, second.id));
+  const std::int64_t kept = deleted_at(world, pixcake::kTrashVirtualCopy, first.id);
+  world.clock.now += 50;
+  EXPECT(world.library->trash_virtual_copy(first.id).code == pixcake::ResultCode::StateConflict);
+  EXPECT(deleted_at(world, pixcake::kTrashVirtualCopy, first.id) == kept);
+  EXPECT(world.deleter.calls == 0);
+}
+
+void test_trashing_the_original_takes_copies_with_it() {
+  Fixture world;
+  world.files.files["/pictures/a.png"] = {7, 8};
+  const std::int64_t photo_id = add_project_photo(world, "/pictures/a.png", "a.png");
+  const pixcake::ProjectResult early = world.library->create_virtual_copy(photo_id, "doc-early");
+  const pixcake::ProjectResult later = world.library->create_virtual_copy(photo_id, "doc-later");
+  EXPECT(early.code == pixcake::ResultCode::Ok);
+  EXPECT(later.code == pixcake::ResultCode::Ok);
+  EXPECT(world.library->trash_virtual_copy(early.id).code == pixcake::ResultCode::Ok);
+  const std::int64_t early_time = deleted_at(world, pixcake::kTrashVirtualCopy, early.id);
+  world.clock.now += 80;
+  EXPECT(world.library->trash_photo(photo_id).code == pixcake::ResultCode::Ok);
+  EXPECT(deleted_at(world, pixcake::kTrashPhoto, photo_id) == world.clock.now);
+  EXPECT(deleted_at(world, pixcake::kTrashVirtualCopy, later.id) == world.clock.now);
+  EXPECT(deleted_at(world, pixcake::kTrashVirtualCopy, early.id) == early_time);
+
+  Fixture project_world;
+  const pixcake::ProjectResult project =
+      project_world.library->create_project("整本", pixcake::kOriginLocal, false);
+  EXPECT(project.code == pixcake::ResultCode::Ok);
+  const pixcake::ProjectResult photo =
+      project_world.library->add_photo(project.id, "/pictures/b.png", "b.png", {1});
+  EXPECT(photo.code == pixcake::ResultCode::Ok);
+  const pixcake::ProjectResult kept = project_world.library->create_virtual_copy(photo.id, "kept");
+  const pixcake::ProjectResult moved = project_world.library->create_virtual_copy(photo.id, "moved");
+  EXPECT(kept.code == pixcake::ResultCode::Ok);
+  EXPECT(moved.code == pixcake::ResultCode::Ok);
+  EXPECT(project_world.library->trash_virtual_copy(kept.id).code == pixcake::ResultCode::Ok);
+  const std::int64_t kept_time = deleted_at(project_world, pixcake::kTrashVirtualCopy, kept.id);
+  project_world.clock.now += 20;
+  EXPECT(project_world.library->trash_project(project.id).code == pixcake::ResultCode::Ok);
+  EXPECT(deleted_at(project_world, pixcake::kTrashProject, project.id) == project_world.clock.now);
+  EXPECT(deleted_at(project_world, pixcake::kTrashPhoto, photo.id) == project_world.clock.now);
+  EXPECT(deleted_at(project_world, pixcake::kTrashVirtualCopy, moved.id) == project_world.clock.now);
+  EXPECT(deleted_at(project_world, pixcake::kTrashVirtualCopy, kept.id) == kept_time);
+}
+
+void test_delete_source_file_trashes_copies_without_a_second_path() {
+  Fixture world;
+  world.files.files["/pictures/a.png"] = {1, 2, 3};
+  world.files.files["/pictures/other.png"] = {4};
+  const std::int64_t photo_id = add_project_photo(world, "/pictures/a.png", "a.png");
+  const pixcake::ProjectResult copy = world.library->create_virtual_copy(photo_id, "doc-1");
+  EXPECT(copy.code == pixcake::ResultCode::Ok);
+  const pixcake::ProjectResult removed = world.library->delete_source_file(photo_id);
+  EXPECT(removed.code == pixcake::ResultCode::Ok);
+  EXPECT(removed.notice.empty());
+  EXPECT(world.deleter.calls == 1);
+  EXPECT(world.deleter.last == "/pictures/a.png");
+  EXPECT(world.files.files["/pictures/other.png"] == std::vector<std::uint8_t>({4}));
+  EXPECT(in_trash(world, pixcake::kTrashPhoto, photo_id));
+  EXPECT(in_trash(world, pixcake::kTrashVirtualCopy, copy.id));
+  std::optional<pixcake::PhotoRow> photo;
+  EXPECT(world.library->load_photo(photo_id, photo) == pixcake::ResultCode::Ok);
+  EXPECT(photo.has_value());
+  EXPECT(photo->presence == pixcake::kPresenceMissing);
+
+  Fixture denied;
+  denied.files.files["/pictures/a.png"] = {9};
+  denied.deleter.next = pixcake::ResultCode::PermissionDenied;
+  const std::int64_t denied_photo = add_project_photo(denied, "/pictures/a.png", "a.png");
+  const pixcake::ProjectResult denied_copy = denied.library->create_virtual_copy(denied_photo, "doc-denied");
+  EXPECT(denied_copy.code == pixcake::ResultCode::Ok);
+  const pixcake::ProjectResult denial = denied.library->delete_source_file(denied_photo);
+  EXPECT(denial.code == pixcake::ResultCode::PermissionDenied);
+  EXPECT(denial.notice == pixcake::kDiskFileRemains);
+  EXPECT(denied.files.files["/pictures/a.png"] == std::vector<std::uint8_t>({9}));
+  EXPECT(denied.deleter.calls == 1);
+  EXPECT(in_trash(denied, pixcake::kTrashPhoto, denied_photo));
+  EXPECT(in_trash(denied, pixcake::kTrashVirtualCopy, denied_copy.id));
+  std::optional<pixcake::PhotoRow> still;
+  EXPECT(denied.library->load_photo(denied_photo, still) == pixcake::ResultCode::Ok);
+  EXPECT(still.has_value());
+  EXPECT(still->presence == pixcake::kPresenceEditable);
+
+  Fixture again;
+  const std::int64_t again_photo = add_project_photo(again, "/pictures/a.png", "a.png");
+  const pixcake::ProjectResult again_copy = again.library->create_virtual_copy(again_photo, "doc-again");
+  EXPECT(again_copy.code == pixcake::ResultCode::Ok);
+  EXPECT(again.library->trash_photo(again_photo).code == pixcake::ResultCode::Ok);
+  const std::int64_t copy_time = deleted_at(again, pixcake::kTrashVirtualCopy, again_copy.id);
+  again.clock.now += 30;
+  EXPECT(again.library->delete_source_file(again_photo).code == pixcake::ResultCode::Ok);
+  EXPECT(deleted_at(again, pixcake::kTrashVirtualCopy, again_copy.id) == copy_time);
+  EXPECT(deleted_at(again, pixcake::kTrashPhoto, again_photo) == copy_time);
+}
+
+void test_expired_copy_index_is_removed_without_the_file() {
+  Fixture world;
+  world.files.files["/pictures/a.png"] = {3, 3, 3};
+  const std::int64_t photo_id = add_project_photo(world, "/pictures/a.png", "a.png");
+  const pixcake::ProjectResult copy = world.library->create_virtual_copy(photo_id, "doc-1");
+  EXPECT(copy.code == pixcake::ResultCode::Ok);
+  EXPECT(world.library->trash_virtual_copy(copy.id).code == pixcake::ResultCode::Ok);
+  const std::int64_t trashed_at = world.clock.now;
+  world.clock.now = trashed_at + 2591999;
+  EXPECT(world.library->startup() == pixcake::ResultCode::Ok);
+  std::optional<pixcake::VirtualCopyRow> loaded;
+  EXPECT(world.library->load_virtual_copy(copy.id, loaded) == pixcake::ResultCode::Ok);
+  EXPECT(loaded.has_value());
+  EXPECT(world.files.files["/pictures/a.png"] == std::vector<std::uint8_t>({3, 3, 3}));
+  EXPECT(world.deleter.calls == 0);
+
+  world.clock.now = trashed_at + 2592000;
+  EXPECT(world.library->startup() == pixcake::ResultCode::Ok);
+  EXPECT(world.library->load_virtual_copy(copy.id, loaded) == pixcake::ResultCode::Ok);
+  EXPECT(!loaded.has_value());
+  std::optional<pixcake::PhotoRow> photo;
+  EXPECT(world.library->load_photo(photo_id, photo) == pixcake::ResultCode::Ok);
+  EXPECT(photo.has_value());
+  EXPECT(world.files.files["/pictures/a.png"] == std::vector<std::uint8_t>({3, 3, 3}));
+  EXPECT(world.deleter.calls == 0);
+
+  Fixture expired_photo;
+  expired_photo.files.files["/pictures/a.png"] = {5};
+  const std::int64_t expired_id = add_project_photo(expired_photo, "/pictures/a.png", "a.png");
+  const pixcake::ProjectResult expired_copy = expired_photo.library->create_virtual_copy(expired_id, "doc-photo");
+  EXPECT(expired_copy.code == pixcake::ResultCode::Ok);
+  EXPECT(expired_photo.library->trash_photo(expired_id).code == pixcake::ResultCode::Ok);
+  expired_photo.clock.now += 2592000;
+  EXPECT(expired_photo.library->startup() == pixcake::ResultCode::Ok);
+  std::vector<pixcake::PhotoRow> photos;
+  EXPECT(expired_photo.library->list_photos(std::nullopt, photos) == pixcake::ResultCode::Ok);
+  EXPECT(photos.empty());
+  std::vector<pixcake::VirtualCopyRow> copies;
+  EXPECT(expired_photo.library->list_virtual_copies(expired_id, copies) == pixcake::ResultCode::Ok);
+  EXPECT(copies.empty());
+  EXPECT(expired_photo.files.files["/pictures/a.png"] == std::vector<std::uint8_t>({5}));
+  EXPECT(expired_photo.deleter.calls == 0);
+
+  Fixture erased;
+  erased.files.files["/pictures/a.png"] = {6};
+  const pixcake::ProjectResult project = erased.library->create_project("清掉", pixcake::kOriginLocal, false);
+  EXPECT(project.code == pixcake::ResultCode::Ok);
+  const pixcake::ProjectResult erased_photo = erased.library->add_photo(project.id, "/pictures/a.png", "a.png", {1});
+  EXPECT(erased_photo.code == pixcake::ResultCode::Ok);
+  EXPECT(erased.library->create_virtual_copy(erased_photo.id, "doc-erased").code == pixcake::ResultCode::Ok);
+  EXPECT(erased.library->trash_project(project.id).code == pixcake::ResultCode::Ok);
+  EXPECT(erased.library->erase_trashed_project(project.id).code == pixcake::ResultCode::Ok);
+  EXPECT(erased.library->list_virtual_copies(erased_photo.id, copies) == pixcake::ResultCode::Ok);
+  EXPECT(copies.empty());
+  EXPECT(erased.library->list_photos(std::nullopt, photos) == pixcake::ResultCode::Ok);
+  EXPECT(photos.empty());
+  EXPECT(erased.files.files["/pictures/a.png"] == std::vector<std::uint8_t>({6}));
+  EXPECT(erased.deleter.calls == 0);
+}
+
 }  // namespace
 
 int main() {
@@ -313,5 +492,9 @@ int main() {
   test_rejected_copy_writes_nothing();
   test_version_one_library_keeps_photos_and_gains_copies();
   test_shares_original_without_a_charge();
+  test_trashing_a_copy_leaves_the_original();
+  test_trashing_the_original_takes_copies_with_it();
+  test_delete_source_file_trashes_copies_without_a_second_path();
+  test_expired_copy_index_is_removed_without_the_file();
   return g_failures == 0 ? 0 : 1;
 }

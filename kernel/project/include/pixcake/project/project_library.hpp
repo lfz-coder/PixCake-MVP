@@ -33,6 +33,7 @@ class ProjectLibrary {
 
   ProjectResult trash_project(std::int64_t project_id);
   ProjectResult trash_photo(std::int64_t photo_id);
+  ProjectResult trash_virtual_copy(std::int64_t copy_id);
   ProjectResult restore_project(std::int64_t project_id);
   ProjectResult restore_photos(std::vector<std::int64_t> photo_ids);
   ProjectResult erase_trashed_project(std::int64_t project_id);

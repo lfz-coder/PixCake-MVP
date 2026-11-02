@@ -398,8 +398,42 @@ ResultCode SqliteProjectStore::list_projects(std::vector<ProjectRow>& out) {
 
 ResultCode SqliteProjectStore::erase_project_index(std::int64_t project_id) {
   return in_transaction([this, project_id] {
+    Statement copy_trash;
+    ResultCode code = copy_trash.prepare(
+        impl_->db,
+        "DELETE FROM trash WHERE subject = ? AND subject_id IN (SELECT id FROM virtual_copy WHERE project_id = ?);");
+    if (code != ResultCode::Ok) {
+      return code;
+    }
+    code = bind_text(copy_trash.get(), 1, kTrashVirtualCopy);
+    if (code != ResultCode::Ok) {
+      return code;
+    }
+    code = bind_int64(copy_trash.get(), 2, project_id);
+    if (code != ResultCode::Ok) {
+      return code;
+    }
+    const int removed_copy_trash = sqlite3_step(copy_trash.get());
+    if (removed_copy_trash != SQLITE_DONE) {
+      return map_sqlite(removed_copy_trash);
+    }
+
+    Statement copy_rows;
+    code = copy_rows.prepare(impl_->db, "DELETE FROM virtual_copy WHERE project_id = ?;");
+    if (code != ResultCode::Ok) {
+      return code;
+    }
+    code = bind_int64(copy_rows.get(), 1, project_id);
+    if (code != ResultCode::Ok) {
+      return code;
+    }
+    const int removed_copies = sqlite3_step(copy_rows.get());
+    if (removed_copies != SQLITE_DONE) {
+      return map_sqlite(removed_copies);
+    }
+
     Statement photos;
-    ResultCode code = photos.prepare(
+    code = photos.prepare(
         impl_->db,
         "DELETE FROM trash WHERE subject = ? AND subject_id IN (SELECT id FROM photo WHERE project_id = ?);");
     if (code != ResultCode::Ok) {
@@ -661,6 +695,55 @@ ResultCode SqliteProjectStore::list_virtual_copies(std::int64_t source_photo_id,
     }
     out.push_back(read_virtual_copy(stmt.get()));
   }
+}
+
+ResultCode SqliteProjectStore::erase_virtual_copy(std::int64_t id) {
+  Statement stmt;
+  const ResultCode prepared = stmt.prepare(impl_->db, "DELETE FROM virtual_copy WHERE id = ?;");
+  if (prepared != ResultCode::Ok) {
+    return prepared;
+  }
+  if (const ResultCode code = bind_int64(stmt.get(), 1, id); code != ResultCode::Ok) {
+    return code;
+  }
+  const int rc = sqlite3_step(stmt.get());
+  return rc == SQLITE_DONE ? ResultCode::Ok : map_sqlite(rc);
+}
+
+ResultCode SqliteProjectStore::erase_virtual_copies_of_photo(std::int64_t photo_id) {
+  return in_transaction([this, photo_id] {
+    Statement trash;
+    ResultCode code = trash.prepare(
+        impl_->db,
+        "DELETE FROM trash WHERE subject = ? AND subject_id IN (SELECT id FROM virtual_copy WHERE source_photo_id = ?);");
+    if (code != ResultCode::Ok) {
+      return code;
+    }
+    code = bind_text(trash.get(), 1, kTrashVirtualCopy);
+    if (code != ResultCode::Ok) {
+      return code;
+    }
+    code = bind_int64(trash.get(), 2, photo_id);
+    if (code != ResultCode::Ok) {
+      return code;
+    }
+    const int removed_trash = sqlite3_step(trash.get());
+    if (removed_trash != SQLITE_DONE) {
+      return map_sqlite(removed_trash);
+    }
+
+    Statement copies;
+    code = copies.prepare(impl_->db, "DELETE FROM virtual_copy WHERE source_photo_id = ?;");
+    if (code != ResultCode::Ok) {
+      return code;
+    }
+    code = bind_int64(copies.get(), 1, photo_id);
+    if (code != ResultCode::Ok) {
+      return code;
+    }
+    const int removed = sqlite3_step(copies.get());
+    return removed == SQLITE_DONE ? ResultCode::Ok : map_sqlite(removed);
+  });
 }
 
 ResultCode SqliteProjectStore::insert_trash(const std::string& subject, std::int64_t subject_id,

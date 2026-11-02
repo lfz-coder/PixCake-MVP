@@ -191,7 +191,7 @@ EOF
 - Consumes: `trash_photo`、`trash_project`、`delete_source_file`、`purge_expired_trash`、`erase_trashed_project`
 - Produces: `ProjectLibrary::trash_virtual_copy`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 使用假时钟和假删除端口。断言：
 
@@ -203,13 +203,13 @@ EOF
 - 原图索引到期被清掉时，它的副本索引也没了，原图文件还在，删除端口调用次数是 0。
 - 彻底删除回收站中的项目后，副本索引没了，原图文件还在。
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cmake --build build --target test_virtual_copy && ctest --test-dir build -R '^test_virtual_copy$' --output-on-failure`
 
 Expected: 编译失败，因为还没有 `trash_virtual_copy`。
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 `trash_virtual_copy` 只给这一份副本写回收站行，主体是 `虚拟副本`。不写原图的回收站行。
 
@@ -219,13 +219,13 @@ Expected: 编译失败，因为还没有 `trash_virtual_copy`。
 
 不认识的回收站主体仍返回状态冲突，并且不删已有行。
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cmake --build build && ctest --test-dir build -R '^(test_virtual_copy|test_recycle_bin)$' --output-on-failure`
 
 Expected: 两个测试通过。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add kernel/project storage/sqlite tests/kernel/project/test_virtual_copy.cpp docs/superpowers/plans/2026-11-02-kernel-virtual-copy.md
