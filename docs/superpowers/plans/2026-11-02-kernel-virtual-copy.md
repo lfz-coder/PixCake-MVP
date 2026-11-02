@@ -143,7 +143,7 @@ EOF
 - Consumes: `load_photo`、`load_virtual_copy`
 - Produces: `ProjectLibrary::shares_original(left_kind, left_id, right_kind, right_id, shares)`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 断言：
 
@@ -152,21 +152,21 @@ EOF
 - 种类不是这两种、编号不存在：返回状态冲突，并且不把输出改成真。
 - `project` 目录的源文件里没有「扣张」这两个字，也没有余额字段。测试只调用 `shares_original`，不存在扣减函数。
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cmake --build build --target test_virtual_copy && ctest --test-dir build -R '^test_virtual_copy$' --output-on-failure`
 
 Expected: 编译失败，因为还没有 `shares_original`。
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 `图片` 的原图就是它自己的编号。`虚拟副本` 的原图是 `source_photo_id`。两边原图编号相同则为真。不读回收站，不读文件系统，不写库。失败时把 `shares` 设为假。
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Expected: `test_virtual_copy` 通过。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add kernel/project tests/kernel/project/test_virtual_copy.cpp docs/superpowers/plans/2026-11-02-kernel-virtual-copy.md

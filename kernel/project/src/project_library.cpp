@@ -11,6 +11,35 @@ bool absolute_posix_path(const std::string& path) {
   return !path.empty() && path.front() == '/' && path.find('\0') == std::string::npos;
 }
 
+ResultCode original_photo_id(ProjectStore& store, const std::string& kind, std::int64_t id,
+                             std::int64_t& original) {
+  if (kind == kTrashPhoto) {
+    std::optional<PhotoRow> photo;
+    const ResultCode loaded = store.load_photo(id, photo);
+    if (loaded != ResultCode::Ok) {
+      return loaded;
+    }
+    if (!photo.has_value()) {
+      return ResultCode::StateConflict;
+    }
+    original = photo->id;
+    return ResultCode::Ok;
+  }
+  if (kind == kTrashVirtualCopy) {
+    std::optional<VirtualCopyRow> copy;
+    const ResultCode loaded = store.load_virtual_copy(id, copy);
+    if (loaded != ResultCode::Ok) {
+      return loaded;
+    }
+    if (!copy.has_value()) {
+      return ResultCode::StateConflict;
+    }
+    original = copy->source_photo_id;
+    return ResultCode::Ok;
+  }
+  return ResultCode::StateConflict;
+}
+
 ProjectResult failed(ResultCode code) {
   ProjectResult result;
   result.code = code;
@@ -487,6 +516,24 @@ ResultCode ProjectLibrary::load_virtual_copy(std::int64_t id, std::optional<Virt
 
 ResultCode ProjectLibrary::list_virtual_copies(std::int64_t photo_id, std::vector<VirtualCopyRow>& out) const {
   return store_.list_virtual_copies(photo_id, out);
+}
+
+ResultCode ProjectLibrary::shares_original(const std::string& left_kind, std::int64_t left_id,
+                                           const std::string& right_kind, std::int64_t right_id,
+                                           bool& shares) const {
+  shares = false;
+  std::int64_t left_original = 0;
+  const ResultCode left = original_photo_id(store_, left_kind, left_id, left_original);
+  if (left != ResultCode::Ok) {
+    return left;
+  }
+  std::int64_t right_original = 0;
+  const ResultCode right = original_photo_id(store_, right_kind, right_id, right_original);
+  if (right != ResultCode::Ok) {
+    return right;
+  }
+  shares = left_original == right_original;
+  return ResultCode::Ok;
 }
 
 }  // namespace pixcake

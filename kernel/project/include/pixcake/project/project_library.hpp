@@ -47,6 +47,8 @@ class ProjectLibrary {
   ResultCode load_photo(std::int64_t id, std::optional<PhotoRow>& out) const;
   ResultCode load_virtual_copy(std::int64_t id, std::optional<VirtualCopyRow>& out) const;
   ResultCode list_virtual_copies(std::int64_t photo_id, std::vector<VirtualCopyRow>& out) const;
+  ResultCode shares_original(const std::string& left_kind, std::int64_t left_id, const std::string& right_kind,
+                             std::int64_t right_id, bool& shares) const;
 
  private:
   void note(ResultCode code, const std::string& path) const;

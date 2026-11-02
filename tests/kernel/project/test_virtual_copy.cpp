@@ -10,6 +10,9 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
@@ -235,11 +238,80 @@ void test_version_one_library_keeps_photos_and_gains_copies() {
   EXPECT(photos[0].access_credential == std::vector<std::uint8_t>({1, 2}));
 }
 
+void test_shares_original_without_a_charge() {
+  Fixture world;
+  const pixcake::ProjectResult project = world.library->create_project("相册", pixcake::kOriginLocal, false);
+  EXPECT(project.code == pixcake::ResultCode::Ok);
+  const pixcake::ProjectResult photo_a = world.library->add_photo(project.id, "/pictures/a.png", "a.png", {1});
+  const pixcake::ProjectResult photo_b = world.library->add_photo(project.id, "/pictures/b.png", "b.png", {2});
+  EXPECT(photo_a.code == pixcake::ResultCode::Ok);
+  EXPECT(photo_b.code == pixcake::ResultCode::Ok);
+  const pixcake::ProjectResult copy_a = world.library->create_virtual_copy(photo_a.id, "doc-a1");
+  const pixcake::ProjectResult copy_b = world.library->create_virtual_copy(photo_a.id, "doc-a2");
+  EXPECT(copy_a.code == pixcake::ResultCode::Ok);
+  EXPECT(copy_b.code == pixcake::ResultCode::Ok);
+
+  const pixcake::ProjectResult other = world.library->create_project("另一本", pixcake::kOriginLocal, false);
+  EXPECT(other.code == pixcake::ResultCode::Ok);
+  const pixcake::ProjectResult photo_c = world.library->add_photo(other.id, "/pictures/c.png", "c.png", {3});
+  EXPECT(photo_c.code == pixcake::ResultCode::Ok);
+
+  bool shares = false;
+  EXPECT(world.library->shares_original(pixcake::kTrashPhoto, photo_a.id, pixcake::kTrashVirtualCopy, copy_a.id,
+                                        shares) == pixcake::ResultCode::Ok);
+  EXPECT(shares);
+  EXPECT(world.library->shares_original(pixcake::kTrashPhoto, photo_a.id, pixcake::kTrashVirtualCopy, copy_b.id,
+                                        shares) == pixcake::ResultCode::Ok);
+  EXPECT(shares);
+  EXPECT(world.library->shares_original(pixcake::kTrashVirtualCopy, copy_a.id, pixcake::kTrashVirtualCopy, copy_b.id,
+                                        shares) == pixcake::ResultCode::Ok);
+  EXPECT(shares);
+  EXPECT(world.library->shares_original(pixcake::kTrashPhoto, photo_a.id, pixcake::kTrashPhoto, photo_a.id, shares) ==
+         pixcake::ResultCode::Ok);
+  EXPECT(shares);
+  EXPECT(world.library->shares_original(pixcake::kTrashPhoto, photo_a.id, pixcake::kTrashPhoto, photo_b.id, shares) ==
+         pixcake::ResultCode::Ok);
+  EXPECT(!shares);
+  EXPECT(world.library->shares_original(pixcake::kTrashVirtualCopy, copy_a.id, pixcake::kTrashPhoto, photo_b.id,
+                                        shares) == pixcake::ResultCode::Ok);
+  EXPECT(!shares);
+  EXPECT(world.library->shares_original(pixcake::kTrashPhoto, photo_c.id, pixcake::kTrashVirtualCopy, copy_a.id,
+                                        shares) == pixcake::ResultCode::Ok);
+  EXPECT(!shares);
+
+  shares = true;
+  EXPECT(world.library->shares_original(pixcake::kTrashProject, photo_a.id, pixcake::kTrashPhoto, photo_a.id,
+                                        shares) == pixcake::ResultCode::StateConflict);
+  EXPECT(!shares);
+  shares = true;
+  EXPECT(world.library->shares_original(pixcake::kTrashPhoto, 999, pixcake::kTrashPhoto, photo_a.id, shares) ==
+         pixcake::ResultCode::StateConflict);
+  EXPECT(!shares);
+  shares = true;
+  EXPECT(world.library->shares_original(pixcake::kTrashVirtualCopy, 999, pixcake::kTrashPhoto, photo_a.id, shares) ==
+         pixcake::ResultCode::StateConflict);
+  EXPECT(!shares);
+
+  const std::filesystem::path project_dir =
+      std::filesystem::path(__FILE__).parent_path().parent_path().parent_path().parent_path() / "kernel" / "project";
+  EXPECT(std::filesystem::is_directory(project_dir));
+  for (const std::filesystem::directory_entry& entry :
+       std::filesystem::recursive_directory_iterator(project_dir)) {
+    if (!entry.is_regular_file()) {
+      continue;
+    }
+    std::ifstream input(entry.path());
+    const std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    EXPECT(text.find("扣张") == std::string::npos);
+  }
+}
+
 }  // namespace
 
 int main() {
   test_copy_points_at_original_and_keeps_its_document_id();
   test_rejected_copy_writes_nothing();
   test_version_one_library_keeps_photos_and_gains_copies();
+  test_shares_original_without_a_charge();
   return g_failures == 0 ? 0 : 1;
 }
