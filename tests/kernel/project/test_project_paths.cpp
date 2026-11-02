@@ -137,7 +137,7 @@ int main() {
   const std::string future_path = future_dir.path() + "/library.db";
   sqlite3* raw = nullptr;
   EXPECT(sqlite3_open(future_path.c_str(), &raw) == SQLITE_OK);
-  EXPECT(sqlite3_exec(raw, "PRAGMA user_version=3;", nullptr, nullptr, nullptr) == SQLITE_OK);
+  EXPECT(sqlite3_exec(raw, "PRAGMA user_version=4;", nullptr, nullptr, nullptr) == SQLITE_OK);
   EXPECT(sqlite3_exec(raw, "CREATE TABLE marker(id INTEGER);", nullptr, nullptr, nullptr) == SQLITE_OK);
   sqlite3_close(raw);
   std::unique_ptr<pixcake::SqliteProjectStore> future;
@@ -147,7 +147,7 @@ int main() {
   sqlite3_stmt* version_stmt = nullptr;
   EXPECT(sqlite3_prepare_v2(raw, "PRAGMA user_version;", -1, &version_stmt, nullptr) == SQLITE_OK);
   EXPECT(sqlite3_step(version_stmt) == SQLITE_ROW);
-  EXPECT(sqlite3_column_int(version_stmt, 0) == 3);
+  EXPECT(sqlite3_column_int(version_stmt, 0) == 4);
   sqlite3_finalize(version_stmt);
   sqlite3_stmt* marker_stmt = nullptr;
   EXPECT(sqlite3_prepare_v2(raw, "SELECT name FROM sqlite_master WHERE name = ?;", -1, &marker_stmt,

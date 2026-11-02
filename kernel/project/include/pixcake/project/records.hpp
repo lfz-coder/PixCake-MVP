@@ -35,6 +35,9 @@ struct PhotoRow {
   std::string file_name;
   std::vector<std::uint8_t> access_credential;
   std::string presence;
+  int rating = 0;
+  std::string flag;
+  std::string color_label;
 };
 
 struct TrashRow {

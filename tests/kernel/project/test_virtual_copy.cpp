@@ -139,7 +139,7 @@ void test_copy_points_at_original_and_keeps_its_document_id() {
   EXPECT(copies[0].document_id == "doc-1");
   EXPECT(copies[1].sequence == 2);
   EXPECT(copies[1].document_id == "a'b");
-  EXPECT(user_version(world.dir.path() + "/library.db") == 2);
+  EXPECT(user_version(world.dir.path() + "/library.db") == 3);
 }
 
 void test_rejected_copy_writes_nothing() {
@@ -218,6 +218,9 @@ void test_version_one_library_keeps_photos_and_gains_copies() {
   EXPECT(photos[0].file_name == "old.png");
   EXPECT(photos[0].access_credential == std::vector<std::uint8_t>({1, 2}));
   EXPECT(photos[0].presence == "可编辑");
+  EXPECT(photos[0].rating == 0);
+  EXPECT(photos[0].flag.empty());
+  EXPECT(photos[0].color_label.empty());
   std::vector<pixcake::ProjectRow> projects;
   EXPECT(library.list_projects(projects) == pixcake::ResultCode::Ok);
   EXPECT(projects.size() == 1);
@@ -226,7 +229,7 @@ void test_version_one_library_keeps_photos_and_gains_copies() {
   const pixcake::ProjectResult copy = library.create_virtual_copy(photos[0].id, "old-doc");
   EXPECT(copy.code == pixcake::ResultCode::Ok);
   store.reset();
-  EXPECT(user_version(path) == 2);
+  EXPECT(user_version(path) == 3);
   EXPECT(pixcake::SqliteProjectStore::open(path, store) == pixcake::ResultCode::Ok);
   pixcake::ProjectLibrary reopened(*store, files, clock, deleter, nullptr);
   std::vector<pixcake::VirtualCopyRow> copies;

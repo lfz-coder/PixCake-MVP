@@ -47,6 +47,11 @@ target_include_directories(test_virtual_copy PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 target_link_libraries(test_virtual_copy PRIVATE pixcake_storage pixcake_warnings)
 add_test(NAME test_virtual_copy COMMAND test_virtual_copy)
 
+add_executable(test_photo_marks kernel/project/test_photo_marks.cpp)
+target_include_directories(test_photo_marks PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+target_link_libraries(test_photo_marks PRIVATE pixcake_storage pixcake_warnings)
+add_test(NAME test_photo_marks COMMAND test_photo_marks)
+
 add_test(
   NAME arch_dependencies
   COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P ${CMAKE_SOURCE_DIR}/tests/arch/check_dependencies.cmake
