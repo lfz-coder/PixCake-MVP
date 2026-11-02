@@ -292,7 +292,7 @@ EOF
 - Consumes: `Clock`、`SourceDeleter::remove_source(const std::string&)` 返回 `ResultCode`、`FileSystem`
 - Produces: `trash_project`、`trash_photo`、`restore_project`、`restore_photos`、`purge_expired_trash`、`erase_trashed_project`、`delete_source_file`、`FileSourceDeleter`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 使用假时钟和假删除端口。断言：
 
@@ -307,13 +307,13 @@ EOF
 - 删除端口返回权限不足时，结果码是权限不足，`notice` 是 `磁盘文件还在`，原图字节不变，图片进入回收站，presence 仍是 `可编辑`。已经在回收站时，删除时间不变。
 - `FileSourceDeleter` 拒绝不以 `/` 开头的路径，并且不调用删除。
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cmake -S . -B build && cmake --build build --target test_recycle_bin && ctest --test-dir build -R '^test_recycle_bin$' --output-on-failure`
 
 Expected: 编译失败，因为还没有这些方法。
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 `ProjectLibrary` 公开类旁边写上：回收站按删除时间加 2592000 秒到期；到期只删索引；只有 `delete_source_file` 调用 `SourceDeleter`。
 
@@ -334,13 +334,13 @@ Expected: 编译失败，因为还没有这些方法。
 
 `startup` 改为先 `purge_expired_trash`，成功后再 `refresh_source_presence`。
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cmake --build build && ctest --test-dir build --output-on-failure`
 
 Expected: 全部通过，包含 `arch_dependencies`。`kernel/project` 源文件没有 `sqlite3.h`、`QOpenGL` 和 Qt 头。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add kernel/project tests/kernel/project/test_recycle_bin.cpp tests/CMakeLists.txt

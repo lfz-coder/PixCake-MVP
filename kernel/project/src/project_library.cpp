@@ -19,10 +19,9 @@ ProjectResult failed(ResultCode code) {
 
 }  // namespace
 
-ProjectLibrary::ProjectLibrary(ProjectStore& store, FileSystem& files, const Clock& clock, LogSink* log)
-    : store_(store), files_(files), clock_(clock), log_(log) {
-  (void)clock_;
-}
+ProjectLibrary::ProjectLibrary(ProjectStore& store, FileSystem& files, const Clock& clock, SourceDeleter& deleter,
+                               LogSink* log)
+    : store_(store), files_(files), clock_(clock), deleter_(deleter), log_(log) {}
 
 void ProjectLibrary::note(ResultCode code, const std::string& path) const {
   if (log_ == nullptr) {
@@ -97,7 +96,279 @@ ResultCode ProjectLibrary::source_status(std::int64_t photo_id) const {
   return ResultCode::StateConflict;
 }
 
-ResultCode ProjectLibrary::purge_expired_trash() { return ResultCode::Ok; }
+bool ProjectLibrary::trash_expired(std::int64_t deleted_at, std::int64_t now) const {
+  if (deleted_at > now) {
+    return false;
+  }
+  return now - deleted_at >= kTrashRetentionSeconds;
+}
+
+ResultCode ProjectLibrary::purge_expired_trash() {
+  std::vector<TrashRow> rows;
+  const ResultCode listed = store_.list_trash(rows);
+  if (listed != ResultCode::Ok) {
+    return listed;
+  }
+  const std::int64_t now = clock_.unix_seconds();
+  std::vector<std::int64_t> projects;
+  std::vector<std::int64_t> photos;
+  for (const TrashRow& row : rows) {
+    if (!trash_expired(row.deleted_at, now)) {
+      continue;
+    }
+    if (row.subject == kTrashProject) {
+      projects.push_back(row.subject_id);
+    } else if (row.subject == kTrashPhoto) {
+      photos.push_back(row.subject_id);
+    } else {
+      return ResultCode::StateConflict;
+    }
+  }
+  return store_.in_transaction([this, &projects, &photos] {
+    for (const std::int64_t project_id : projects) {
+      const ResultCode erased = store_.erase_project_index(project_id);
+      if (erased != ResultCode::Ok) {
+        return erased;
+      }
+    }
+    for (const std::int64_t photo_id : photos) {
+      std::optional<PhotoRow> photo;
+      const ResultCode loaded = store_.load_photo(photo_id, photo);
+      if (loaded != ResultCode::Ok) {
+        return loaded;
+      }
+      const ResultCode erased_trash = store_.erase_trash(kTrashPhoto, photo_id);
+      if (erased_trash != ResultCode::Ok) {
+        return erased_trash;
+      }
+      if (!photo.has_value()) {
+        continue;
+      }
+      const ResultCode erased = store_.erase_photo(photo_id);
+      if (erased != ResultCode::Ok) {
+        return erased;
+      }
+    }
+    return ResultCode::Ok;
+  });
+}
+
+ProjectResult ProjectLibrary::trash_project(std::int64_t project_id) {
+  std::optional<ProjectRow> project;
+  const ResultCode loaded = store_.load_project(project_id, project);
+  if (loaded != ResultCode::Ok) {
+    return failed(loaded);
+  }
+  if (!project.has_value() || project->deleted_at.has_value()) {
+    return failed(ResultCode::StateConflict);
+  }
+  std::optional<TrashRow> existing;
+  const ResultCode trash = store_.load_trash(kTrashProject, project_id, existing);
+  if (trash != ResultCode::Ok) {
+    return failed(trash);
+  }
+  if (existing.has_value()) {
+    return failed(ResultCode::StateConflict);
+  }
+  std::vector<PhotoRow> photos;
+  const ResultCode listed = store_.list_photos(project_id, photos);
+  if (listed != ResultCode::Ok) {
+    return failed(listed);
+  }
+  const std::int64_t now = clock_.unix_seconds();
+  const ResultCode wrote = store_.in_transaction([this, project_id, now, &photos] {
+    const ResultCode stamped = store_.update_project_deleted_at(project_id, now);
+    if (stamped != ResultCode::Ok) {
+      return stamped;
+    }
+    const ResultCode inserted = store_.insert_trash(kTrashProject, project_id, now);
+    if (inserted != ResultCode::Ok) {
+      return inserted;
+    }
+    for (const PhotoRow& photo : photos) {
+      std::optional<TrashRow> photo_trash;
+      const ResultCode found = store_.load_trash(kTrashPhoto, photo.id, photo_trash);
+      if (found != ResultCode::Ok) {
+        return found;
+      }
+      if (photo_trash.has_value()) {
+        continue;
+      }
+      const ResultCode photo_inserted = store_.insert_trash(kTrashPhoto, photo.id, now);
+      if (photo_inserted != ResultCode::Ok) {
+        return photo_inserted;
+      }
+    }
+    return ResultCode::Ok;
+  });
+  return failed(wrote);
+}
+
+ProjectResult ProjectLibrary::trash_photo(std::int64_t photo_id) {
+  std::optional<PhotoRow> photo;
+  const ResultCode loaded = store_.load_photo(photo_id, photo);
+  if (loaded != ResultCode::Ok) {
+    return failed(loaded);
+  }
+  if (!photo.has_value()) {
+    return failed(ResultCode::StateConflict);
+  }
+  std::optional<TrashRow> existing;
+  const ResultCode trash = store_.load_trash(kTrashPhoto, photo_id, existing);
+  if (trash != ResultCode::Ok) {
+    return failed(trash);
+  }
+  if (existing.has_value()) {
+    return failed(ResultCode::StateConflict);
+  }
+  const std::int64_t now = clock_.unix_seconds();
+  return failed(store_.insert_trash(kTrashPhoto, photo_id, now));
+}
+
+ProjectResult ProjectLibrary::restore_project(std::int64_t project_id) {
+  std::optional<TrashRow> existing;
+  const ResultCode trash = store_.load_trash(kTrashProject, project_id, existing);
+  if (trash != ResultCode::Ok) {
+    return failed(trash);
+  }
+  if (!existing.has_value()) {
+    return failed(ResultCode::StateConflict);
+  }
+  std::vector<PhotoRow> photos;
+  const ResultCode listed = store_.list_photos(project_id, photos);
+  if (listed != ResultCode::Ok) {
+    return failed(listed);
+  }
+  const ResultCode wrote = store_.in_transaction([this, project_id, &photos] {
+    const ResultCode cleared = store_.update_project_deleted_at(project_id, std::nullopt);
+    if (cleared != ResultCode::Ok) {
+      return cleared;
+    }
+    const ResultCode erased = store_.erase_trash(kTrashProject, project_id);
+    if (erased != ResultCode::Ok) {
+      return erased;
+    }
+    for (const PhotoRow& photo : photos) {
+      const ResultCode photo_erased = store_.erase_trash(kTrashPhoto, photo.id);
+      if (photo_erased != ResultCode::Ok) {
+        return photo_erased;
+      }
+    }
+    return ResultCode::Ok;
+  });
+  return failed(wrote);
+}
+
+ProjectResult ProjectLibrary::restore_photos(std::vector<std::int64_t> photo_ids) {
+  if (photo_ids.empty()) {
+    return failed(ResultCode::StateConflict);
+  }
+  for (const std::int64_t photo_id : photo_ids) {
+    std::optional<PhotoRow> photo;
+    const ResultCode loaded = store_.load_photo(photo_id, photo);
+    if (loaded != ResultCode::Ok) {
+      return failed(loaded);
+    }
+    if (!photo.has_value()) {
+      return failed(ResultCode::StateConflict);
+    }
+    std::optional<TrashRow> photo_trash;
+    const ResultCode trash = store_.load_trash(kTrashPhoto, photo_id, photo_trash);
+    if (trash != ResultCode::Ok) {
+      return failed(trash);
+    }
+    if (!photo_trash.has_value()) {
+      return failed(ResultCode::StateConflict);
+    }
+    std::optional<TrashRow> project_trash;
+    const ResultCode project = store_.load_trash(kTrashProject, photo->project_id, project_trash);
+    if (project != ResultCode::Ok) {
+      return failed(project);
+    }
+    if (project_trash.has_value()) {
+      return failed(ResultCode::StateConflict);
+    }
+  }
+  const ResultCode wrote = store_.in_transaction([this, &photo_ids] {
+    for (const std::int64_t photo_id : photo_ids) {
+      const ResultCode erased = store_.erase_trash(kTrashPhoto, photo_id);
+      if (erased != ResultCode::Ok) {
+        return erased;
+      }
+    }
+    return ResultCode::Ok;
+  });
+  return failed(wrote);
+}
+
+ProjectResult ProjectLibrary::erase_trashed_project(std::int64_t project_id) {
+  std::optional<TrashRow> existing;
+  const ResultCode trash = store_.load_trash(kTrashProject, project_id, existing);
+  if (trash != ResultCode::Ok) {
+    return failed(trash);
+  }
+  if (!existing.has_value()) {
+    return failed(ResultCode::StateConflict);
+  }
+  return failed(store_.erase_project_index(project_id));
+}
+
+ProjectResult ProjectLibrary::delete_source_file(std::int64_t photo_id) {
+  std::optional<PhotoRow> photo;
+  const ResultCode loaded = store_.load_photo(photo_id, photo);
+  if (loaded != ResultCode::Ok) {
+    return failed(loaded);
+  }
+  if (!photo.has_value()) {
+    return failed(ResultCode::StateConflict);
+  }
+  const ResultCode removed = deleter_.remove_source(photo->absolute_path);
+  std::optional<TrashRow> existing;
+  const ResultCode trash = store_.load_trash(kTrashPhoto, photo_id, existing);
+  if (trash != ResultCode::Ok) {
+    return failed(trash);
+  }
+  const std::int64_t now = clock_.unix_seconds();
+  const bool already_trashed = existing.has_value();
+
+  if (removed != ResultCode::Ok && removed != ResultCode::PermissionDenied &&
+      removed != ResultCode::SourceMissing) {
+    return failed(removed);
+  }
+
+  const ResultCode wrote = store_.in_transaction([this, photo_id, now, already_trashed, removed] {
+    if (removed != ResultCode::PermissionDenied) {
+      const ResultCode presence = store_.update_photo_presence(photo_id, kPresenceMissing);
+      if (presence != ResultCode::Ok) {
+        return presence;
+      }
+    }
+    if (!already_trashed) {
+      return store_.insert_trash(kTrashPhoto, photo_id, now);
+    }
+    return ResultCode::Ok;
+  });
+  if (wrote != ResultCode::Ok) {
+    return failed(wrote);
+  }
+  ProjectResult result;
+  result.code = removed;
+  if (removed == ResultCode::PermissionDenied) {
+    result.notice = kDiskFileRemains;
+  }
+  return result;
+}
+
+ResultCode ProjectLibrary::load_project(std::int64_t id, std::optional<ProjectRow>& out) const {
+  return store_.load_project(id, out);
+}
+
+ResultCode ProjectLibrary::load_trash(const std::string& subject, std::int64_t subject_id,
+                                      std::optional<TrashRow>& out) const {
+  return store_.load_trash(subject, subject_id, out);
+}
+
+ResultCode ProjectLibrary::list_trash(std::vector<TrashRow>& out) const { return store_.list_trash(out); }
 
 ProjectResult ProjectLibrary::create_project(std::string name, std::string origin, bool cloud_marked) {
   if (!valid_origin(origin)) {

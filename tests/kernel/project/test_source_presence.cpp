@@ -1,5 +1,6 @@
 #include "pixcake/editdoc/edit_document.hpp"
 #include "pixcake/project/project_library.hpp"
+#include "pixcake/project/source_deleter.hpp"
 #include "pixcake/storage/sqlite_project_store.hpp"
 #include "pixcake/support/clock.hpp"
 #include "pixcake/support/log_sink.hpp"
@@ -39,6 +40,10 @@ struct MemoryLog : pixcake::LogSink {
   void write(const pixcake::LogRecord& record) override { records.push_back(record); }
 };
 
+struct UnusedDeleter : pixcake::SourceDeleter {
+  pixcake::ResultCode remove_source(const std::string&) override { return pixcake::ResultCode::StateConflict; }
+};
+
 std::vector<pixcake::VersionLimit> limits() { return {pixcake::VersionLimit{"color.global", 1}}; }
 
 std::vector<std::uint8_t> credential_bytes() {
@@ -58,9 +63,10 @@ int main() {
   EXPECT(pixcake::SqliteProjectStore::open(dir.path() + "/library.db", store) == pixcake::ResultCode::Ok);
   FixedClock clock;
   MemoryLog log;
+  UnusedDeleter deleter;
   pixcake::test::FakeFileSystem files;
   files.files[kSource] = {9, 9, 9};
-  pixcake::ProjectLibrary library(*store, files, clock, &log);
+  pixcake::ProjectLibrary library(*store, files, clock, deleter, &log);
 
   const pixcake::ProjectResult project = library.create_project("路径", pixcake::kOriginLocal, false);
   EXPECT(project.code == pixcake::ResultCode::Ok);

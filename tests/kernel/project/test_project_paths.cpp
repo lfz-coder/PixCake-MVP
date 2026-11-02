@@ -1,4 +1,5 @@
 #include "pixcake/project/project_library.hpp"
+#include "pixcake/project/source_deleter.hpp"
 #include "pixcake/storage/sqlite_project_store.hpp"
 #include "pixcake/support/clock.hpp"
 #include "pixcake/support/log_sink.hpp"
@@ -36,6 +37,10 @@ struct SilentLog : pixcake::LogSink {
   void write(const pixcake::LogRecord&) override {}
 };
 
+struct UnusedDeleter : pixcake::SourceDeleter {
+  pixcake::ResultCode remove_source(const std::string&) override { return pixcake::ResultCode::StateConflict; }
+};
+
 std::string read_prefix(const std::string& path, std::size_t count) {
   std::ifstream in(path, std::ios::binary);
   std::string bytes(count, '\0');
@@ -56,8 +61,9 @@ int main() {
 
   FixedClock clock;
   SilentLog log;
+  UnusedDeleter deleter;
   pixcake::test::FakeFileSystem files;
-  pixcake::ProjectLibrary library(*store, files, clock, &log);
+  pixcake::ProjectLibrary library(*store, files, clock, deleter, &log);
 
   const pixcake::ProjectResult created = library.create_project("a'b", "本地", false);
   EXPECT(created.code == pixcake::ResultCode::Ok);
@@ -108,7 +114,7 @@ int main() {
   store.reset();
   EXPECT(pixcake::SqliteProjectStore::open(db_path, store) == pixcake::ResultCode::Ok);
   EXPECT(store->journal_mode() == "wal");
-  pixcake::ProjectLibrary reopened(*store, files, clock, nullptr);
+  pixcake::ProjectLibrary reopened(*store, files, clock, deleter, nullptr);
   EXPECT(reopened.list_projects(projects) == pixcake::ResultCode::Ok);
   EXPECT(projects.size() == 1);
   EXPECT(projects[0].name == "a'b");
