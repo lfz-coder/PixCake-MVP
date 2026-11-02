@@ -38,6 +38,12 @@ class EditDocument {
   static LoadResult load(EditDocument& destination, FileSystem& files, const std::string& path,
                          const std::vector<VersionLimit>& limits);
 
+  // 把源路径上已提交的文档写成目标路径上的另一份。内存里的预览不写入。
+  // 路径为空或两条路径相同：返回状态冲突，不写文件。
+  static LoadResult copy_committed(FileSystem& files, const std::string& source_path,
+                                   const std::string& destination_path,
+                                   const std::vector<VersionLimit>& limits, EditDocument& copy);
+
   std::vector<std::uint8_t> encode() const;
   static std::optional<EditDocument> decode(const std::vector<std::uint8_t>& bytes);
 

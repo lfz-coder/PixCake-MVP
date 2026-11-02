@@ -340,6 +340,31 @@ LoadResult EditDocument::load(EditDocument& destination, FileSystem& files, cons
   return result;
 }
 
+LoadResult EditDocument::copy_committed(FileSystem& files, const std::string& source_path,
+                                        const std::string& destination_path,
+                                        const std::vector<VersionLimit>& limits, EditDocument& copy) {
+  LoadResult rejected;
+  if (source_path.empty() || destination_path.empty() || source_path == destination_path) {
+    rejected.code = ResultCode::StateConflict;
+    return rejected;
+  }
+  EditDocument loaded;
+  const LoadResult opened = load(loaded, files, source_path, limits);
+  if (opened.absent || !opened.code.has_value() || *opened.code != ResultCode::Ok || opened.recovered_empty) {
+    return opened;
+  }
+  const ResultCode saved = loaded.write_snapshot(files, destination_path);
+  if (saved != ResultCode::Ok) {
+    rejected.code = saved;
+    return rejected;
+  }
+  copy = std::move(loaded);
+  LoadResult result;
+  result.code = ResultCode::Ok;
+  result.used_backup = opened.used_backup;
+  return result;
+}
+
 ResultCode EditDocument::write_snapshot(FileSystem& files, const std::string& path) const {
   return atomic_replace(files, path, encode());
 }
