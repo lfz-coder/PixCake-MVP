@@ -1,0 +1,5 @@
+add_library(pixcake_editdoc
+  src/edit_document.cpp
+)
+target_include_directories(pixcake_editdoc PUBLIC include)
+target_link_libraries(pixcake_editdoc PUBLIC pixcake_persist pixcake_support pixcake_warnings)
