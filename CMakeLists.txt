@@ -12,4 +12,5 @@ target_compile_options(pixcake_warnings INTERFACE -Wall -Wextra -Werror)
 
 enable_testing()
 add_subdirectory(kernel/support)
+add_subdirectory(kernel/persist)
 add_subdirectory(tests)
