@@ -1,4 +1,5 @@
 #include "pixcake/support/checksum.hpp"
+#include "pixcake/support/clock.hpp"
 #include "pixcake/support/fast_export_latch.hpp"
 #include "pixcake/support/log_sink.hpp"
 #include "pixcake/support/result_code.hpp"
@@ -84,5 +85,19 @@ int main() {
   };
   Latch latch;
   EXPECT(!latch.enabled());
+
+  struct FakeClock : pixcake::Clock {
+    std::int64_t now = 42;
+    std::int64_t unix_seconds() const override { return now; }
+  };
+  FakeClock fake;
+  EXPECT(fake.unix_seconds() == 42);
+  fake.now = 100;
+  EXPECT(fake.unix_seconds() == 100);
+
+  pixcake::SystemClock system;
+  const std::int64_t wall = system.unix_seconds();
+  EXPECT(wall > 1760000000);
+  EXPECT(wall < 2000000000);
   return g_failures == 0 ? 0 : 1;
 }
