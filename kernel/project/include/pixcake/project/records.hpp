@@ -18,6 +18,15 @@ inline constexpr char kTrashProject[] = "项目";
 inline constexpr char kTrashPhoto[] = "图片";
 inline constexpr char kTrashVirtualCopy[] = "虚拟副本";
 inline constexpr char kDiskFileRemains[] = "磁盘文件还在";
+inline constexpr int kRatingMin = 0;
+inline constexpr int kRatingMax = 5;
+inline constexpr char kFlagPick[] = "选取";
+inline constexpr char kFlagExclude[] = "排除";
+inline constexpr char kColorRed[] = "红";
+inline constexpr char kColorYellow[] = "黄";
+inline constexpr char kColorGreen[] = "绿";
+inline constexpr char kColorBlue[] = "蓝";
+inline constexpr char kColorPurple[] = "紫";
 inline constexpr std::int64_t kTrashRetentionSeconds = 2592000;
 
 struct ProjectRow {

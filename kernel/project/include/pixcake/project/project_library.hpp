@@ -16,6 +16,7 @@ namespace pixcake {
 // 原图只记绝对路径和调用方交来的访问凭证。add_photo 不探测文件，因此不返回原文件缺失。
 // 虚拟副本指向原图，并保存调用方交来的参数文档编号。编号是不透明字符串，这里不打开参数文档。
 // 项目库只回答这些条目是否共用一张原图。张数在账本里计算，这里不减张数，也没有余额。
+// 星级、旗标和色标记在图片上。虚拟副本不另存这三列。
 class ProjectLibrary {
  public:
   ProjectLibrary(ProjectStore& store, FileSystem& files, const Clock& clock, SourceDeleter& deleter,
@@ -25,6 +26,9 @@ class ProjectLibrary {
   ProjectResult add_photo(std::int64_t project_id, std::string absolute_path, std::string file_name,
                           std::vector<std::uint8_t> access_credential);
   ProjectResult create_virtual_copy(std::int64_t photo_id, std::string document_id);
+  ProjectResult set_photo_ratings(std::vector<std::int64_t> photo_ids, int rating);
+  ProjectResult set_photo_flags(std::vector<std::int64_t> photo_ids, std::string flag);
+  ProjectResult set_photo_colors(std::vector<std::int64_t> photo_ids, std::string color);
 
   ResultCode startup();
   ResultCode refresh_source_presence();

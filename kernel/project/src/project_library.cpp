@@ -11,6 +11,42 @@ bool absolute_posix_path(const std::string& path) {
   return !path.empty() && path.front() == '/' && path.find('\0') == std::string::npos;
 }
 
+bool allowed_flag(const std::string& flag) {
+  return flag.empty() || flag == kFlagPick || flag == kFlagExclude;
+}
+
+bool allowed_color(const std::string& color) {
+  return color.empty() || color == kColorRed || color == kColorYellow || color == kColorGreen ||
+         color == kColorBlue || color == kColorPurple;
+}
+
+ProjectResult write_marks(ProjectStore& store, const std::vector<std::int64_t>& photo_ids,
+                          const std::function<ResultCode(std::int64_t)>& update) {
+  ProjectResult result;
+  if (photo_ids.empty()) {
+    result.code = ResultCode::StateConflict;
+    return result;
+  }
+  result.code = store.in_transaction([&] {
+    for (const std::int64_t id : photo_ids) {
+      std::optional<PhotoRow> photo;
+      const ResultCode loaded = store.load_photo(id, photo);
+      if (loaded != ResultCode::Ok) {
+        return loaded;
+      }
+      if (!photo.has_value()) {
+        return ResultCode::StateConflict;
+      }
+      const ResultCode wrote = update(id);
+      if (wrote != ResultCode::Ok) {
+        return wrote;
+      }
+    }
+    return ResultCode::Ok;
+  });
+  return result;
+}
+
 ResultCode original_photo_id(ProjectStore& store, const std::string& kind, std::int64_t id,
                              std::int64_t& original) {
   if (kind == kTrashPhoto) {
@@ -665,6 +701,39 @@ ResultCode ProjectLibrary::load_virtual_copy(std::int64_t id, std::optional<Virt
 
 ResultCode ProjectLibrary::list_virtual_copies(std::int64_t photo_id, std::vector<VirtualCopyRow>& out) const {
   return store_.list_virtual_copies(photo_id, out);
+}
+
+ProjectResult ProjectLibrary::set_photo_ratings(std::vector<std::int64_t> photo_ids, int rating) {
+  if (rating < kRatingMin || rating > kRatingMax) {
+    ProjectResult result;
+    result.code = ResultCode::StateConflict;
+    return result;
+  }
+  return write_marks(store_, photo_ids, [this, rating](std::int64_t id) {
+    return store_.update_photo_rating(id, rating);
+  });
+}
+
+ProjectResult ProjectLibrary::set_photo_flags(std::vector<std::int64_t> photo_ids, std::string flag) {
+  if (!allowed_flag(flag)) {
+    ProjectResult result;
+    result.code = ResultCode::StateConflict;
+    return result;
+  }
+  return write_marks(store_, photo_ids, [this, flag = std::move(flag)](std::int64_t id) {
+    return store_.update_photo_flag(id, flag);
+  });
+}
+
+ProjectResult ProjectLibrary::set_photo_colors(std::vector<std::int64_t> photo_ids, std::string color) {
+  if (!allowed_color(color)) {
+    ProjectResult result;
+    result.code = ResultCode::StateConflict;
+    return result;
+  }
+  return write_marks(store_, photo_ids, [this, color = std::move(color)](std::int64_t id) {
+    return store_.update_photo_color(id, color);
+  });
 }
 
 ResultCode ProjectLibrary::shares_original(const std::string& left_kind, std::int64_t left_id,

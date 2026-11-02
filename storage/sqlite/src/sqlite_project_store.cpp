@@ -549,6 +549,54 @@ ResultCode SqliteProjectStore::insert_photo(const PhotoDraft& draft, std::int64_
   return ResultCode::Ok;
 }
 
+ResultCode SqliteProjectStore::update_photo_rating(std::int64_t id, int rating) {
+  Statement stmt;
+  const ResultCode prepared = stmt.prepare(impl_->db, "UPDATE photo SET rating = ? WHERE id = ?;");
+  if (prepared != ResultCode::Ok) {
+    return prepared;
+  }
+  if (const ResultCode code = bind_int64(stmt.get(), 1, rating); code != ResultCode::Ok) {
+    return code;
+  }
+  if (const ResultCode code = bind_int64(stmt.get(), 2, id); code != ResultCode::Ok) {
+    return code;
+  }
+  const int rc = sqlite3_step(stmt.get());
+  return rc == SQLITE_DONE ? ResultCode::Ok : map_sqlite(rc);
+}
+
+ResultCode SqliteProjectStore::update_photo_flag(std::int64_t id, const std::string& flag) {
+  Statement stmt;
+  const ResultCode prepared = stmt.prepare(impl_->db, "UPDATE photo SET flag = ? WHERE id = ?;");
+  if (prepared != ResultCode::Ok) {
+    return prepared;
+  }
+  if (const ResultCode code = bind_text(stmt.get(), 1, flag); code != ResultCode::Ok) {
+    return code;
+  }
+  if (const ResultCode code = bind_int64(stmt.get(), 2, id); code != ResultCode::Ok) {
+    return code;
+  }
+  const int rc = sqlite3_step(stmt.get());
+  return rc == SQLITE_DONE ? ResultCode::Ok : map_sqlite(rc);
+}
+
+ResultCode SqliteProjectStore::update_photo_color(std::int64_t id, const std::string& color) {
+  Statement stmt;
+  const ResultCode prepared = stmt.prepare(impl_->db, "UPDATE photo SET color_label = ? WHERE id = ?;");
+  if (prepared != ResultCode::Ok) {
+    return prepared;
+  }
+  if (const ResultCode code = bind_text(stmt.get(), 1, color); code != ResultCode::Ok) {
+    return code;
+  }
+  if (const ResultCode code = bind_int64(stmt.get(), 2, id); code != ResultCode::Ok) {
+    return code;
+  }
+  const int rc = sqlite3_step(stmt.get());
+  return rc == SQLITE_DONE ? ResultCode::Ok : map_sqlite(rc);
+}
+
 ResultCode SqliteProjectStore::update_photo_presence(std::int64_t id, const std::string& presence) {
   Statement stmt;
   const ResultCode prepared = stmt.prepare(impl_->db, "UPDATE photo SET presence = ? WHERE id = ?;");

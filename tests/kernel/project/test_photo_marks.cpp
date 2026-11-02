@@ -10,6 +10,9 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
@@ -156,10 +159,91 @@ void test_version_two_gains_default_marks() {
   EXPECT(user_version(path) == 3);
 }
 
+pixcake::PhotoRow loaded_photo(Fixture& world, std::int64_t id) {
+  std::optional<pixcake::PhotoRow> row;
+  EXPECT(world.library->load_photo(id, row) == pixcake::ResultCode::Ok);
+  EXPECT(row.has_value());
+  return row.value_or(pixcake::PhotoRow{});
+}
+
+std::string file_text(const std::filesystem::path& path) {
+  std::ifstream input(path);
+  return std::string((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+}
+
+void test_marks_accept_only_the_documented_values() {
+  Fixture world;
+  const std::vector<std::uint8_t> document_bytes{9, 8, 7};
+  world.files.files["edits/a.pxedit"] = document_bytes;
+  const pixcake::ProjectResult project = world.library->create_project("相册", pixcake::kOriginLocal, false);
+  EXPECT(project.code == pixcake::ResultCode::Ok);
+  const pixcake::ProjectResult first =
+      world.library->add_photo(project.id, "/pictures/a.png", "a.png", {1});
+  const pixcake::ProjectResult second =
+      world.library->add_photo(project.id, "/pictures/b.png", "b.png", {2});
+  const pixcake::ProjectResult other =
+      world.library->add_photo(project.id, "/pictures/c.png", "c.png", {3});
+  EXPECT(first.code == pixcake::ResultCode::Ok);
+  EXPECT(second.code == pixcake::ResultCode::Ok);
+  EXPECT(other.code == pixcake::ResultCode::Ok);
+
+  EXPECT(world.library->set_photo_ratings({first.id, second.id}, 5).code == pixcake::ResultCode::Ok);
+  EXPECT(loaded_photo(world, first.id).rating == 5);
+  EXPECT(loaded_photo(world, second.id).rating == 5);
+  EXPECT(loaded_photo(world, other.id).rating == 0);
+  EXPECT(world.library->set_photo_ratings({first.id}, 0).code == pixcake::ResultCode::Ok);
+  EXPECT(loaded_photo(world, first.id).rating == 0);
+  EXPECT(world.library->set_photo_ratings({first.id}, 6).code == pixcake::ResultCode::StateConflict);
+  EXPECT(world.library->set_photo_ratings({first.id}, -1).code == pixcake::ResultCode::StateConflict);
+  EXPECT(loaded_photo(world, first.id).rating == 0);
+  EXPECT(loaded_photo(world, second.id).rating == 5);
+
+  EXPECT(world.library->set_photo_flags({first.id}, "选取").code == pixcake::ResultCode::Ok);
+  EXPECT(world.library->set_photo_flags({first.id}, "排除").code == pixcake::ResultCode::Ok);
+  EXPECT(loaded_photo(world, first.id).flag == "排除");
+  EXPECT(world.library->set_photo_flags({first.id}, "无").code == pixcake::ResultCode::StateConflict);
+  EXPECT(loaded_photo(world, first.id).flag == "排除");
+  EXPECT(world.library->set_photo_flags({first.id}, "").code == pixcake::ResultCode::Ok);
+  EXPECT(loaded_photo(world, first.id).flag.empty());
+
+  EXPECT(world.library->set_photo_colors({first.id}, "紫").code == pixcake::ResultCode::Ok);
+  EXPECT(loaded_photo(world, first.id).color_label == "紫");
+  EXPECT(world.library->set_photo_colors({first.id}, "青").code == pixcake::ResultCode::StateConflict);
+  EXPECT(loaded_photo(world, first.id).color_label == "紫");
+  EXPECT(world.library->set_photo_colors({first.id}, "").code == pixcake::ResultCode::Ok);
+  EXPECT(loaded_photo(world, first.id).color_label.empty());
+
+  EXPECT(world.library->set_photo_ratings({}, 4).code == pixcake::ResultCode::StateConflict);
+  EXPECT(loaded_photo(world, second.id).rating == 5);
+  EXPECT(world.library->set_photo_ratings({first.id, 999}, 4).code == pixcake::ResultCode::StateConflict);
+  EXPECT(loaded_photo(world, first.id).rating == 0);
+  EXPECT(world.library->set_photo_flags({second.id, 999}, "选取").code == pixcake::ResultCode::StateConflict);
+  EXPECT(loaded_photo(world, second.id).flag.empty());
+  EXPECT(world.library->set_photo_colors({other.id, 999}, "红").code == pixcake::ResultCode::StateConflict);
+  EXPECT(loaded_photo(world, other.id).color_label.empty());
+
+  EXPECT(world.files.files["edits/a.pxedit"] == document_bytes);
+  EXPECT(world.files.writes.empty());
+  EXPECT(world.deleter.calls == 0);
+
+  const std::filesystem::path project_dir =
+      std::filesystem::path(__FILE__).parent_path().parent_path().parent_path().parent_path() / "kernel" /
+      "project";
+  EXPECT(std::filesystem::is_directory(project_dir));
+  for (const std::filesystem::directory_entry& entry :
+       std::filesystem::recursive_directory_iterator(project_dir)) {
+    if (!entry.is_regular_file()) {
+      continue;
+    }
+    EXPECT(file_text(entry.path()).find("edit_document.hpp") == std::string::npos);
+  }
+}
+
 }  // namespace
 
 int main() {
   test_new_photo_has_empty_marks();
   test_version_two_gains_default_marks();
+  test_marks_accept_only_the_documented_values();
   return g_failures == 0 ? 0 : 1;
 }

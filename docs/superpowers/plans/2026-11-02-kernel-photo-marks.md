@@ -121,7 +121,7 @@ EOF
 - Consumes: `load_photo`、`in_transaction`
 - Produces: `ProjectLibrary::set_photo_ratings`、`set_photo_flags`、`set_photo_colors`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 断言：
 
@@ -132,13 +132,13 @@ EOF
 - 假文件系统里预先放好的参数文件字节不变，`writes` 仍是空，删除端口调用次数是 0。
 - `kernel/project` 的源文件不包含 `edit_document.hpp`。
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cmake --build build --target test_photo_marks && ctest --test-dir build -R '^test_photo_marks$' --output-on-failure`
 
 Expected: 编译失败，因为还没有 `set_photo_ratings`。
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 `records.hpp` 增加：
 
@@ -160,13 +160,13 @@ inline constexpr char kColorPurple[] = "紫";
 
 类注释写上：星级、旗标和色标记在图片上。虚拟副本不另存这三列。
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cmake --build build && ctest --test-dir build --output-on-failure`
 
 Expected: 全部通过，包含 `arch_dependencies`。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add kernel/project storage/sqlite tests/kernel/project/test_photo_marks.cpp docs/superpowers/plans/2026-11-02-kernel-photo-marks.md
