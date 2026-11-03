@@ -435,7 +435,10 @@ ResultCode ExportQueue::commit_product(const std::string& export_id, const std::
   std::uint64_t committed_checksum = 0;
   const ResultCode verified = read_checksum(files, job.destination_path, committed_present, committed_checksum);
   if (verified != ResultCode::Ok || !committed_present || committed_checksum != checksum) {
-    remove_if_present(files, job.destination_path);
+    const ResultCode removed = remove_if_present(files, job.destination_path);
+    if (removed != ResultCode::Ok) {
+      return removed;
+    }
     ExportEvent failed = event_from(job, "fail");
     const ResultCode noted = note(std::move(failed));
     return noted == ResultCode::Ok ? ResultCode::IoFailed : noted;
@@ -531,6 +534,12 @@ ResultCode ExportQueue::recover_one(const std::string& export_id, FileSystem& fi
     return note(std::move(failed));
   }
   if (!present) {
+    if (!files.exists(temp)) {
+      ExportEvent failed;
+      failed.kind = "fail";
+      failed.export_id = export_id;
+      return note(std::move(failed));
+    }
     const IoResult renamed = files.rename_file(temp, job.job.destination_path);
     if (!renamed.ok) {
       return renamed.code;
@@ -540,7 +549,10 @@ ResultCode ExportQueue::recover_one(const std::string& export_id, FileSystem& fi
       return verified;
     }
     if (!present || destination_checksum != job.checksum) {
-      remove_if_present(files, job.job.destination_path);
+      const ResultCode removed = remove_if_present(files, job.job.destination_path);
+      if (removed != ResultCode::Ok) {
+        return removed;
+      }
       ExportEvent failed;
       failed.kind = "fail";
       failed.export_id = export_id;

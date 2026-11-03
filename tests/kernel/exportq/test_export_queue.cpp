@@ -33,6 +33,52 @@ pixcake::ExportJob job_of(std::string export_id, std::string original_id, std::s
 }
 
 const std::vector<std::uint8_t> kBytes = {1, 2, 3, 4};
+const std::vector<std::uint8_t> kMismatched = {9, 9, 9};
+
+bool has_kind(const pixcake::ExportQueue& queue, const char* kind) {
+  for (const auto& event : queue.events()) {
+    if (event.kind == kind) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Rename can land bytes that disagree with the start-event checksum, and removing
+// that destination can fail. FakeFileSystem always removes a file that exists.
+class MismatchFileSystem : public pixcake::test::FakeFileSystem {
+ public:
+  std::string guarded;
+  bool corrupt_on_rename = false;
+  pixcake::ResultCode remove_error = pixcake::ResultCode::Ok;
+
+  pixcake::IoResult rename_file(const std::string& from, const std::string& to) override {
+    const pixcake::IoResult renamed = pixcake::test::FakeFileSystem::rename_file(from, to);
+    if (renamed.ok && corrupt_on_rename && to == guarded) {
+      files[to] = kMismatched;
+    }
+    return renamed;
+  }
+
+  pixcake::IoResult remove_file(const std::string& path) override {
+    if (!guarded.empty() && path == guarded && remove_error != pixcake::ResultCode::Ok) {
+      return pixcake::io_error(remove_error);
+    }
+    return pixcake::test::FakeFileSystem::remove_file(path);
+  }
+};
+
+class RejectFailSink : public pixcake::ExportEventSink {
+ public:
+  pixcake::ResultCode code = pixcake::ResultCode::DiskFull;
+
+  pixcake::ResultCode persist(const pixcake::ExportEvent& event, const pixcake::ExportCache&) override {
+    if (event.kind == "fail") {
+      return code;
+    }
+    return pixcake::ResultCode::Ok;
+  }
+};
 
 void reach_render(pixcake::ExportQueue& queue, const pixcake::ExportJob& job) {
   EXPECT(queue.enqueue(job) == pixcake::ResultCode::Ok);
@@ -254,6 +300,71 @@ void test_product_facts_match_one_settlement() {
   EXPECT(ledger.export_sheets() == 1);
 }
 
+void test_commit_returns_remove_error_when_mismatched_destination_cannot_be_deleted() {
+  MismatchFileSystem files;
+  files.guarded = "/out/a.jpg";
+  files.corrupt_on_rename = true;
+  files.remove_error = pixcake::ResultCode::PermissionDenied;
+
+  auto queue = pixcake::ExportQueue::open("/cache/exports");
+  reach_render(queue, job_of("exp-1", "orig-1", "/out/a.jpg"));
+  const auto code = queue.commit_product("exp-1", kBytes, files);
+  EXPECT(code == pixcake::ResultCode::PermissionDenied);
+  EXPECT(queue.status("exp-1") == "提交到目标路径");
+  EXPECT(!has_kind(queue, "fail"));
+  const auto destination = files.files.find("/out/a.jpg");
+  EXPECT(destination != files.files.end());
+  EXPECT(destination->second == kMismatched);
+}
+
+void test_rejected_fail_is_recorded_when_recover_finds_both_files_gone() {
+  MismatchFileSystem files;
+  files.guarded = "/out/a.jpg";
+  files.corrupt_on_rename = true;
+  RejectFailSink sink;
+
+  auto queue = pixcake::ExportQueue::open("/cache/exports");
+  queue.set_sink(&sink);
+  reach_render(queue, job_of("exp-1", "orig-1", "/out/a.jpg"));
+  const auto code = queue.commit_product("exp-1", kBytes, files);
+  EXPECT(code == pixcake::ResultCode::DiskFull);
+  EXPECT(queue.status("exp-1") == "提交到目标路径");
+  EXPECT(!has_kind(queue, "fail"));
+  EXPECT(files.files.count("/out/a.jpg") == 0);
+  EXPECT(files.files.count("/cache/exports/exp-1") == 0);
+
+  queue.set_sink(nullptr);
+  EXPECT(queue.recover(files) == pixcake::ResultCode::Ok);
+  EXPECT(queue.status("exp-1") == "失败");
+  EXPECT(has_kind(queue, "fail"));
+}
+
+void test_recover_returns_remove_error_when_renamed_destination_cannot_be_deleted() {
+  MismatchFileSystem files;
+  files.guarded = "/out/a.jpg";
+  files.remove_error = pixcake::ResultCode::PermissionDenied;
+  files.rename_error = pixcake::ResultCode::IoFailed;
+
+  auto queue = pixcake::ExportQueue::open("/cache/exports");
+  reach_render(queue, job_of("exp-1", "orig-1", "/out/a.jpg"));
+  EXPECT(queue.commit_product("exp-1", kBytes, files) == pixcake::ResultCode::IoFailed);
+  EXPECT(queue.status("exp-1") == "提交到目标路径");
+  EXPECT(files.files.count("/cache/exports/exp-1") == 1);
+  EXPECT(!has_kind(queue, "fail"));
+
+  files.rename_error = pixcake::ResultCode::Ok;
+  files.files["/cache/exports/exp-1"] = kMismatched;
+  const auto before = queue.events().size();
+  const auto code = queue.recover(files);
+  EXPECT(code == pixcake::ResultCode::PermissionDenied);
+  EXPECT(queue.status("exp-1") == "提交到目标路径");
+  EXPECT(queue.events().size() == before);
+  EXPECT(!has_kind(queue, "fail"));
+  const auto destination = files.files.find("/out/a.jpg");
+  EXPECT(destination != files.files.end());
+  EXPECT(destination->second == kMismatched);
+}
+
 }  // namespace
 
 int main() {
@@ -263,6 +374,9 @@ int main() {
   test_rename_failure_and_crash_points();
   test_cancel_removes_temp_and_print_is_unavailable();
   test_product_facts_match_one_settlement();
+  test_commit_returns_remove_error_when_mismatched_destination_cannot_be_deleted();
+  test_rejected_fail_is_recorded_when_recover_finds_both_files_gone();
+  test_recover_returns_remove_error_when_renamed_destination_cannot_be_deleted();
   if (g_failures != 0) {
     std::fprintf(stderr, "%d failure(s)\n", g_failures);
     return 1;
