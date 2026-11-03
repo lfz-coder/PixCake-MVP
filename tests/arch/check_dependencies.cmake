@@ -73,7 +73,7 @@ scan("${SOURCE_DIR}/apps/generated" "rule 5" "#include <Q" "#include <Qt" "QOpen
 scan("${SOURCE_DIR}/kernel/ledger" "rule 6" "jpeglib.h" "png.h" "opencv" "exportq/src")
 
 # 7. 导出队列不包含能力私有头或账本实现头。
-scan("${SOURCE_DIR}/kernel/exportq" "rule 7" "capabilities/" "ledger/src")
+scan("${SOURCE_DIR}/kernel/exportq" "rule 7" "capabilities/" "ledger/src" "pixcake/ledger/" "sqlite3.h")
 
 # 8. 界面不包含 GPU 后端头。
 scan("${SOURCE_DIR}/ui" "rule 8" "gpu/backend")
