@@ -29,7 +29,7 @@ add_test(NAME test_sync COMMAND test_sync)
 
 add_executable(test_ledger kernel/ledger/test_ledger.cpp)
 target_include_directories(test_ledger PRIVATE ${CMAKE_SOURCE_DIR}/tests)
-target_link_libraries(test_ledger PRIVATE pixcake_ledger pixcake_warnings)
+target_link_libraries(test_ledger PRIVATE pixcake_ledger pixcake_storage pixcake_warnings)
 add_test(NAME test_ledger COMMAND test_ledger)
 
 add_executable(test_preset_library kernel/preset/test_preset_library.cpp)

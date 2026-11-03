@@ -1,6 +1,12 @@
 #include "pixcake/ledger/credit_ledger.hpp"
+#include "pixcake/ledger/ledger_book.hpp"
+#include "pixcake/storage/sqlite_ledger_log.hpp"
+#include "support/temp_dir.hpp"
+
+#include <sqlite3.h>
 
 #include <cstdio>
+#include <memory>
 #include <string>
 
 namespace {
@@ -195,6 +201,76 @@ void test_export_sheets_count_originals_once_per_settlement() {
   EXPECT(poor.events().size() == before);
 }
 
+void test_reopen_replays_events_and_repairs_cache() {
+  pixcake::test::TempDir dir;
+  const std::string path = dir.path() + "/ledger.db";
+  auto policy = version_930();
+  {
+    std::unique_ptr<pixcake::SqliteLedgerLog> log;
+    EXPECT(pixcake::SqliteLedgerLog::open(path, log) == pixcake::ResultCode::Ok);
+    std::unique_ptr<pixcake::LedgerBook> book;
+    EXPECT(pixcake::LedgerBook::open(policy, *log, book) == pixcake::ResultCode::Ok);
+    EXPECT(book->credit_points(80) == pixcake::ResultCode::Ok);
+    EXPECT(book->credit_sheets(3) == pixcake::ResultCode::Ok);
+    EXPECT(book->quote(quote_of("task-1", "官方", 30)) == pixcake::ResultCode::Ok);
+    EXPECT(book->enqueue("task-1") == pixcake::ResultCode::Ok);
+    EXPECT(book->start_generating("task-1") == pixcake::ResultCode::Ok);
+    EXPECT(book->ledger().creative_points() == 50);
+    EXPECT(book->ledger().export_sheets() == 3);
+    EXPECT(book->ledger().task_status("task-1") == "生成中");
+  }
+
+  sqlite3* raw = nullptr;
+  EXPECT(sqlite3_open(path.c_str(), &raw) == SQLITE_OK);
+  EXPECT(sqlite3_exec(raw, "UPDATE ledger_cache SET creative_points = 1, export_sheets = 9 WHERE id = 1;",
+                      nullptr, nullptr, nullptr) == SQLITE_OK);
+  EXPECT(sqlite3_exec(raw, "UPDATE ledger_task_cache SET status = '排队中' WHERE task_id = 'task-1';",
+                      nullptr, nullptr, nullptr) == SQLITE_OK);
+  sqlite3_close(raw);
+
+  std::unique_ptr<pixcake::SqliteLedgerLog> reopened_log;
+  EXPECT(pixcake::SqliteLedgerLog::open(path, reopened_log) == pixcake::ResultCode::Ok);
+  std::unique_ptr<pixcake::LedgerBook> reopened;
+  EXPECT(pixcake::LedgerBook::open(policy, *reopened_log, reopened) == pixcake::ResultCode::Ok);
+  EXPECT(reopened->ledger().creative_points() == 50);
+  EXPECT(reopened->ledger().export_sheets() == 3);
+  EXPECT(reopened->ledger().task_status("task-1") == "生成中");
+
+  sqlite3_stmt* cache = nullptr;
+  EXPECT(sqlite3_open(path.c_str(), &raw) == SQLITE_OK);
+  EXPECT(sqlite3_prepare_v2(raw, "SELECT creative_points, export_sheets FROM ledger_cache WHERE id = 1;", -1,
+                            &cache, nullptr) == SQLITE_OK);
+  EXPECT(sqlite3_step(cache) == SQLITE_ROW);
+  EXPECT(sqlite3_column_int64(cache, 0) == 50);
+  EXPECT(sqlite3_column_int64(cache, 1) == 3);
+  sqlite3_finalize(cache);
+  sqlite3_stmt* task_cache = nullptr;
+  EXPECT(sqlite3_prepare_v2(raw, "SELECT status FROM ledger_task_cache WHERE task_id = ?;", -1, &task_cache,
+                            nullptr) == SQLITE_OK);
+  EXPECT(sqlite3_bind_text(task_cache, 1, "task-1", -1, SQLITE_TRANSIENT) == SQLITE_OK);
+  EXPECT(sqlite3_step(task_cache) == SQLITE_ROW);
+  const auto* repaired_status = reinterpret_cast<const char*>(sqlite3_column_text(task_cache, 0));
+  EXPECT(repaired_status != nullptr && std::string(repaired_status) == "生成中");
+  sqlite3_finalize(task_cache);
+  sqlite3_close(raw);
+
+  pixcake::test::TempDir future_dir;
+  const std::string future_path = future_dir.path() + "/ledger.db";
+  EXPECT(sqlite3_open(future_path.c_str(), &raw) == SQLITE_OK);
+  EXPECT(sqlite3_exec(raw, "PRAGMA user_version=2;", nullptr, nullptr, nullptr) == SQLITE_OK);
+  sqlite3_close(raw);
+  std::unique_ptr<pixcake::SqliteLedgerLog> future;
+  EXPECT(pixcake::SqliteLedgerLog::open(future_path, future) == pixcake::ResultCode::StateConflict);
+  EXPECT(future == nullptr);
+  EXPECT(sqlite3_open(future_path.c_str(), &raw) == SQLITE_OK);
+  sqlite3_stmt* version = nullptr;
+  EXPECT(sqlite3_prepare_v2(raw, "PRAGMA user_version;", -1, &version, nullptr) == SQLITE_OK);
+  EXPECT(sqlite3_step(version) == SQLITE_ROW);
+  EXPECT(sqlite3_column_int(version, 0) == 2);
+  sqlite3_finalize(version);
+  sqlite3_close(raw);
+}
+
 }  // namespace
 
 int main() {
@@ -203,6 +279,7 @@ int main() {
   test_accelerate_is_charged_once_and_strokes_dedupe();
   test_free_queue_switches_and_master_allowance();
   test_export_sheets_count_originals_once_per_settlement();
+  test_reopen_replays_events_and_repairs_cache();
   if (g_failures != 0) {
     std::fprintf(stderr, "%d failure(s)\n", g_failures);
     return 1;

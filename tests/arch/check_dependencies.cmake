@@ -114,4 +114,7 @@ scan("${SOURCE_DIR}/gpu/facade" "rule 10" "QString" "QImage" "QOpenGL" "QWidget"
 # 11. 同步模块不写死画笔或局部追色。原因只放在能力和蒙版的声明里。
 scan("${SOURCE_DIR}/kernel/sync" "rule 11" "画笔" "局部追色")
 
+# 12. 账本不链接 SQLite，也不抄工具点数表。
+scan("${SOURCE_DIR}/kernel/ledger" "rule 12" "sqlite3.h" "面部重绘")
+
 message(STATUS "arch dependencies ok")

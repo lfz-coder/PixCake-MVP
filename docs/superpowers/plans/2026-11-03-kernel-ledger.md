@@ -848,6 +848,14 @@ void test_reopen_replays_events_and_repairs_cache() {
   EXPECT(sqlite3_column_int64(cache, 0) == 50);
   EXPECT(sqlite3_column_int64(cache, 1) == 3);
   sqlite3_finalize(cache);
+  sqlite3_stmt* task_cache = nullptr;
+  EXPECT(sqlite3_prepare_v2(raw, "SELECT status FROM ledger_task_cache WHERE task_id = ?;", -1, &task_cache,
+                            nullptr) == SQLITE_OK);
+  EXPECT(sqlite3_bind_text(task_cache, 1, "task-1", -1, SQLITE_TRANSIENT) == SQLITE_OK);
+  EXPECT(sqlite3_step(task_cache) == SQLITE_ROW);
+  const auto* repaired_status = reinterpret_cast<const char*>(sqlite3_column_text(task_cache, 0));
+  EXPECT(repaired_status != nullptr && std::string(repaired_status) == "生成中");
+  sqlite3_finalize(task_cache);
   sqlite3_close(raw);
 
   pixcake::test::TempDir future_dir;
