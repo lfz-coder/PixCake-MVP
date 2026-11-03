@@ -76,6 +76,7 @@ class EditDocument {
                                          const std::vector<FragmentView>& replacements, FileSystem& files,
                                          const std::string& path);
   std::optional<FragmentView> fragment(const std::string& capability_id) const;
+  std::vector<FragmentView> fragments() const;
   std::optional<std::string> committed_parameter(const std::string& capability_id,
                                                  const std::string& parameter_id) const;
 

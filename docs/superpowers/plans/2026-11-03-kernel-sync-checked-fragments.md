@@ -297,7 +297,7 @@ EOF
 - Consumes: `sync_tree()`、`EditDocument::fragment`、`EditDocument::commit_fragment_replacement`
 - Produces: `EditDocument::fragments()`、`apply_checked`、`retry_failed`、`copy_committed`、`paste_committed`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 在 `test_sync.cpp` 增加下面的测试，并从 `main` 调用。补上 `pixcake/editdoc/edit_document.hpp` 和 `support/fake_file_system.hpp`。
 
@@ -412,13 +412,13 @@ void test_copy_paste_moves_committed_fragments_without_a_tree() {
 
 同路径的目标要单独断言：来源路径等于该目标路径时，这一项是状态冲突，来源修订号不变；另一张不同路径的目标仍写成来源片段。空勾选、重复勾选、勾选 `color.match`，都在任何写盘之前让全部目标返回状态冲突。`previous` 的数量和目标数不同时，重试不写盘。粘贴遇到磁盘满时，目标修订号和正式文件保持调用前。
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cmake --build build --target test_sync`
 
 Expected: 编译失败，因为还没有 `apply_checked`。
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 `EditDocument` 增加 `std::vector<FragmentView> fragments() const;`。按记录顺序返回能解析的片段。解析不出的片段记录不放进这个列表，文件里的原记录也不删。
 
@@ -459,13 +459,13 @@ ResultCode paste_committed(EditDocument& target, const EffectClipboard& clipboar
 
 `copy_committed` 返回 `source.fragments()`。`paste_committed` 在列表为空时返回成功且不写。否则用列表里的能力标识做删除列表，用列表本身做替换。
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cmake --build build --target test_sync test_edit_document && ctest --test-dir build --output-on-failure`
 
 Expected: 全量测试通过，其中包含 `test_sync`、`test_edit_document`、`test_preset_library` 和 `arch_dependencies`。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add kernel/editdoc kernel/sync tests/kernel/sync docs/superpowers/plans/2026-11-03-kernel-sync-checked-fragments.md

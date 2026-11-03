@@ -541,6 +541,25 @@ std::optional<FragmentView> EditDocument::fragment(const std::string& capability
   return std::nullopt;
 }
 
+std::vector<FragmentView> EditDocument::fragments() const {
+  std::vector<FragmentView> views;
+  for (const auto& record : records_) {
+    if (record.type != kRecordFragment) {
+      continue;
+    }
+    const auto parsed = parse_fragment(record.payload);
+    if (!parsed) {
+      continue;
+    }
+    FragmentView view;
+    view.capability_id = parsed->id;
+    view.version = parsed->version;
+    view.inner = parsed->inner;
+    views.push_back(std::move(view));
+  }
+  return views;
+}
+
 std::optional<std::string> EditDocument::committed_parameter(const std::string& capability_id,
                                                             const std::string& parameter_id) const {
   const auto found = fragment(capability_id);
