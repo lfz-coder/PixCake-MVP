@@ -258,8 +258,11 @@ ResultCode LayerDocument::remove(const std::string& id) {
     }
   }
   layers_ = std::move(kept);
-  if (current_generation_layer_id_ == id) {
-    current_generation_layer_id_.clear();
+  for (const std::string& gone : doomed) {
+    if (current_generation_layer_id_ == gone) {
+      current_generation_layer_id_.clear();
+      break;
+    }
   }
   return ResultCode::Ok;
 }

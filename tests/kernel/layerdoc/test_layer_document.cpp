@@ -140,6 +140,21 @@ void test_place_result_shapes_once() {
   EXPECT(document.generations().size() == 6);
 }
 
+void test_remove_clears_generation_cursor_for_deleted_children() {
+  auto document = opened();
+  EXPECT(document.place_result("result-1", "新图层", "tool-a") == pixcake::ResultCode::Ok);
+  EXPECT(document.group_layer("result-1", "group-1", "組") == pixcake::ResultCode::Ok);
+  EXPECT(document.remove("group-1") == pixcake::ResultCode::Ok);
+  EXPECT(document.add_layer("result-1", "後來的") == pixcake::ResultCode::Ok);
+  EXPECT(document.place_result("result-2", "替换当前生成图层", "重繪") == pixcake::ResultCode::Ok);
+  pixcake::LayerView reused;
+  EXPECT(document.find_layer("result-1", reused));
+  EXPECT(reused.name == "後來的");
+  pixcake::LayerView replacement;
+  EXPECT(document.find_layer("result-2", replacement));
+  EXPECT(replacement.name == "重繪");
+}
+
 }  // namespace
 
 int main() {
@@ -147,6 +162,7 @@ int main() {
   test_blend_opacity_lock_and_index();
   test_group_mask_selection_and_batch_design();
   test_place_result_shapes_once();
+  test_remove_clears_generation_cursor_for_deleted_children();
   if (g_failures != 0) {
     std::fprintf(stderr, "%d failure(s)\n", g_failures);
     return 1;
