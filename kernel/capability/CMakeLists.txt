@@ -1,4 +1,5 @@
 add_library(pixcake_capability
+  src/capability_registry.cpp
   src/capability_sync.cpp
 )
 target_include_directories(pixcake_capability PUBLIC include)

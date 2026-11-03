@@ -1,4 +1,5 @@
 #include "pixcake/editdoc/edit_document.hpp"
+#include "pixcake/capability/capability_registry.hpp"
 #include "pixcake/sync/sync_batch.hpp"
 #include "support/fake_file_system.hpp"
 
@@ -82,6 +83,20 @@ void test_tree_reads_attributes_from_owners() {
   }
   EXPECT(find_item(tree, "manual.edge")->module_label == "手动");
   EXPECT(find_item(tree, "pet")->module_label == "宠物");
+
+  const auto registry = pixcake::CapabilityRegistry::phase_one();
+  for (const auto& descriptor : registry.descriptors()) {
+    const auto* row = find_item(tree, descriptor.id.c_str());
+    EXPECT(row != nullptr);
+    if (row == nullptr) {
+      continue;
+    }
+    EXPECT(row->module_label == descriptor.module_label);
+    EXPECT(row->label == descriptor.label);
+    EXPECT(row->capability_id == descriptor.id);
+    EXPECT(row->enabled == descriptor.can_batch_sync);
+    EXPECT(row->blocked_reason == descriptor.batch_sync_blocked_reason);
+  }
 }
 
 pixcake::SyncTarget target_of(pixcake::EditDocument& document, pixcake::test::FakeFileSystem& files,

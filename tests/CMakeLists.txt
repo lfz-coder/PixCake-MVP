@@ -40,6 +40,10 @@ target_include_directories(test_sync PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 target_link_libraries(test_sync PRIVATE pixcake_sync pixcake_warnings)
 add_test(NAME test_sync COMMAND test_sync)
 
+add_executable(test_capability_registry kernel/capability/test_capability_registry.cpp)
+target_link_libraries(test_capability_registry PRIVATE pixcake_capability pixcake_warnings)
+add_test(NAME test_capability_registry COMMAND test_capability_registry)
+
 add_executable(test_ledger kernel/ledger/test_ledger.cpp)
 target_include_directories(test_ledger PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 target_link_libraries(test_ledger PRIVATE pixcake_ledger pixcake_storage pixcake_warnings)
@@ -93,4 +97,9 @@ add_test(NAME test_photo_marks COMMAND test_photo_marks)
 add_test(
   NAME arch_dependencies
   COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P ${CMAKE_SOURCE_DIR}/tests/arch/check_dependencies.cmake
+)
+
+add_test(
+  NAME capability_ownership
+  COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P ${CMAKE_SOURCE_DIR}/tests/arch/check_capability_ownership.cmake
 )
