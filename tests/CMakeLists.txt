@@ -21,6 +21,10 @@ add_executable(test_workspace_display kernel/workspace/test_workspace_display.cp
 target_link_libraries(test_workspace_display PRIVATE pixcake_workspace pixcake_warnings)
 add_test(NAME test_workspace_display COMMAND test_workspace_display)
 
+add_executable(test_guide_copy kernel/workspace/test_guide_copy.cpp)
+target_link_libraries(test_guide_copy PRIVATE pixcake_workspace pixcake_warnings)
+add_test(NAME test_guide_copy COMMAND test_guide_copy)
+
 add_executable(test_copy_committed_document kernel/editdoc/test_copy_committed_document.cpp)
 target_include_directories(test_copy_committed_document PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 target_link_libraries(test_copy_committed_document PRIVATE pixcake_editdoc pixcake_storage pixcake_warnings)
