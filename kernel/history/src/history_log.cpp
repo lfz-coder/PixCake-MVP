@@ -50,6 +50,21 @@ ResultCode HistoryLog::select(const std::string& image_id, EditDocument& documen
   return ResultCode::Ok;
 }
 
+ResultCode HistoryLog::reopen_folded(const std::string& image_id, const EditDocument& loaded) {
+  if (image_id.empty() || loaded.image_id() != image_id) {
+    return ResultCode::StateConflict;
+  }
+  HistoryStep step;
+  step.revision = loaded.revision();
+  step.label = kHistoryFoldedLabel;
+  step.snapshot = loaded.encode();
+  ImageSteps image;
+  image.steps.push_back(std::move(step));
+  image.current = 0;
+  images_[image_id] = std::move(image);
+  return ResultCode::Ok;
+}
+
 const std::vector<HistoryStep>* HistoryLog::steps(const std::string& image_id) const {
   const auto found = images_.find(image_id);
   if (found == images_.end()) {

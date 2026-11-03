@@ -88,7 +88,7 @@ EOF
 - Consumes: Task 1 的 `HistoryLog`
 - Produces: `kHistoryFoldedLabel`、`HistoryLog::reopen_folded`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 在同一测试文件追加：
 
@@ -96,21 +96,21 @@ EOF
 - 编号不一致时不替换已有列表。
 - 折叠后再把同一修订号记一次，返回状态冲突，仍然只有那一条。
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cmake --build build --target test_history && ctest --test-dir build -R '^test_history$' --output-on-failure`
 
 Expected: 编译失败，因为还没有 `reopen_folded`。
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 `reopen_folded` 只替换这一张图的列表：一步，标签 `上一次保存`，快照是传入文档的 `encode()`。不写文件。编号不合时原列表不动。
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
-Expected: `test_history` 通过。再跑全量 `ctest --test-dir build --output-on-failure`。
+Expected: `test_history` 通过。再跑全量 `ctest --test-dir build --output-on-failure`。全量 13 项通过。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add kernel/history tests/kernel/history docs/superpowers/plans/2026-11-03-kernel-history-steps.md
