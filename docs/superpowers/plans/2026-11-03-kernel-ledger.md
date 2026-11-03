@@ -327,6 +327,7 @@ struct LedgerEvent {
   std::int64_t sheets_delta = 0;
 };
 
+// 排队中取消不扣，生成中取消不退，同一任务编号和笔触编号不双扣
 class CreditLedger {
  public:
   static CreditLedger open(FreeQueuePolicy policy, std::vector<LedgerEvent> events);
