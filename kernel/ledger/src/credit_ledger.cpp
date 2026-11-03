@@ -202,6 +202,13 @@ ResultCode CreditLedger::start_generating(const std::string& task_id) {
     return ResultCode::Ok;
   }
   const LedgerEvent& quoted = found->second.quote;
+  if (quoted.origin == "大师精选" && !quoted.high_compute && !quoted.batch_generation) {
+    const auto used = shot.master_free.find(quoted.tool_id);
+    const int count = used == shot.master_free.end() ? 0 : used->second;
+    if (count >= 3 && !quoted.subscribed) {
+      return ResultCode::StateConflict;
+    }
+  }
   LedgerEvent event;
   event.kind = "start";
   event.task_id = task_id;
@@ -215,8 +222,6 @@ ResultCode CreditLedger::start_generating(const std::string& task_id) {
     if (count < 3) {
       charge = 0;
       event.consumed_master_free = true;
-    } else if (!quoted.subscribed) {
-      return ResultCode::StateConflict;
     } else {
       charge = 0;
     }

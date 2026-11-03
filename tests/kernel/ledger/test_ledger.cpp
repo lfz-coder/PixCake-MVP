@@ -271,6 +271,53 @@ void test_reopen_replays_events_and_repairs_cache() {
   sqlite3_close(raw);
 }
 
+void test_sqlite_handles_reject_stale_duplicate_charge() {
+  pixcake::test::TempDir dir;
+  const std::string path = dir.path() + "/ledger.db";
+  auto policy = version_930();
+  std::unique_ptr<pixcake::SqliteLedgerLog> first_log;
+  std::unique_ptr<pixcake::SqliteLedgerLog> second_log;
+  EXPECT(pixcake::SqliteLedgerLog::open(path, first_log) == pixcake::ResultCode::Ok);
+  EXPECT(pixcake::SqliteLedgerLog::open(path, second_log) == pixcake::ResultCode::Ok);
+  std::unique_ptr<pixcake::LedgerBook> first;
+  std::unique_ptr<pixcake::LedgerBook> second;
+  EXPECT(pixcake::LedgerBook::open(policy, *first_log, first) == pixcake::ResultCode::Ok);
+  EXPECT(first->credit_points(100) == pixcake::ResultCode::Ok);
+  EXPECT(first->quote(quote_of("task", "官方", 30)) == pixcake::ResultCode::Ok);
+  EXPECT(first->enqueue("task") == pixcake::ResultCode::Ok);
+  EXPECT(pixcake::LedgerBook::open(policy, *second_log, second) == pixcake::ResultCode::Ok);
+  EXPECT(first->start_generating("task") == pixcake::ResultCode::Ok);
+  EXPECT(second->start_generating("task") == pixcake::ResultCode::StateConflict);
+
+  std::unique_ptr<pixcake::SqliteLedgerLog> reopened_log;
+  std::unique_ptr<pixcake::LedgerBook> reopened;
+  EXPECT(pixcake::SqliteLedgerLog::open(path, reopened_log) == pixcake::ResultCode::Ok);
+  EXPECT(pixcake::LedgerBook::open(policy, *reopened_log, reopened) == pixcake::ResultCode::Ok);
+  EXPECT(reopened->ledger().creative_points() == 70);
+  EXPECT(reopened->ledger().task_status("task") == "生成中");
+}
+
+void test_master_acceleration_does_not_bypass_subscription() {
+  auto policy = version_930();
+  auto ledger = charged(policy, 100, 1);
+  for (int index = 1; index <= 3; ++index) {
+    auto quote = quote_of("free-" + std::to_string(index), "大师精选", 30);
+    quote.tool_id = "master-tool";
+    EXPECT(ledger.quote(quote) == pixcake::ResultCode::Ok);
+    EXPECT(ledger.enqueue(quote.task_id) == pixcake::ResultCode::Ok);
+    EXPECT(ledger.start_generating(quote.task_id) == pixcake::ResultCode::Ok);
+  }
+  auto blocked = quote_of("blocked", "大师精选", 30);
+  blocked.tool_id = "master-tool";
+  blocked.subscribed = false;
+  blocked.acceleration_points = 5;
+  EXPECT(ledger.quote(blocked) == pixcake::ResultCode::Ok);
+  EXPECT(ledger.enqueue(blocked.task_id) == pixcake::ResultCode::Ok);
+  EXPECT(ledger.accelerate(blocked.task_id) == pixcake::ResultCode::Ok);
+  EXPECT(ledger.start_generating(blocked.task_id) == pixcake::ResultCode::StateConflict);
+  EXPECT(ledger.creative_points() == 95);
+}
+
 }  // namespace
 
 int main() {
@@ -280,6 +327,8 @@ int main() {
   test_free_queue_switches_and_master_allowance();
   test_export_sheets_count_originals_once_per_settlement();
   test_reopen_replays_events_and_repairs_cache();
+  test_sqlite_handles_reject_stale_duplicate_charge();
+  test_master_acceleration_does_not_bypass_subscription();
   if (g_failures != 0) {
     std::fprintf(stderr, "%d failure(s)\n", g_failures);
     return 1;

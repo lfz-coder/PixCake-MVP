@@ -57,6 +57,14 @@ ResultCode LedgerBook::persist(CreditLedger updated) {
                                       updated.events().end());
   const LedgerCache folded = cache_from(updated);
   const ResultCode code = log_.in_transaction([&] {
+    std::vector<LedgerEvent> current;
+    const ResultCode loaded = log_.load(current);
+    if (loaded != ResultCode::Ok) {
+      return loaded;
+    }
+    if (current.size() != kept) {
+      return ResultCode::StateConflict;
+    }
     const ResultCode appended = log_.append(tail);
     if (appended != ResultCode::Ok) {
       return appended;
