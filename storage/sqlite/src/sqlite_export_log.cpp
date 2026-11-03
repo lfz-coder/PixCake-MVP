@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <limits>
 #include <utility>
+#include <vector>
 
 namespace pixcake {
 namespace {
@@ -18,6 +19,7 @@ constexpr const char* kSchema =
     "export_id TEXT NOT NULL,"
     "original_id TEXT NOT NULL,"
     "document_revision INTEGER NOT NULL,"
+    "document_snapshot TEXT NOT NULL,"
     "destination_path TEXT NOT NULL,"
     "settings_snapshot TEXT NOT NULL,"
     "watermark_free_second INTEGER NOT NULL,"
@@ -107,6 +109,36 @@ std::uint64_t parse_hex16(const std::string& text) {
     return 0;
   }
   return std::strtoull(text.c_str(), nullptr, 16);
+}
+
+std::string bytes_hex(const std::vector<std::uint8_t>& bytes) {
+  static constexpr char digits[] = "0123456789abcdef";
+  std::string text;
+  text.reserve(bytes.size() * 2);
+  for (const auto byte : bytes) {
+    text.push_back(digits[(byte >> 4) & 0x0f]);
+    text.push_back(digits[byte & 0x0f]);
+  }
+  return text;
+}
+
+std::vector<std::uint8_t> hex_bytes(const std::string& text) {
+  if (text.size() % 2 != 0) return {};
+  std::vector<std::uint8_t> bytes;
+  bytes.reserve(text.size() / 2);
+  for (std::size_t i = 0; i < text.size(); i += 2) {
+    const auto digit = [](char value) -> int {
+      if (value >= '0' && value <= '9') return value - '0';
+      if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+      if (value >= 'A' && value <= 'F') return value - 'A' + 10;
+      return -1;
+    };
+    const int high = digit(text[i]);
+    const int low = digit(text[i + 1]);
+    if (high < 0 || low < 0) return {};
+    bytes.push_back(static_cast<std::uint8_t>((high << 4) | low));
+  }
+  return bytes;
 }
 
 ResultCode read_user_version(sqlite3* db, int& version) {
@@ -210,7 +242,7 @@ ResultCode SqliteExportLog::load(std::vector<ExportEvent>& out) {
   Statement stmt;
   const ResultCode prepared = stmt.prepare(
       impl_->db,
-      "SELECT kind, export_id, original_id, document_revision, destination_path, settings_snapshot, "
+      "SELECT kind, export_id, original_id, document_revision, document_snapshot, destination_path, settings_snapshot, "
       "watermark_free_second, print_requested, checksum FROM export_event ORDER BY seq;");
   if (prepared != ResultCode::Ok) {
     return prepared;
@@ -222,11 +254,12 @@ ResultCode SqliteExportLog::load(std::vector<ExportEvent>& out) {
     event.export_id = column_text(stmt.get(), 1);
     event.original_id = column_text(stmt.get(), 2);
     event.document_revision = static_cast<std::uint64_t>(sqlite3_column_int64(stmt.get(), 3));
-    event.destination_path = column_text(stmt.get(), 4);
-    event.settings_snapshot = column_text(stmt.get(), 5);
-    event.watermark_free_second = sqlite3_column_int(stmt.get(), 6) != 0;
-    event.print_requested = sqlite3_column_int(stmt.get(), 7) != 0;
-    event.checksum = parse_hex16(column_text(stmt.get(), 8));
+    event.document_snapshot = hex_bytes(column_text(stmt.get(), 4));
+    event.destination_path = column_text(stmt.get(), 5);
+    event.settings_snapshot = column_text(stmt.get(), 6);
+    event.watermark_free_second = sqlite3_column_int(stmt.get(), 7) != 0;
+    event.print_requested = sqlite3_column_int(stmt.get(), 8) != 0;
+    event.checksum = parse_hex16(column_text(stmt.get(), 9));
     out.push_back(std::move(event));
   }
   return stepped == SQLITE_DONE ? ResultCode::Ok : ResultCode::IoFailed;
@@ -236,8 +269,8 @@ ResultCode SqliteExportLog::append(const std::vector<ExportEvent>& events) {
   Statement stmt;
   const ResultCode prepared = stmt.prepare(
       impl_->db,
-      "INSERT INTO export_event(kind, export_id, original_id, document_revision, destination_path, "
-      "settings_snapshot, watermark_free_second, print_requested, checksum) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);");
+      "INSERT INTO export_event(kind, export_id, original_id, document_revision, document_snapshot, destination_path, "
+      "settings_snapshot, watermark_free_second, print_requested, checksum) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);");
   if (prepared != ResultCode::Ok) {
     return prepared;
   }
@@ -261,21 +294,24 @@ ResultCode SqliteExportLog::append(const std::vector<ExportEvent>& events) {
         code != ResultCode::Ok) {
       return code;
     }
-    if (const ResultCode code = bind_text(stmt.get(), 5, event.destination_path); code != ResultCode::Ok) {
+    if (const ResultCode code = bind_text(stmt.get(), 5, bytes_hex(event.document_snapshot)); code != ResultCode::Ok) {
       return code;
     }
-    if (const ResultCode code = bind_text(stmt.get(), 6, event.settings_snapshot); code != ResultCode::Ok) {
+    if (const ResultCode code = bind_text(stmt.get(), 6, event.destination_path); code != ResultCode::Ok) {
       return code;
     }
-    if (const ResultCode code = map_sqlite(sqlite3_bind_int(stmt.get(), 7, event.watermark_free_second ? 1 : 0));
+    if (const ResultCode code = bind_text(stmt.get(), 7, event.settings_snapshot); code != ResultCode::Ok) {
+      return code;
+    }
+    if (const ResultCode code = map_sqlite(sqlite3_bind_int(stmt.get(), 8, event.watermark_free_second ? 1 : 0));
         code != ResultCode::Ok) {
       return code;
     }
-    if (const ResultCode code = map_sqlite(sqlite3_bind_int(stmt.get(), 8, event.print_requested ? 1 : 0));
+    if (const ResultCode code = map_sqlite(sqlite3_bind_int(stmt.get(), 9, event.print_requested ? 1 : 0));
         code != ResultCode::Ok) {
       return code;
     }
-    if (const ResultCode code = bind_text(stmt.get(), 9, hex16(event.checksum)); code != ResultCode::Ok) {
+    if (const ResultCode code = bind_text(stmt.get(), 10, hex16(event.checksum)); code != ResultCode::Ok) {
       return code;
     }
     const int inserted = sqlite3_step(stmt.get());

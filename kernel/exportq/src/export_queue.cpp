@@ -28,6 +28,7 @@ ExportJob job_from(const ExportEvent& event) {
   job.export_id = event.export_id;
   job.original_id = event.original_id;
   job.document_revision = event.document_revision;
+  job.document_snapshot = event.document_snapshot;
   job.destination_path = event.destination_path;
   job.settings_snapshot = event.settings_snapshot;
   job.watermark_free_second = event.watermark_free_second;
@@ -41,6 +42,7 @@ ExportEvent event_from(const ExportJob& job, std::string kind) {
   event.export_id = job.export_id;
   event.original_id = job.original_id;
   event.document_revision = job.document_revision;
+  event.document_snapshot = job.document_snapshot;
   event.destination_path = job.destination_path;
   event.settings_snapshot = job.settings_snapshot;
   event.watermark_free_second = job.watermark_free_second;
@@ -242,7 +244,8 @@ ResultCode ExportQueue::set_fast_export(bool on) {
 }
 
 ResultCode ExportQueue::enqueue(const ExportJob& job) {
-  if (!safe_export_id(job.export_id) || job.original_id.empty() || job.original_id.find('\0') != std::string::npos ||
+  if (!safe_export_id(job.export_id) || job.original_id.empty() || job.document_snapshot.empty() ||
+      job.original_id.find('\0') != std::string::npos ||
       !absolute_destination(job.destination_path)) {
     return ResultCode::StateConflict;
   }

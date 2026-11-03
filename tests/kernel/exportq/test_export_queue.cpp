@@ -31,6 +31,7 @@ pixcake::ExportJob job_of(std::string export_id, std::string original_id, std::s
   job.export_id = std::move(export_id);
   job.original_id = std::move(original_id);
   job.document_revision = 7;
+  job.document_snapshot = {7, 7, 7};
   job.destination_path = std::move(destination);
   job.settings_snapshot = "quality=8";
   job.watermark_free_second = false;
@@ -155,6 +156,14 @@ void test_snapshot_and_fast_export_stay() {
   EXPECT(!queue.enabled());
   preview.name = "preview";
   EXPECT(gate.submit(preview).code == pixcake::ResultCode::Ok);
+}
+
+void test_enqueue_requires_document_snapshot() {
+  auto queue = pixcake::ExportQueue::open("/cache/exports");
+  auto job = job_of("exp-empty", "orig-empty", "/out/empty.jpg");
+  job.document_snapshot.clear();
+  EXPECT(queue.enqueue(job) == pixcake::ResultCode::StateConflict);
+  EXPECT(queue.events().empty());
 }
 
 void test_commit_once_and_reject_a_different_destination() {
@@ -462,6 +471,9 @@ void test_reopen_repairs_cache_and_finishes_rename() {
   EXPECT(pixcake::ExportBook::open("/cache/exports", *reopened_log, files, reopened) == pixcake::ResultCode::Ok);
   EXPECT(reopened->queue().enabled());
   EXPECT(reopened->queue().status("exp-1") == "成功");
+  pixcake::ExportJob reopened_job;
+  EXPECT(reopened->queue().find_job("exp-1", reopened_job));
+  EXPECT(reopened_job.document_snapshot == std::vector<std::uint8_t>({7, 7, 7}));
   std::vector<std::uint8_t> written;
   EXPECT(files.read_file("/out/a.jpg", written).ok);
   EXPECT(written == kBytes);
@@ -539,6 +551,7 @@ void test_duplicate_task_cache_key_is_state_conflict_and_one_row_round_trips() {
 
 int main() {
   test_snapshot_and_fast_export_stay();
+  test_enqueue_requires_document_snapshot();
   test_commit_once_and_reject_a_different_destination();
   test_disk_full_then_retry_uses_the_snapshot();
   test_rename_failure_and_crash_points();

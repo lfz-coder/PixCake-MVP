@@ -15,6 +15,7 @@ struct ExportJob {
   std::string export_id;
   std::string original_id;
   std::uint64_t document_revision = 0;
+  std::vector<std::uint8_t> document_snapshot;
   std::string destination_path;
   std::string settings_snapshot;
   bool watermark_free_second = false;
@@ -26,6 +27,7 @@ struct ExportEvent {
   std::string export_id;
   std::string original_id;
   std::uint64_t document_revision = 0;
+  std::vector<std::uint8_t> document_snapshot;
   std::string destination_path;
   std::string settings_snapshot;
   bool watermark_free_second = false;
