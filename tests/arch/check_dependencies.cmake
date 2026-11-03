@@ -120,4 +120,7 @@ scan("${SOURCE_DIR}/kernel/ledger" "rule 12" "sqlite3.h" "面部重绘")
 # 13. 图层文档不保存像素，也不进账本或 SQLite。
 scan("${SOURCE_DIR}/kernel/layerdoc" "rule 13" "sqlite3.h" "pixcake/ledger/" "jpeglib.h" "QOpenGL" "#include <Q")
 
+# 14. 工作区展示不画窗口，也不进账本或 SQLite。
+scan("${SOURCE_DIR}/kernel/workspace" "rule 14" "sqlite3.h" "pixcake/ledger/" "jpeglib.h" "QOpenGL" "#include <Q")
+
 message(STATUS "arch dependencies ok")
