@@ -270,7 +270,7 @@ EOF
 - Consumes: `WorkspaceDisplay`、`WorkspacePage`
 - Produces: `DisplayEntry`、`DisplayRegion`、`WorkspaceDisplay::regions`、`verification_code_digit_count`、`personal_center_actions`、`set_library_view`、`set_grid_per_row`、`set_shown`、`set_full_effect`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 在 `test_workspace_display.cpp` 增加 `#include <optional>`、`#include <vector>`。在 `main` 的失败检查前调用 `test_regions()` 和 `test_library_controls()`。这两个函数放在匿名命名空间里。
 
@@ -405,13 +405,13 @@ void test_library_controls() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cmake --build build --target test_workspace_display`
 
 Expected: 编译失败，因为还没有 `regions` 或 `verification_code_digit_count`。
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 `workspace_display.hpp` 增加 `#include <optional>`、`#include <string>`、`#include <vector>`。在 `WorkspaceDisplay` 前加入两个结构。类里在 `open_project` 后加入新的公有方法。不要另起一个 `private:` 把原来的成员盖掉。私有成员末尾加上图库状态。类外、命名空间结束前加入两个自由函数。
 
@@ -623,13 +623,13 @@ ResultCode WorkspaceDisplay::set_full_effect(bool on) {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cmake --build build --target test_workspace_display && ctest --test-dir build --output-on-failure`
 
 Expected: 全量测试通过。`arch_dependencies` 通过。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add kernel/workspace tests/kernel/workspace docs/superpowers/plans/2026-11-03-kernel-workspace-display.md
