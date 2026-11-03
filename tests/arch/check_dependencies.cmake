@@ -111,4 +111,7 @@ endforeach()
 # 10. 公共 GPU 头的方法不使用 Qt 类型。
 scan("${SOURCE_DIR}/gpu/facade" "rule 10" "QString" "QImage" "QOpenGL" "QWidget")
 
+# 11. 同步模块不写死画笔或局部追色。原因只放在能力和蒙版的声明里。
+scan("${SOURCE_DIR}/kernel/sync" "rule 11" "画笔" "局部追色")
+
 message(STATUS "arch dependencies ok")

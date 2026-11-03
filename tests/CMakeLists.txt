@@ -22,6 +22,11 @@ target_include_directories(test_document_recovery PRIVATE ${CMAKE_SOURCE_DIR}/te
 target_link_libraries(test_document_recovery PRIVATE pixcake_editdoc pixcake_warnings)
 add_test(NAME test_document_recovery COMMAND test_document_recovery)
 
+add_executable(test_sync kernel/sync/test_sync.cpp)
+target_include_directories(test_sync PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+target_link_libraries(test_sync PRIVATE pixcake_sync pixcake_warnings)
+add_test(NAME test_sync COMMAND test_sync)
+
 add_executable(test_preset_library kernel/preset/test_preset_library.cpp)
 target_include_directories(test_preset_library PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 target_link_libraries(test_preset_library PRIVATE pixcake_preset pixcake_warnings)
