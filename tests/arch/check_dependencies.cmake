@@ -117,4 +117,7 @@ scan("${SOURCE_DIR}/kernel/sync" "rule 11" "画笔" "局部追色")
 # 12. 账本不链接 SQLite，也不抄工具点数表。
 scan("${SOURCE_DIR}/kernel/ledger" "rule 12" "sqlite3.h" "面部重绘")
 
+# 13. 图层文档不保存像素，也不进账本或 SQLite。
+scan("${SOURCE_DIR}/kernel/layerdoc" "rule 13" "sqlite3.h" "pixcake/ledger/" "jpeglib.h" "QOpenGL" "#include <Q")
+
 message(STATUS "arch dependencies ok")

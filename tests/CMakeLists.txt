@@ -12,6 +12,11 @@ target_include_directories(test_edit_document PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 target_link_libraries(test_edit_document PRIVATE pixcake_editdoc pixcake_warnings)
 add_test(NAME test_edit_document COMMAND test_edit_document)
 
+add_executable(test_layer_document kernel/layerdoc/test_layer_document.cpp)
+target_include_directories(test_layer_document PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+target_link_libraries(test_layer_document PRIVATE pixcake_layerdoc pixcake_warnings)
+add_test(NAME test_layer_document COMMAND test_layer_document)
+
 add_executable(test_copy_committed_document kernel/editdoc/test_copy_committed_document.cpp)
 target_include_directories(test_copy_committed_document PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 target_link_libraries(test_copy_committed_document PRIVATE pixcake_editdoc pixcake_storage pixcake_warnings)
