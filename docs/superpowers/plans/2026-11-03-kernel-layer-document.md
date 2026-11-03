@@ -1120,12 +1120,16 @@ bool decode_layer(const std::vector<std::uint8_t>& payload, LayerView& layer) {
 
 成员函数：
 
+空恢復文件的來源編號是空的，不寫來源記錄；解碼在已有空文件標記時不要求來源記錄，存檔再讀仍是空恢復文件。
+
 ```cpp
 std::vector<std::uint8_t> LayerDocument::encode() const {
   std::vector<std::uint8_t> body;
-  std::vector<std::uint8_t> source;
-  append_string(source, source_image_id_);
-  append_record(body, kLayerSource, source);
+  if (!recovered_empty_ || !source_image_id_.empty()) {
+    std::vector<std::uint8_t> source;
+    append_string(source, source_image_id_);
+    append_record(body, kLayerSource, source);
+  }
   std::vector<std::uint8_t> revision;
   append_u64(revision, source_revision_);
   append_record(body, kLayerRevision, revision);

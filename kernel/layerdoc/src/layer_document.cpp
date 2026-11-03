@@ -575,9 +575,11 @@ ResultCode LayerDocument::place_result(const std::string& result_id, const std::
 
 std::vector<std::uint8_t> LayerDocument::encode() const {
   std::vector<std::uint8_t> body;
-  std::vector<std::uint8_t> source;
-  append_string(source, source_image_id_);
-  append_record(body, kLayerSource, source);
+  if (!recovered_empty_ || !source_image_id_.empty()) {
+    std::vector<std::uint8_t> source;
+    append_string(source, source_image_id_);
+    append_record(body, kLayerSource, source);
+  }
   std::vector<std::uint8_t> revision;
   append_u64(revision, source_revision_);
   append_record(body, kLayerRevision, revision);
