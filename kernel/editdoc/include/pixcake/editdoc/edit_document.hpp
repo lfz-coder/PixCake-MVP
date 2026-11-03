@@ -88,6 +88,10 @@ class EditDocument {
                             const std::string& parameter_id, const std::vector<VersionLimit>& limits,
                             FileSystem& files, const std::string& path);
 
+  bool effects_baked() const;
+  // 清掉能力片段和预览，留下烘焙标记，修订号加一。已经烘焙且没有片段时不写第二次。
+  ResultCode commit_baked_reset(std::uint64_t expected_revision, FileSystem& files, const std::string& path);
+
  private:
   struct Record {
     std::uint32_t type = 0;

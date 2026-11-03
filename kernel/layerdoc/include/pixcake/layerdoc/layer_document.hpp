@@ -1,10 +1,12 @@
 #pragma once
 
+#include "pixcake/editdoc/edit_document.hpp"
 #include "pixcake/support/result_code.hpp"
 
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace pixcake {
@@ -71,6 +73,13 @@ class LayerDocument {
   ResultCode clear_selection();
   ResultCode place_result(const std::string& result_id, const std::string& shape, const std::string& tool_id);
 
+  static std::optional<LayerDocument> decode(const std::vector<std::uint8_t>& bytes);
+  static LoadResult load(LayerDocument& destination, FileSystem& files, const std::string& path);
+  std::vector<std::uint8_t> encode() const;
+  ResultCode save(FileSystem& files, const std::string& path) const;
+  ResultCode append_unknown_record(std::uint32_t type, std::vector<std::uint8_t> payload);
+  std::vector<std::pair<std::uint32_t, std::vector<std::uint8_t>>> unknown_records() const;
+
  private:
   LayerView* find(const std::string& id);
   const LayerView* find(const std::string& id) const;
@@ -87,6 +96,13 @@ class LayerDocument {
   std::vector<LayerView> layers_;
   std::vector<GenerationView> generations_;
   std::string current_generation_layer_id_;
+  std::vector<std::pair<std::uint32_t, std::vector<std::uint8_t>>> unknown_;
 };
+
+ResultCode apply_to_original(const LayerDocument& layers, EditDocument& document,
+                             std::uint64_t expected_revision, FileSystem& files, const std::string& path);
+std::optional<EditDocument> applied_copy_document(const std::string& new_image_id);
+ResultCode tsq_sibling_path(const std::string& creative_directory, const std::string& new_image_id,
+                            std::string& out);
 
 }  // namespace pixcake

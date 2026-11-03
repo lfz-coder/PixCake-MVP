@@ -18,6 +18,7 @@ constexpr std::uint32_t kRecordSubject = 6;
 constexpr std::uint32_t kRecordManual = 7;
 constexpr std::uint32_t kRecordPreset = 8;
 constexpr std::uint32_t kRecordRecovered = 9;
+constexpr std::uint32_t kRecordBaked = 10;
 constexpr std::uint32_t kInnerParameter = 1;
 constexpr std::uint32_t kFormatVersion = 1;
 
@@ -711,6 +712,43 @@ ResultCode EditDocument::commit_fragment_replacement(
   for (const auto& fragment : replacements) {
     next.store_fragment(fragment.capability_id, fragment.version, fragment.inner);
   }
+  next.set_revision(revision() + 1);
+  const ResultCode saved = atomic_replace(files, path, next.encode());
+  if (saved != ResultCode::Ok) {
+    return saved;
+  }
+  *this = std::move(next);
+  return ResultCode::Ok;
+}
+
+bool EditDocument::effects_baked() const {
+  for (const auto& record : records_) {
+    if (record.type == kRecordBaked && record.payload.size() == 1 && record.payload[0] == 1) {
+      return true;
+    }
+  }
+  return false;
+}
+
+ResultCode EditDocument::commit_baked_reset(std::uint64_t expected_revision, FileSystem& files,
+                                            const std::string& path) {
+  if (expected_revision != revision()) {
+    return ResultCode::StateConflict;
+  }
+  if (effects_baked() && fragments().empty() && preview_.empty()) {
+    return ResultCode::Ok;
+  }
+  EditDocument next = *this;
+  next.records_.erase(std::remove_if(next.records_.begin(), next.records_.end(),
+                                     [](const Record& record) { return record.type == kRecordFragment; }),
+                      next.records_.end());
+  if (!next.effects_baked()) {
+    Record baked;
+    baked.type = kRecordBaked;
+    baked.payload.push_back(1);
+    next.records_.push_back(std::move(baked));
+  }
+  next.preview_.clear();
   next.set_revision(revision() + 1);
   const ResultCode saved = atomic_replace(files, path, next.encode());
   if (saved != ResultCode::Ok) {

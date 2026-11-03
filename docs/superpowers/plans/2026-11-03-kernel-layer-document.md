@@ -805,7 +805,7 @@ EOF
 - Consumes: `LayerDocument`、`EditDocument`、`LoadResult`、`atomic_replace`、`open_durable_file`、`FileSystem`
 - Produces: `LayerDocument::save`、`LayerDocument::load`、`LayerDocument::encode`、`LayerDocument::decode`、`apply_to_original`、`applied_copy_document`、`tsq_sibling_path`、`EditDocument::effects_baked`、`EditDocument::commit_baked_reset`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 在 `test_layer_document.cpp` 增加 `#include "pixcake/editdoc/edit_document.hpp"`、`#include "support/fake_file_system.hpp"`。给 `test_layer_document` 加上 `target_include_directories(test_layer_document PRIVATE ${CMAKE_SOURCE_DIR}/tests)`，链接改为 `pixcake_layerdoc pixcake_editdoc pixcake_warnings`。`pixcake_layerdoc` 改为公开链接 `pixcake_editdoc pixcake_persist pixcake_support pixcake_warnings`。从 `main` 调用下面两个测试。
 
@@ -894,13 +894,13 @@ void test_apply_bakes_the_original_and_a_new_document_has_no_pixels() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cmake --build build --target test_layer_document`
 
 Expected: 编译失败，因为还没有 `save`、`apply_to_original` 或 `effects_baked`。
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 `edit_document.hpp` 在 `commit_preview` 声明后加入：
 
@@ -1372,13 +1372,13 @@ ResultCode tsq_sibling_path(const std::string& creative_directory, const std::st
 
 `apply_to_original` 只在来源图片编号和精修文档一致时调用 `commit_baked_reset`。`applied_copy_document` 只调用 `EditDocument::create`，不写像素。`tsq_sibling_path` 只拼路径，不创建文件。
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cmake --build build --target test_layer_document test_edit_document && ctest --test-dir build --output-on-failure`
 
 Expected: 全量测试通过。`test_edit_document` 仍通过。`arch_dependencies` 通过。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add kernel/layerdoc kernel/editdoc tests/kernel/layerdoc docs/superpowers/plans/2026-11-03-kernel-layer-document.md

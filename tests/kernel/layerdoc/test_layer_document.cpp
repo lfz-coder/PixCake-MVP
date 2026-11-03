@@ -1,7 +1,10 @@
+#include "pixcake/editdoc/edit_document.hpp"
 #include "pixcake/layerdoc/layer_document.hpp"
+#include "support/fake_file_system.hpp"
 
 #include <cstdio>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -156,6 +159,89 @@ void test_place_result_replace_locked_generation_layer() {
   EXPECT(document.generations()[0].result_id == "result-1");
 }
 
+void test_round_trip_keeps_unknown_records_and_rejects_the_retouch_magic() {
+  auto document = opened();
+  EXPECT(document.add_layer("layer-1", "人物") == pixcake::ResultCode::Ok);
+  EXPECT(document.append_unknown_record(9, {7, 8}) == pixcake::ResultCode::Ok);
+  EXPECT(document.append_unknown_record(5, {1}) == pixcake::ResultCode::StateConflict);
+  const std::vector<std::uint8_t> bytes = document.encode();
+  EXPECT(bytes.size() > 4);
+  EXPECT(bytes[0] == 'P' && bytes[1] == 'X' && bytes[2] == 'L' && bytes[3] == 'D');
+  auto restored = pixcake::LayerDocument::decode(bytes);
+  EXPECT(restored.has_value());
+  EXPECT(restored->source_image_id() == "img-1");
+  EXPECT(restored->unknown_records().size() == 1);
+  EXPECT(restored->unknown_records()[0].second == std::vector<std::uint8_t>({7, 8}));
+
+  auto edit = pixcake::EditDocument::create("img-1");
+  EXPECT(edit.has_value());
+  EXPECT(!pixcake::LayerDocument::decode(edit->encode()).has_value());
+
+  pixcake::test::FakeFileSystem files;
+  EXPECT(document.save(files, "/creative/img-1.pxlayer") == pixcake::ResultCode::Ok);
+  pixcake::LayerDocument loaded;
+  const pixcake::LoadResult opened_file = pixcake::LayerDocument::load(loaded, files, "/creative/missing.pxlayer");
+  EXPECT(opened_file.absent);
+  EXPECT(!opened_file.code.has_value());
+  const pixcake::LoadResult present = pixcake::LayerDocument::load(loaded, files, "/creative/img-1.pxlayer");
+  EXPECT(present.code == pixcake::ResultCode::Ok);
+  pixcake::LayerView person;
+  EXPECT(loaded.find_layer("layer-1", person));
+  files.write_error = pixcake::ResultCode::DiskFull;
+  EXPECT(document.save(files, "/creative/img-1.pxlayer") == pixcake::ResultCode::DiskFull);
+  files.write_error = pixcake::ResultCode::Ok;
+  pixcake::LayerDocument kept;
+  const pixcake::LoadResult still = pixcake::LayerDocument::load(kept, files, "/creative/img-1.pxlayer");
+  EXPECT(still.code == pixcake::ResultCode::Ok);
+  EXPECT(kept.find_layer("layer-1", person));
+
+  files.files["/creative/bad.pxlayer"] = {1, 2, 3, 4};
+  const pixcake::LoadResult corrupt = pixcake::LayerDocument::load(loaded, files, "/creative/bad.pxlayer");
+  EXPECT(corrupt.recovered_empty);
+  EXPECT(corrupt.code == pixcake::ResultCode::DocumentCorrupt);
+}
+
+void test_apply_bakes_the_original_and_a_new_document_has_no_pixels() {
+  auto layers = opened();
+  auto edit = *pixcake::EditDocument::create("img-1");
+  edit.store_fragment("color.global", 1, {9});
+  edit.add_mask_id("mask-1");
+  pixcake::test::FakeFileSystem files;
+  EXPECT(edit.write_snapshot(files, "/docs/img.pxedit") == pixcake::ResultCode::Ok);
+  const auto untouched = edit.revision();
+  EXPECT(layers.source_image_id() == edit.image_id());
+  EXPECT(edit.fragments().size() == 1);
+  EXPECT(!edit.effects_baked());
+
+  EXPECT(pixcake::apply_to_original(layers, edit, untouched, files, "/docs/img.pxedit") == pixcake::ResultCode::Ok);
+  EXPECT(edit.effects_baked());
+  EXPECT(edit.fragments().empty());
+  EXPECT(edit.mask_ids().size() == 1);
+  EXPECT(edit.revision() == untouched + 1);
+  EXPECT(pixcake::apply_to_original(layers, edit, untouched, files, "/docs/img.pxedit") ==
+         pixcake::ResultCode::StateConflict);
+  EXPECT(edit.revision() == untouched + 1);
+  EXPECT(pixcake::apply_to_original(layers, edit, edit.revision(), files, "/docs/img.pxedit") ==
+         pixcake::ResultCode::Ok);
+  EXPECT(edit.revision() == untouched + 1);
+
+  auto other = *pixcake::EditDocument::create("img-2");
+  EXPECT(pixcake::apply_to_original(layers, other, other.revision(), files, "/docs/img2.pxedit") ==
+         pixcake::ResultCode::StateConflict);
+  EXPECT(!other.effects_baked());
+
+  auto copy = pixcake::applied_copy_document("img-new");
+  EXPECT(copy.has_value());
+  EXPECT(copy->image_id() == "img-new");
+  EXPECT(copy->fragments().empty());
+  EXPECT(!copy->effects_baked());
+  std::string tsq;
+  EXPECT(pixcake::tsq_sibling_path("/creative", "img-new", tsq) == pixcake::ResultCode::Ok);
+  EXPECT(tsq == "/creative/img-new.tsq");
+  EXPECT(files.files.count("/creative/img-new.tsq") == 0);
+  EXPECT(pixcake::tsq_sibling_path("creative", "img-new", tsq) == pixcake::ResultCode::StateConflict);
+}
+
 void test_remove_clears_generation_cursor_for_deleted_children() {
   auto document = opened();
   EXPECT(document.place_result("result-1", "新图层", "tool-a") == pixcake::ResultCode::Ok);
@@ -180,6 +266,8 @@ int main() {
   test_place_result_shapes_once();
   test_place_result_replace_locked_generation_layer();
   test_remove_clears_generation_cursor_for_deleted_children();
+  test_round_trip_keeps_unknown_records_and_rejects_the_retouch_magic();
+  test_apply_bakes_the_original_and_a_new_document_has_no_pixels();
   if (g_failures != 0) {
     std::fprintf(stderr, "%d failure(s)\n", g_failures);
     return 1;
