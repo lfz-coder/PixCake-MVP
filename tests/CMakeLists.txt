@@ -34,7 +34,7 @@ add_test(NAME test_ledger COMMAND test_ledger)
 
 add_executable(test_export_queue kernel/exportq/test_export_queue.cpp)
 target_include_directories(test_export_queue PRIVATE ${CMAKE_SOURCE_DIR}/tests)
-target_link_libraries(test_export_queue PRIVATE pixcake_exportq pixcake_command pixcake_ledger pixcake_warnings)
+target_link_libraries(test_export_queue PRIVATE pixcake_exportq pixcake_storage pixcake_command pixcake_ledger pixcake_warnings)
 add_test(NAME test_export_queue COMMAND test_export_queue)
 
 add_executable(test_preset_library kernel/preset/test_preset_library.cpp)

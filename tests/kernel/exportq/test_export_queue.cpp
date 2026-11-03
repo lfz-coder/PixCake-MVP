@@ -1,11 +1,17 @@
 #include "pixcake/command/command_gate.hpp"
+#include "pixcake/exportq/export_book.hpp"
 #include "pixcake/exportq/export_queue.hpp"
 #include "pixcake/ledger/credit_ledger.hpp"
+#include "pixcake/storage/sqlite_export_log.hpp"
 #include "support/fake_file_system.hpp"
+#include "support/temp_dir.hpp"
 
 #include <cstdio>
+#include <memory>
 #include <string>
 #include <vector>
+
+#include <sqlite3.h>
 
 namespace {
 
@@ -365,6 +371,81 @@ void test_recover_returns_remove_error_when_renamed_destination_cannot_be_delete
   EXPECT(destination->second == kMismatched);
 }
 
+void test_reopen_repairs_cache_and_finishes_rename() {
+  pixcake::test::TempDir dir;
+  const std::string path = dir.path() + "/export.db";
+  pixcake::test::FakeFileSystem files;
+  {
+    std::unique_ptr<pixcake::SqliteExportLog> log;
+    EXPECT(pixcake::SqliteExportLog::open(path, log) == pixcake::ResultCode::Ok);
+    std::unique_ptr<pixcake::ExportBook> book;
+    EXPECT(pixcake::ExportBook::open("/cache/exports", *log, files, book) == pixcake::ResultCode::Ok);
+    EXPECT(book->queue().set_fast_export(true) == pixcake::ResultCode::Ok);
+    auto job = job_of("exp-1", "orig-1", "/out/a.jpg");
+    reach_render(book->queue(), job);
+    files.rename_error = pixcake::ResultCode::IoFailed;
+    EXPECT(book->queue().commit_product("exp-1", kBytes, files) == pixcake::ResultCode::IoFailed);
+    EXPECT(book->queue().status("exp-1") == "提交到目标路径");
+  }
+
+  sqlite3* raw = nullptr;
+  EXPECT(sqlite3_open(path.c_str(), &raw) == SQLITE_OK);
+  EXPECT(sqlite3_exec(raw, "UPDATE export_cache SET fast_export = 0 WHERE id = 1;", nullptr, nullptr, nullptr) ==
+         SQLITE_OK);
+  EXPECT(sqlite3_exec(raw, "UPDATE export_task_cache SET status = '排队' WHERE export_id = 'exp-1';", nullptr,
+                      nullptr, nullptr) == SQLITE_OK);
+  sqlite3_close(raw);
+
+  files.rename_error = pixcake::ResultCode::Ok;
+  std::unique_ptr<pixcake::SqliteExportLog> reopened_log;
+  EXPECT(pixcake::SqliteExportLog::open(path, reopened_log) == pixcake::ResultCode::Ok);
+  std::unique_ptr<pixcake::ExportBook> reopened;
+  EXPECT(pixcake::ExportBook::open("/cache/exports", *reopened_log, files, reopened) == pixcake::ResultCode::Ok);
+  EXPECT(reopened->queue().enabled());
+  EXPECT(reopened->queue().status("exp-1") == "成功");
+  std::vector<std::uint8_t> written;
+  EXPECT(files.read_file("/out/a.jpg", written).ok);
+  EXPECT(written == kBytes);
+
+  sqlite3_stmt* cache = nullptr;
+  EXPECT(sqlite3_open(path.c_str(), &raw) == SQLITE_OK);
+  EXPECT(sqlite3_prepare_v2(raw, "SELECT fast_export FROM export_cache WHERE id = 1;", -1, &cache, nullptr) ==
+         SQLITE_OK);
+  EXPECT(sqlite3_step(cache) == SQLITE_ROW);
+  EXPECT(sqlite3_column_int(cache, 0) == 1);
+  sqlite3_finalize(cache);
+  sqlite3_stmt* task = nullptr;
+  EXPECT(sqlite3_prepare_v2(raw, "SELECT status FROM export_task_cache WHERE export_id = ?;", -1, &task, nullptr) ==
+         SQLITE_OK);
+  EXPECT(sqlite3_bind_text(task, 1, "exp-1", -1, SQLITE_TRANSIENT) == SQLITE_OK);
+  EXPECT(sqlite3_step(task) == SQLITE_ROW);
+  EXPECT(std::string(reinterpret_cast<const char*>(sqlite3_column_text(task, 0))) == "成功");
+  sqlite3_finalize(task);
+  sqlite3_close(raw);
+
+  pixcake::test::TempDir future_dir;
+  const std::string future_path = future_dir.path() + "/export.db";
+  EXPECT(sqlite3_open(future_path.c_str(), &raw) == SQLITE_OK);
+  EXPECT(sqlite3_exec(raw, "PRAGMA user_version=2;", nullptr, nullptr, nullptr) == SQLITE_OK);
+  sqlite3_close(raw);
+  std::unique_ptr<pixcake::SqliteExportLog> future;
+  EXPECT(pixcake::SqliteExportLog::open(future_path, future) == pixcake::ResultCode::StateConflict);
+  EXPECT(future == nullptr);
+  EXPECT(sqlite3_open(future_path.c_str(), &raw) == SQLITE_OK);
+  sqlite3_stmt* version = nullptr;
+  EXPECT(sqlite3_prepare_v2(raw, "PRAGMA user_version;", -1, &version, nullptr) == SQLITE_OK);
+  EXPECT(sqlite3_step(version) == SQLITE_ROW);
+  EXPECT(sqlite3_column_int(version, 0) == 2);
+  sqlite3_finalize(version);
+  sqlite3_stmt* tables = nullptr;
+  EXPECT(sqlite3_prepare_v2(raw, "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'export_event';",
+                            -1, &tables, nullptr) == SQLITE_OK);
+  EXPECT(sqlite3_step(tables) == SQLITE_ROW);
+  EXPECT(sqlite3_column_int(tables, 0) == 0);
+  sqlite3_finalize(tables);
+  sqlite3_close(raw);
+}
+
 }  // namespace
 
 int main() {
@@ -377,6 +458,7 @@ int main() {
   test_commit_returns_remove_error_when_mismatched_destination_cannot_be_deleted();
   test_rejected_fail_is_recorded_when_recover_finds_both_files_gone();
   test_recover_returns_remove_error_when_renamed_destination_cannot_be_deleted();
+  test_reopen_repairs_cache_and_finishes_rename();
   if (g_failures != 0) {
     std::fprintf(stderr, "%d failure(s)\n", g_failures);
     return 1;
