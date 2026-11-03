@@ -169,6 +169,10 @@ void test_commit_once_and_reject_a_different_destination() {
   auto slash = job;
   slash.export_id = "a/b";
   EXPECT(queue.enqueue(slash) == pixcake::ResultCode::StateConflict);
+  auto traversal = job;
+  traversal.export_id = "exp-traversal";
+  traversal.destination_path = "/out/selected/../outside.jpg";
+  EXPECT(queue.enqueue(traversal) == pixcake::ResultCode::StateConflict);
   EXPECT(queue.events().size() == rejected);
 
   reach_render(queue, job);
@@ -180,16 +184,10 @@ void test_commit_once_and_reject_a_different_destination() {
   EXPECT(queue.status("exp-1") == "渲染");
 
   files.files["/out/a.jpg"] = kBytes;
-  EXPECT(queue.commit_product("exp-1", kBytes, files) == pixcake::ResultCode::Ok);
-  EXPECT(queue.status("exp-1") == "成功");
+  EXPECT(queue.commit_product("exp-1", kBytes, files) == pixcake::ResultCode::StateConflict);
+  EXPECT(queue.status("exp-1") == "渲染");
   EXPECT(files.writes.empty());
-  EXPECT(queue.products().size() == 1);
-  EXPECT(!queue.products()[0].watermark_free_second);
-  EXPECT(queue.products()[0].product_exists);
-  const auto done = queue.events().size();
-  EXPECT(queue.commit_product("exp-1", kBytes, files) == pixcake::ResultCode::Ok);
-  EXPECT(queue.events().size() == done);
-  EXPECT(queue.products().size() == 1);
+  EXPECT(queue.products().empty());
 }
 
 void test_disk_full_then_retry_uses_the_snapshot() {
@@ -238,10 +236,12 @@ void test_rename_failure_and_crash_points() {
   files.files["/out/a.jpg"] = {8};
   EXPECT(queue.recover(files) == pixcake::ResultCode::Ok);
   EXPECT(queue.status("exp-1") == "失败");
-  EXPECT(files.files.count("/out/a.jpg") == 0);
-  EXPECT(files.files.count("/cache/exports/exp-1") == 0);
+  EXPECT(files.files["/out/a.jpg"] == std::vector<std::uint8_t>({8}));
+  EXPECT(files.files.count("/cache/exports/exp-1") == 1);
   EXPECT(queue.products().empty());
 
+  EXPECT(files.remove_file("/out/a.jpg").ok);
+  EXPECT(files.remove_file("/cache/exports/exp-1").ok);
   EXPECT(queue.retry("exp-1") == pixcake::ResultCode::Ok);
   EXPECT(queue.prepare("exp-1") == pixcake::ResultCode::Ok);
   EXPECT(queue.start_rendering("exp-1") == pixcake::ResultCode::Ok);
@@ -398,10 +398,10 @@ void test_recover_returns_sync_error_after_unlinking_mismatched_destination() {
   files.rename_error = pixcake::ResultCode::Ok;
   files.files["/out/a.jpg"] = kMismatched;
   const auto code = queue.recover(files);
-  EXPECT(code == pixcake::ResultCode::DiskFull);
-  EXPECT(queue.status("exp-1") == "提交到目标路径");
-  EXPECT(!has_kind(queue, "fail"));
-  EXPECT(files.files.count("/out/a.jpg") == 0);
+  EXPECT(code == pixcake::ResultCode::Ok);
+  EXPECT(queue.status("exp-1") == "失败");
+  EXPECT(has_kind(queue, "fail"));
+  EXPECT(files.files["/out/a.jpg"] == kMismatched);
 }
 
 void test_recover_returns_remove_error_when_renamed_destination_cannot_be_deleted() {

@@ -108,7 +108,22 @@ bool safe_export_id(const std::string& export_id) {
 }
 
 bool absolute_destination(const std::string& path) {
-  return path.size() > 1 && path.front() == '/' && path.back() != '/' && path.find('\0') == std::string::npos;
+  if (path.size() <= 1 || path.front() != '/' || path.back() == '/' || path.find('\0') != std::string::npos) {
+    return false;
+  }
+  std::size_t start = 1;
+  while (start < path.size()) {
+    const std::size_t end = path.find('/', start);
+    const std::string component = path.substr(start, end == std::string::npos ? std::string::npos : end - start);
+    if (component == ".." || component == ".") {
+      return false;
+    }
+    if (end == std::string::npos) {
+      break;
+    }
+    start = end + 1;
+  }
+  return true;
 }
 
 std::uint64_t checksum_of(const std::vector<std::uint8_t>& bytes) {
@@ -359,19 +374,8 @@ ResultCode ExportQueue::commit_product(const std::string& export_id, const std::
   if (looked != ResultCode::Ok) {
     return looked;
   }
-  if (destination_present && destination_checksum != checksum) {
-    return ResultCode::StateConflict;
-  }
   if (destination_present) {
-    ExportEvent begin = event_from(job, "commit-begin");
-    begin.checksum = checksum;
-    const ResultCode began = note(std::move(begin));
-    if (began != ResultCode::Ok) {
-      return began;
-    }
-    ExportEvent end = event_from(job, "commit-end");
-    end.checksum = checksum;
-    return note(std::move(end));
+    return ResultCode::StateConflict;
   }
 
   const IoResult directory = files.create_directory(cache_directory_);
@@ -526,16 +530,9 @@ ResultCode ExportQueue::recover_one(const std::string& export_id, FileSystem& fi
   if (looked != ResultCode::Ok) {
     return looked;
   }
-  if (present && destination_checksum != job.checksum) {
-    const ResultCode removed = remove_if_present(files, job.job.destination_path);
-    if (removed != ResultCode::Ok) {
-      return removed;
-    }
-    remove_if_present(files, temp);
-    const IoResult parent_synced = files.sync_directory(parent_directory(job.job.destination_path));
-    if (!parent_synced.ok) {
-      return parent_synced.code;
-    }
+  if (present) {
+    // A path occupied before recovery is not provably owned by this task.
+    // Preserve it and fail the task instead of deleting a user's file.
     ExportEvent failed;
     failed.kind = "fail";
     failed.export_id = export_id;
