@@ -142,7 +142,7 @@ ResultCode CreditLedger::credit_points(std::int64_t amount) {
 }
 
 ResultCode CreditLedger::credit_sheets(std::int64_t amount) {
-  if (amount < 0) {
+  if (amount <= 0) {
     return ResultCode::StateConflict;
   }
   LedgerEvent event;

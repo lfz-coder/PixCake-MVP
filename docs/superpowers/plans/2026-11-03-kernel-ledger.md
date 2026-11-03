@@ -88,7 +88,9 @@ pixcake::TaskQuote quote_of(std::string task_id, std::string origin, std::int64_
 pixcake::CreditLedger charged(pixcake::FreeQueuePolicy policy, std::int64_t points, std::int64_t sheets) {
   pixcake::CreditLedger ledger = pixcake::CreditLedger::open(policy, {});
   EXPECT(ledger.credit_points(points) == pixcake::ResultCode::Ok);
-  EXPECT(ledger.credit_sheets(sheets) == pixcake::ResultCode::Ok);
+  if (sheets > 0) {
+    EXPECT(ledger.credit_sheets(sheets) == pixcake::ResultCode::Ok);
+  }
   return ledger;
 }
 
@@ -237,6 +239,7 @@ void test_export_sheets_count_originals_once_per_settlement() {
   EXPECT(ledger.export_sheets() == 0);
 
   auto poor = charged(version_930(), 10, 0);
+  EXPECT(poor.credit_sheets(0) == pixcake::ResultCode::StateConflict);
   const auto before = poor.events().size();
   EXPECT(poor.settle_exports(again) == pixcake::ResultCode::InsufficientBalance);
   EXPECT(poor.export_sheets() == 0);
