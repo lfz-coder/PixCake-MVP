@@ -439,6 +439,10 @@ ResultCode ExportQueue::commit_product(const std::string& export_id, const std::
     if (removed != ResultCode::Ok) {
       return removed;
     }
+    const IoResult parent_synced = files.sync_directory(parent_directory(job.destination_path));
+    if (!parent_synced.ok) {
+      return parent_synced.code;
+    }
     ExportEvent failed = event_from(job, "fail");
     const ResultCode noted = note(std::move(failed));
     return noted == ResultCode::Ok ? ResultCode::IoFailed : noted;
@@ -528,6 +532,10 @@ ResultCode ExportQueue::recover_one(const std::string& export_id, FileSystem& fi
       return removed;
     }
     remove_if_present(files, temp);
+    const IoResult parent_synced = files.sync_directory(parent_directory(job.job.destination_path));
+    if (!parent_synced.ok) {
+      return parent_synced.code;
+    }
     ExportEvent failed;
     failed.kind = "fail";
     failed.export_id = export_id;
@@ -535,6 +543,10 @@ ResultCode ExportQueue::recover_one(const std::string& export_id, FileSystem& fi
   }
   if (!present) {
     if (!files.exists(temp)) {
+      const IoResult parent_synced = files.sync_directory(parent_directory(job.job.destination_path));
+      if (!parent_synced.ok) {
+        return parent_synced.code;
+      }
       ExportEvent failed;
       failed.kind = "fail";
       failed.export_id = export_id;
@@ -552,6 +564,10 @@ ResultCode ExportQueue::recover_one(const std::string& export_id, FileSystem& fi
       const ResultCode removed = remove_if_present(files, job.job.destination_path);
       if (removed != ResultCode::Ok) {
         return removed;
+      }
+      const IoResult parent_synced = files.sync_directory(parent_directory(job.job.destination_path));
+      if (!parent_synced.ok) {
+        return parent_synced.code;
       }
       ExportEvent failed;
       failed.kind = "fail";

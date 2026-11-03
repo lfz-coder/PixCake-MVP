@@ -74,6 +74,29 @@ class MismatchFileSystem : public pixcake::test::FakeFileSystem {
   }
 };
 
+// The sync before the checksum check stays successful. Only a directory sync
+// after the bad destination has been unlinked fails.
+class PostUnlinkSyncFileSystem : public MismatchFileSystem {
+ public:
+  pixcake::ResultCode post_unlink_sync_error = pixcake::ResultCode::Ok;
+  bool destination_unlinked = false;
+
+  pixcake::IoResult remove_file(const std::string& path) override {
+    const pixcake::IoResult removed = MismatchFileSystem::remove_file(path);
+    if (removed.ok && !guarded.empty() && path == guarded) {
+      destination_unlinked = true;
+    }
+    return removed;
+  }
+
+  pixcake::IoResult sync_directory(const std::string& path) override {
+    if (destination_unlinked && post_unlink_sync_error != pixcake::ResultCode::Ok) {
+      return pixcake::io_error(post_unlink_sync_error);
+    }
+    return pixcake::test::FakeFileSystem::sync_directory(path);
+  }
+};
+
 class RejectFailSink : public pixcake::ExportEventSink {
  public:
   pixcake::ResultCode code = pixcake::ResultCode::DiskFull;
@@ -345,6 +368,42 @@ void test_rejected_fail_is_recorded_when_recover_finds_both_files_gone() {
   EXPECT(has_kind(queue, "fail"));
 }
 
+void test_commit_returns_sync_error_after_unlinking_mismatched_destination() {
+  PostUnlinkSyncFileSystem files;
+  files.guarded = "/out/a.jpg";
+  files.corrupt_on_rename = true;
+  files.post_unlink_sync_error = pixcake::ResultCode::DiskFull;
+
+  auto queue = pixcake::ExportQueue::open("/cache/exports");
+  reach_render(queue, job_of("exp-1", "orig-1", "/out/a.jpg"));
+  const auto code = queue.commit_product("exp-1", kBytes, files);
+  EXPECT(code == pixcake::ResultCode::DiskFull);
+  EXPECT(queue.status("exp-1") == "提交到目标路径");
+  EXPECT(!has_kind(queue, "fail"));
+  EXPECT(files.files.count("/out/a.jpg") == 0);
+}
+
+void test_recover_returns_sync_error_after_unlinking_mismatched_destination() {
+  PostUnlinkSyncFileSystem files;
+  files.guarded = "/out/a.jpg";
+  files.post_unlink_sync_error = pixcake::ResultCode::DiskFull;
+  files.rename_error = pixcake::ResultCode::IoFailed;
+
+  auto queue = pixcake::ExportQueue::open("/cache/exports");
+  reach_render(queue, job_of("exp-1", "orig-1", "/out/a.jpg"));
+  EXPECT(queue.commit_product("exp-1", kBytes, files) == pixcake::ResultCode::IoFailed);
+  EXPECT(queue.status("exp-1") == "提交到目标路径");
+  EXPECT(!has_kind(queue, "fail"));
+
+  files.rename_error = pixcake::ResultCode::Ok;
+  files.files["/out/a.jpg"] = kMismatched;
+  const auto code = queue.recover(files);
+  EXPECT(code == pixcake::ResultCode::DiskFull);
+  EXPECT(queue.status("exp-1") == "提交到目标路径");
+  EXPECT(!has_kind(queue, "fail"));
+  EXPECT(files.files.count("/out/a.jpg") == 0);
+}
+
 void test_recover_returns_remove_error_when_renamed_destination_cannot_be_deleted() {
   MismatchFileSystem files;
   files.guarded = "/out/a.jpg";
@@ -486,6 +545,8 @@ int main() {
   test_cancel_removes_temp_and_print_is_unavailable();
   test_product_facts_match_one_settlement();
   test_commit_returns_remove_error_when_mismatched_destination_cannot_be_deleted();
+  test_commit_returns_sync_error_after_unlinking_mismatched_destination();
+  test_recover_returns_sync_error_after_unlinking_mismatched_destination();
   test_rejected_fail_is_recorded_when_recover_finds_both_files_gone();
   test_recover_returns_remove_error_when_renamed_destination_cannot_be_deleted();
   test_reopen_repairs_cache_and_finishes_rename();
