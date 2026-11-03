@@ -22,6 +22,11 @@ target_include_directories(test_document_recovery PRIVATE ${CMAKE_SOURCE_DIR}/te
 target_link_libraries(test_document_recovery PRIVATE pixcake_editdoc pixcake_warnings)
 add_test(NAME test_document_recovery COMMAND test_document_recovery)
 
+add_executable(test_history kernel/history/test_history.cpp)
+target_include_directories(test_history PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+target_link_libraries(test_history PRIVATE pixcake_history pixcake_warnings)
+add_test(NAME test_history COMMAND test_history)
+
 add_executable(test_command_gate kernel/command/test_command_gate.cpp)
 target_include_directories(test_command_gate PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 target_link_libraries(test_command_gate PRIVATE pixcake_command pixcake_warnings)
