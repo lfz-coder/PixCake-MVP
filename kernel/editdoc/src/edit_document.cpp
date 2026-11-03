@@ -4,6 +4,7 @@
 #include "pixcake/support/checksum.hpp"
 
 #include <algorithm>
+#include <utility>
 
 namespace pixcake {
 namespace {
@@ -651,6 +652,46 @@ ResultCode EditDocument::commit_preview(std::uint64_t expected_revision, const s
   EditDocument next = *this;
   next.clear_recovered_flag();
   next.store_fragment(capability_id, version, serialize_tlv(inner_records));
+  next.set_revision(revision() + 1);
+  const ResultCode saved = atomic_replace(files, path, next.encode());
+  if (saved != ResultCode::Ok) {
+    return saved;
+  }
+  *this = std::move(next);
+  return ResultCode::Ok;
+}
+
+ResultCode EditDocument::commit_fragment_replacement(
+    std::uint64_t expected_revision, const std::vector<std::string>& remove_capability_ids,
+    const std::vector<FragmentView>& replacements, FileSystem& files, const std::string& path) {
+  if (expected_revision != revision()) {
+    return ResultCode::StateConflict;
+  }
+  for (const auto& fragment : replacements) {
+    if (fragment.capability_id.empty()) {
+      return ResultCode::StateConflict;
+    }
+  }
+
+  EditDocument next = *this;
+  next.clear_recovered_flag();
+  next.records_.erase(std::remove_if(next.records_.begin(), next.records_.end(),
+                                     [&](const Record& record) {
+                                       if (record.type != kRecordFragment) {
+                                         return false;
+                                       }
+                                       const auto parsed = parse_fragment(record.payload);
+                                       if (!parsed) {
+                                         return false;
+                                       }
+                                       return std::find(remove_capability_ids.begin(),
+                                                        remove_capability_ids.end(),
+                                                        parsed->id) != remove_capability_ids.end();
+                                     }),
+                      next.records_.end());
+  for (const auto& fragment : replacements) {
+    next.store_fragment(fragment.capability_id, fragment.version, fragment.inner);
+  }
   next.set_revision(revision() + 1);
   const ResultCode saved = atomic_replace(files, path, next.encode());
   if (saved != ResultCode::Ok) {

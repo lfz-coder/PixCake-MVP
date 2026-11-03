@@ -210,6 +210,41 @@ void test_empty_image_id_is_refused() {
   EXPECT(!pixcake::EditDocument::create("").has_value());
 }
 
+void test_fragment_replacement_keeps_other_records() {
+  auto document = *pixcake::EditDocument::create("img-1");
+  document.store_fragment("color.global", 1, {1, 2});
+  document.store_fragment("color.local", 1, {3});
+  document.store_fragment("portrait.blemish", 1, {4});
+  document.append_raw_record(40, {9, 9});
+  pixcake::test::FakeFileSystem files;
+  EXPECT(document.write_snapshot(files, kPath) == pixcake::ResultCode::Ok);
+
+  std::vector<pixcake::FragmentView> replacements(1);
+  replacements[0].capability_id = "color.global";
+  replacements[0].version = 1;
+  replacements[0].inner = {7, 7};
+  EXPECT(document.commit_fragment_replacement(0, {"color.global", "color.local"}, replacements, files,
+                                              kPath) == pixcake::ResultCode::Ok);
+  EXPECT(document.revision() == 1);
+  EXPECT(document.fragment("color.global")->inner == std::vector<std::uint8_t>({7, 7}));
+  EXPECT(!document.fragment("color.local").has_value());
+  EXPECT(document.fragment("portrait.blemish")->inner == std::vector<std::uint8_t>({4}));
+  EXPECT(document.payloads_of_type(40).size() == 1);
+
+  const auto saved = files.files[kPath];
+  EXPECT(document.commit_fragment_replacement(0, {"portrait.blemish"}, {}, files, kPath) ==
+         pixcake::ResultCode::StateConflict);
+  EXPECT(document.revision() == 1);
+  EXPECT(files.files[kPath] == saved);
+
+  files.write_error = pixcake::ResultCode::DiskFull;
+  EXPECT(document.commit_fragment_replacement(1, {"portrait.blemish"}, {}, files, kPath) ==
+         pixcake::ResultCode::DiskFull);
+  EXPECT(document.revision() == 1);
+  EXPECT(document.fragment("portrait.blemish").has_value());
+  EXPECT(files.files[kPath] == saved);
+}
+
 }  // namespace
 
 int main() {
@@ -224,5 +259,6 @@ int main() {
   test_envelope_round_trip();
   test_b73_stale_revision_does_not_overwrite();
   test_empty_image_id_is_refused();
+  test_fragment_replacement_keeps_other_records();
   return g_failures == 0 ? 0 : 1;
 }

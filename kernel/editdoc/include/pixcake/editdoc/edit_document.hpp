@@ -69,6 +69,12 @@ class EditDocument {
   std::vector<std::vector<std::uint8_t>> payloads_of_type(std::uint32_t type) const;
 
   void store_fragment(std::string capability_id, std::uint32_t version, std::vector<std::uint8_t> inner);
+
+  // 删掉列出的能力片段，再写入新片段。修订号加一。写盘失败时调用方看到的文档仍是上一份。
+  ResultCode commit_fragment_replacement(std::uint64_t expected_revision,
+                                         const std::vector<std::string>& remove_capability_ids,
+                                         const std::vector<FragmentView>& replacements, FileSystem& files,
+                                         const std::string& path);
   std::optional<FragmentView> fragment(const std::string& capability_id) const;
   std::optional<std::string> committed_parameter(const std::string& capability_id,
                                                  const std::string& parameter_id) const;
