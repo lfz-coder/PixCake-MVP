@@ -140,6 +140,22 @@ void test_place_result_shapes_once() {
   EXPECT(document.generations().size() == 6);
 }
 
+void test_place_result_replace_locked_generation_layer() {
+  auto document = opened();
+  EXPECT(document.place_result("result-1", "新图层", "tool-a") == pixcake::ResultCode::Ok);
+  EXPECT(document.set_locked("result-1", true) == pixcake::ResultCode::Ok);
+  EXPECT(document.place_result("result-2", "替换当前生成图层", "重绘") ==
+         pixcake::ResultCode::StateConflict);
+  pixcake::LayerView layer;
+  EXPECT(document.find_layer("result-1", layer));
+  EXPECT(layer.name == "tool-a");
+  EXPECT(layer.locked);
+  pixcake::LayerView missing;
+  EXPECT(!document.find_layer("result-2", missing));
+  EXPECT(document.generations().size() == 1);
+  EXPECT(document.generations()[0].result_id == "result-1");
+}
+
 void test_remove_clears_generation_cursor_for_deleted_children() {
   auto document = opened();
   EXPECT(document.place_result("result-1", "新图层", "tool-a") == pixcake::ResultCode::Ok);
@@ -162,6 +178,7 @@ int main() {
   test_blend_opacity_lock_and_index();
   test_group_mask_selection_and_batch_design();
   test_place_result_shapes_once();
+  test_place_result_replace_locked_generation_layer();
   test_remove_clears_generation_cursor_for_deleted_children();
   if (g_failures != 0) {
     std::fprintf(stderr, "%d failure(s)\n", g_failures);

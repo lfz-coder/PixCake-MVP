@@ -396,7 +396,10 @@ ResultCode LayerDocument::place_result(const std::string& result_id, const std::
   }
   if (shape == "替换当前生成图层") {
     LayerView* current = find(current_generation_layer_id_);
-    if (current != nullptr && !current->background && !current->locked) {
+    if (current != nullptr) {
+      if (current->background || current->locked) {
+        return ResultCode::StateConflict;
+      }
       current->name = tool_id;
       generations_.push_back(GenerationView{result_id, shape, tool_id});
       return ResultCode::Ok;
