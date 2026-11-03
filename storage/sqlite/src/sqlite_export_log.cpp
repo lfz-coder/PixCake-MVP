@@ -278,8 +278,9 @@ ResultCode SqliteExportLog::append(const std::vector<ExportEvent>& events) {
     if (const ResultCode code = bind_text(stmt.get(), 9, hex16(event.checksum)); code != ResultCode::Ok) {
       return code;
     }
-    if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
-      return ResultCode::IoFailed;
+    const int inserted = sqlite3_step(stmt.get());
+    if (inserted != SQLITE_DONE) {
+      return map_sqlite(inserted);
     }
   }
   return ResultCode::Ok;
@@ -307,11 +308,17 @@ ResultCode SqliteExportLog::read_cache(std::optional<ExportCache>& out) {
   if (tasks_prepared != ResultCode::Ok) {
     return tasks_prepared;
   }
-  while (sqlite3_step(tasks.get()) == SQLITE_ROW) {
+  while (true) {
+    const int step = sqlite3_step(tasks.get());
+    if (step == SQLITE_DONE) {
+      out = std::move(value);
+      return ResultCode::Ok;
+    }
+    if (step != SQLITE_ROW) {
+      return map_sqlite(step);
+    }
     value.statuses.emplace_back(column_text(tasks.get(), 0), column_text(tasks.get(), 1));
   }
-  out = std::move(value);
-  return ResultCode::Ok;
 }
 
 ResultCode SqliteExportLog::write_cache(const ExportCache& cache) {
@@ -330,8 +337,9 @@ ResultCode SqliteExportLog::write_cache(const ExportCache& cache) {
       code != ResultCode::Ok) {
     return code;
   }
-  if (sqlite3_step(row.get()) != SQLITE_DONE) {
-    return ResultCode::IoFailed;
+  const int inserted = sqlite3_step(row.get());
+  if (inserted != SQLITE_DONE) {
+    return map_sqlite(inserted);
   }
   Statement task;
   const ResultCode task_prepared =
@@ -348,8 +356,9 @@ ResultCode SqliteExportLog::write_cache(const ExportCache& cache) {
     if (const ResultCode code = bind_text(task.get(), 2, item.second); code != ResultCode::Ok) {
       return code;
     }
-    if (sqlite3_step(task.get()) != SQLITE_DONE) {
-      return ResultCode::IoFailed;
+    const int wrote = sqlite3_step(task.get());
+    if (wrote != SQLITE_DONE) {
+      return map_sqlite(wrote);
     }
   }
   return ResultCode::Ok;

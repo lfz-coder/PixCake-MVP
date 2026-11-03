@@ -446,6 +446,36 @@ void test_reopen_repairs_cache_and_finishes_rename() {
   sqlite3_close(raw);
 }
 
+void test_duplicate_task_cache_key_is_state_conflict_and_one_row_round_trips() {
+  pixcake::test::TempDir dir;
+  const std::string path = dir.path() + "/export.db";
+  std::unique_ptr<pixcake::SqliteExportLog> log;
+  EXPECT(pixcake::SqliteExportLog::open(path, log) == pixcake::ResultCode::Ok);
+
+  pixcake::ExportCache one;
+  one.fast_export = true;
+  one.statuses.emplace_back("exp-1", "排队");
+  EXPECT(log->write_cache(one) == pixcake::ResultCode::Ok);
+  std::optional<pixcake::ExportCache> read;
+  EXPECT(log->read_cache(read) == pixcake::ResultCode::Ok);
+  EXPECT(read.has_value());
+  EXPECT(read->fast_export);
+  EXPECT(read->statuses.size() == 1);
+  EXPECT(read->statuses[0].first == "exp-1");
+  EXPECT(read->statuses[0].second == "排队");
+
+  pixcake::ExportCache duplicate;
+  duplicate.fast_export = false;
+  duplicate.statuses.emplace_back("exp-same", "排队");
+  duplicate.statuses.emplace_back("exp-same", "成功");
+  const pixcake::ResultCode code = log->write_cache(duplicate);
+  if (code != pixcake::ResultCode::StateConflict) {
+    std::fprintf(stderr, "duplicate export_id write_cache returned %d (%s), expected StateConflict\n",
+                 static_cast<int>(code), pixcake::result_code_label(code));
+  }
+  EXPECT(code == pixcake::ResultCode::StateConflict);
+}
+
 }  // namespace
 
 int main() {
@@ -459,6 +489,7 @@ int main() {
   test_rejected_fail_is_recorded_when_recover_finds_both_files_gone();
   test_recover_returns_remove_error_when_renamed_destination_cannot_be_deleted();
   test_reopen_repairs_cache_and_finishes_rename();
+  test_duplicate_task_cache_key_is_state_conflict_and_one_row_round_trips();
   if (g_failures != 0) {
     std::fprintf(stderr, "%d failure(s)\n", g_failures);
     return 1;
