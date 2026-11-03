@@ -4,6 +4,7 @@
 #include "pixcake/mask/mask_sync.hpp"
 
 #include <cstddef>
+#include <map>
 #include <utility>
 #include <vector>
 
@@ -127,17 +128,26 @@ std::vector<SyncItemResult> retry_failed(const EditDocument& source, const std::
   }
   std::vector<std::string> capability_ids;
   const bool selection_ok = checked_capabilities(checked_ids, capability_ids);
+  std::map<std::string, ResultCode> previous_by_path;
+  for (const auto& result : previous) {
+    if (!previous_by_path.emplace(result.path, result.code).second) {
+      return results_for(targets, ResultCode::StateConflict);
+    }
+  }
   std::vector<SyncItemResult> results;
   results.reserve(targets.size());
-  for (std::size_t index = 0; index < targets.size(); ++index) {
+  for (const auto& target : targets) {
     SyncItemResult result;
-    result.path = targets[index].path;
-    if (previous[index].code == ResultCode::Ok) {
+    result.path = target.path;
+    const auto prior = previous_by_path.find(target.path);
+    if (prior == previous_by_path.end()) {
+      result.code = ResultCode::StateConflict;
+    } else if (prior->second == ResultCode::Ok) {
       result.code = ResultCode::Ok;
     } else if (!selection_ok) {
       result.code = ResultCode::StateConflict;
     } else {
-      result.code = apply_one(source, source_path, capability_ids, targets[index]);
+      result.code = apply_one(source, source_path, capability_ids, target);
     }
     results.push_back(std::move(result));
   }

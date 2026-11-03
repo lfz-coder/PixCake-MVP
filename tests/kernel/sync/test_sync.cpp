@@ -201,6 +201,36 @@ void test_same_path_skips_only_that_target() {
   EXPECT(other.fragment("portrait.blemish")->inner == std::vector<std::uint8_t>({1}));
 }
 
+void test_retry_matches_stable_target_paths() {
+  auto source = *pixcake::EditDocument::create("source");
+  source.store_fragment("portrait.blemish", 1, {1});
+  pixcake::test::FakeFileSystem source_files;
+  EXPECT(source.write_snapshot(source_files, "docs/source.pxedit") == pixcake::ResultCode::Ok);
+  auto first = *pixcake::EditDocument::create("first");
+  auto second = *pixcake::EditDocument::create("second");
+  pixcake::test::FakeFileSystem first_files;
+  pixcake::test::FakeFileSystem second_files;
+  EXPECT(first.write_snapshot(first_files, "docs/first.pxedit") == pixcake::ResultCode::Ok);
+  EXPECT(second.write_snapshot(second_files, "docs/second.pxedit") == pixcake::ResultCode::Ok);
+  std::vector<pixcake::SyncTarget> original = {target_of(first, first_files, "docs/first.pxedit"),
+                                               target_of(second, second_files, "docs/second.pxedit")};
+  const auto previous = pixcake::apply_checked(source, "docs/source.pxedit", {"portrait.blemish"}, original);
+  EXPECT(previous[0].code == pixcake::ResultCode::Ok);
+  EXPECT(previous[1].code == pixcake::ResultCode::Ok);
+
+  std::vector<pixcake::SyncTarget> reordered = {original[1], original[0]};
+  std::vector<pixcake::SyncItemResult> mixed = previous;
+  mixed[0].path = "docs/second.pxedit";
+  mixed[1].path = "docs/first.pxedit";
+  mixed[0].code = pixcake::ResultCode::DiskFull;
+  mixed[1].code = pixcake::ResultCode::Ok;
+  const auto retried = pixcake::retry_failed(source, "docs/source.pxedit", {"portrait.blemish"}, reordered, mixed);
+  EXPECT(retried[0].path == "docs/second.pxedit");
+  EXPECT(retried[0].code == pixcake::ResultCode::StateConflict);
+  EXPECT(retried[1].path == "docs/first.pxedit");
+  EXPECT(retried[1].code == pixcake::ResultCode::Ok);
+}
+
 void test_copy_paste_moves_committed_fragments_without_a_tree() {
   auto source = *pixcake::EditDocument::create("source");
   source.store_fragment("color.match", 1, {5});
@@ -246,6 +276,7 @@ int main() {
   test_tree_reads_attributes_from_owners();
   test_checked_sync_copies_only_selected_fragments();
   test_same_path_skips_only_that_target();
+  test_retry_matches_stable_target_paths();
   test_copy_paste_moves_committed_fragments_without_a_tree();
   if (g_failures != 0) {
     std::fprintf(stderr, "%d failure(s)\n", g_failures);
