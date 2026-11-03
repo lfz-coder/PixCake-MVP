@@ -191,7 +191,7 @@ target_link_libraries(test_preset_library PRIVATE pixcake_preset pixcake_warning
 add_test(NAME test_preset_library COMMAND test_preset_library)
 ```
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 把下面的文件写成 `tests/kernel/preset/test_preset_library.cpp`。
 
@@ -367,13 +367,13 @@ int main() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cmake -S . -B build && cmake --build build --target test_preset_library && ctest --test-dir build -R '^test_preset_library$' --output-on-failure`
 
-Expected: 编译失败，因为还没有 `PresetLibrary`。
+Expected: 编译失败，因为还没有 `PresetLibrary`。实际失败是找不到 `preset_library.hpp`。
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 `preset_library.hpp` 声明 `kPresetColor`、`kPresetAiColor`、`kPresetPortrait`、`kPresetCombo`、`PresetFragment`、`Preset`、`PresetCheck` 和 `PresetLibrary`。方法就是这一步测试调用的四个：`save`、`import_preset`、`check_apply`、`apply`，外加 `presets()`。
 
@@ -608,13 +608,13 @@ std::vector<std::string> replaced_modules(const Preset& preset) {
 
 `save`、`check_apply` 和 `apply` 都先调用 `validate`。`check_apply` 在校验成功后，只有 `replaced_modules` 含有 `色彩`，并且 `color.global`、`color.local`、`color.post`、`detail` 里至少有一个 `fragment()` 有值，才把 `overwrite_color` 设为真。`apply` 用这些已知能力里、模块落在替换列表中的标识组成删除列表。
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cmake --build build --target test_preset_library test_edit_document && ctest --test-dir build --output-on-failure`
 
 Expected: 全量测试通过，其中包含 `test_preset_library`、`test_edit_document`、`test_history` 和 `arch_dependencies`。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add kernel/preset tests/kernel/preset CMakeLists.txt tests/CMakeLists.txt docs/superpowers/plans/2026-11-03-kernel-preset-types.md
