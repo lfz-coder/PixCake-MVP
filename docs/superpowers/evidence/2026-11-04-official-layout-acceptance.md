@@ -8,10 +8,11 @@
 
 | 检查项 | 结果 | 证据 |
 |---|---|---|
-| 五页 Qt 壳层构建 | 通过 | `build-desktop/apps/shell/pixcake_app_shell.app` |
+| 五页 Qt 壳层构建 | 通过 | `build-desktop/apps/shell/pixcake_app_shell.app`，Bundle ID `com.pixcake.desktop.shell` |
 | CTest | 通过，29/29 | `ctest --test-dir build-desktop --output-on-failure` |
 | 架构门禁 | 通过 | `architecture_gate`、`check_dependencies.cmake`、`check_capability_ownership.cmake` |
 | 页面 smoke | 通过 | CTest 中 5 个 `test_shell_app_smoke_*` 均通过；`--page login/home/library/refine/creative --smoke` 均退出码 0 |
+| 本地壳层 Jarvis AX | 通过 | Jarvis 逐页读取 `PixCake Desktop Shell` 的登录、主页、图库、精修、创意窗口；AX 源为 `embedded_ax` |
 | 空状态约束 | 通过 | 未生成项目、照片、图层、AI 工具或业务结果 |
 | Qt 边界 | 通过 | Qt 仅在 `apps/shell`；`ui/shell` 保持无 Qt |
 | 空白检查 | 通过 | `git diff --check` |
@@ -40,7 +41,7 @@ accessibility: true
 screen_recording: true
 ```
 
-本地构建壳层的 Jarvis AX 注册验收仍为阻塞项：当前构建产物未注册到 Jarvis 页面图谱，且计划要求本地应用若无法注册不得宣称 AX 验收通过。因此本批次判定为：**代码布局完成，官方证据和自动化验收完成，Jarvis 本地壳层 AX 验收阻塞**。
+本地构建壳层已能被 Jarvis 直接读取 AX。逐页核对结果：登录页读取账号/验证码输入框、6 位验证码限制、三种登录方式和帮助入口；主页读取左侧七项导航、搜索、导入区、常用/快捷空区和项目列表；图库读取项目内导航、显示状态、全效果模式、缩略图区、空网格、侧边栏、导入/筛选/排序和三种视图；精修读取顶部入口、12 项工具、画布、查看对比、功能区和缩略图区；创意读取手动工具栏、画布、缩略图区、侧边栏和空图层面板。所有业务控件保持禁用或空状态。
 
 ## 未确认和延期
 

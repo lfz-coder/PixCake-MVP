@@ -3,7 +3,13 @@ find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
 add_executable(pixcake_app_shell
   main.cpp
 )
-set_target_properties(pixcake_app_shell PROPERTIES MACOSX_BUNDLE TRUE)
+set_target_properties(pixcake_app_shell PROPERTIES
+  MACOSX_BUNDLE TRUE
+  MACOSX_BUNDLE_GUI_IDENTIFIER "com.pixcake.desktop.shell"
+  MACOSX_BUNDLE_BUNDLE_NAME "PixCake Desktop Shell"
+  MACOSX_BUNDLE_SHORT_VERSION_STRING "0.1"
+  MACOSX_BUNDLE_BUNDLE_VERSION "0.1"
+)
 target_link_libraries(pixcake_app_shell PRIVATE
   pixcake_ui_shell
   pixcake_warnings

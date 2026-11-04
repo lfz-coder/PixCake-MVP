@@ -61,7 +61,6 @@ class ShellWindow final : public QMainWindow {
     layout->setContentsMargins(24, 18, 24, 18);
     title_ = text(QStringLiteral("登录页面"));
     title_->setObjectName(QStringLiteral("page-title"));
-    title_->setAccessibleName(QStringLiteral("当前页面"));
     QFont font = title_->font(); font.setPointSize(20); font.setBold(true); title_->setFont(font);
     layout->addWidget(title_);
     body_ = new QWidget(root); layout->addWidget(body_, 1); setCentralWidget(root); render();
