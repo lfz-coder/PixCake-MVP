@@ -14,6 +14,7 @@ namespace pixcake {
 struct ExportJob {
   std::string export_id;
   std::string original_id;
+  std::string batch_id;
   std::uint64_t document_revision = 0;
   std::vector<std::uint8_t> document_snapshot;
   std::string destination_path;
@@ -26,6 +27,7 @@ struct ExportEvent {
   std::string kind;
   std::string export_id;
   std::string original_id;
+  std::string batch_id;
   std::uint64_t document_revision = 0;
   std::vector<std::uint8_t> document_snapshot;
   std::string destination_path;
@@ -40,6 +42,7 @@ struct ExportProductFact {
   std::string original_id;
   bool watermark_free_second = false;
   bool product_exists = false;
+  std::string batch_id;
 };
 
 struct ExportCache {

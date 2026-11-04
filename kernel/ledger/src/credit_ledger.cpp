@@ -23,6 +23,7 @@ struct Snapshot {
   std::map<std::string, int> master_free;
   std::set<std::string> strokes;
   std::set<std::string> settled_exports;
+  std::set<std::string> settled_batches;
 };
 
 Snapshot fold(const std::vector<LedgerEvent>& events) {
@@ -61,6 +62,9 @@ Snapshot fold(const std::vector<LedgerEvent>& events) {
       shot.strokes.insert(event.stroke_id);
     } else if (event.kind == "export-sheet") {
       shot.settled_exports.insert(event.export_id);
+      if (!event.batch_id.empty()) {
+        shot.settled_batches.insert(event.batch_id + "\n" + event.original_id);
+      }
     }
   }
   return shot;
@@ -364,10 +368,15 @@ ResultCode CreditLedger::settle_exports(const std::vector<ExportProduct>& produc
   const auto shot = fold(events_);
   std::map<std::string, std::vector<const ExportProduct*>> groups;
   for (const auto& product : products) {
-    if (shot.settled_exports.count(product.export_id) != 0) {
+    const std::string batch_id = product.batch_id.empty() ? product.export_id : product.batch_id;
+    if (shot.settled_exports.count(product.export_id) != 0 ||
+        (!product.batch_id.empty() && shot.settled_batches.count(batch_id + "\n" + product.original_id) != 0)) {
       continue;
     }
-    groups[product.original_id].push_back(&product);
+    const std::string group_key = product.batch_id.empty()
+                                      ? product.original_id
+                                      : product.batch_id + "\n" + product.original_id;
+    groups[group_key].push_back(&product);
   }
   std::vector<LedgerEvent> added;
   std::int64_t needed = 0;
@@ -387,6 +396,7 @@ ResultCode CreditLedger::settle_exports(const std::vector<ExportProduct>& produc
       event.kind = "export-sheet";
       event.export_id = chargeable[index]->export_id;
       event.original_id = chargeable[index]->original_id;
+      event.batch_id = chargeable[index]->batch_id;
       event.sheets_delta = index == 0 ? -1 : 0;
       added.push_back(std::move(event));
     }

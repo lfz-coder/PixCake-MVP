@@ -31,6 +31,16 @@ struct ExportProduct {
   std::string original_id;
   bool watermark_free_second = false;
   bool product_exists = false;
+  std::string batch_id;
+
+  ExportProduct() = default;
+  ExportProduct(std::string export_id_value, std::string original_id_value, bool watermark_free_value,
+                bool product_exists_value, std::string batch_id_value = {})
+      : export_id(std::move(export_id_value)),
+        original_id(std::move(original_id_value)),
+        watermark_free_second(watermark_free_value),
+        product_exists(product_exists_value),
+        batch_id(std::move(batch_id_value)) {}
 };
 
 struct LedgerEvent {
@@ -41,6 +51,7 @@ struct LedgerEvent {
   std::string origin;
   std::string original_id;
   std::string export_id;
+  std::string batch_id;
   bool high_compute = false;
   bool batch_generation = false;
   bool member = false;

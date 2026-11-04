@@ -39,6 +39,11 @@ CREATE TABLE ledger_task_cache (
   task_id TEXT PRIMARY KEY,
   status TEXT NOT NULL
 );
+CREATE TABLE ledger_export_batch (
+  export_id TEXT PRIMARY KEY,
+  batch_id TEXT NOT NULL,
+  original_id TEXT NOT NULL
+);
 )";
 
 constexpr const char* kInsertEvent =
@@ -53,6 +58,11 @@ constexpr const char* kSelectEvents =
     "high_compute, batch_generation, member, subscribed, consumed_master_free, "
     "quoted_points, acceleration_points, points_delta, sheets_delta "
     "FROM ledger_event ORDER BY seq;";
+constexpr const char* kBatchUpsert =
+    "INSERT INTO ledger_export_batch(export_id, batch_id, original_id) VALUES (?, ?, ?) "
+    "ON CONFLICT(export_id) DO UPDATE SET batch_id = excluded.batch_id, original_id = excluded.original_id;";
+constexpr const char* kBatchLookup =
+    "SELECT batch_id FROM ledger_export_batch WHERE export_id = ? AND original_id = ?;";
 
 ResultCode map_sqlite(int rc) {
   if (rc == SQLITE_OK || rc == SQLITE_DONE || rc == SQLITE_ROW) {
@@ -246,6 +256,10 @@ ResultCode create_schema(sqlite3* db) {
   return ResultCode::Ok;
 }
 
+ResultCode ensure_batch_schema(sqlite3* db) {
+  return exec_sql(db, "CREATE TABLE IF NOT EXISTS ledger_export_batch (export_id TEXT PRIMARY KEY, batch_id TEXT NOT NULL, original_id TEXT NOT NULL);");
+}
+
 }  // namespace
 
 struct SqliteLedgerLog::Impl {
@@ -302,6 +316,10 @@ ResultCode SqliteLedgerLog::open(const std::string& path, std::unique_ptr<Sqlite
       return schema;
     }
   }
+  if (const ResultCode batches = ensure_batch_schema(db); batches != ResultCode::Ok) {
+    sqlite3_close(db);
+    return batches;
+  }
   if (read_journal_mode(db) != "wal") {
     sqlite3_close(db);
     return ResultCode::IoFailed;
@@ -329,7 +347,15 @@ ResultCode SqliteLedgerLog::load(std::vector<LedgerEvent>& out) {
     if (rc != SQLITE_ROW) {
       return map_sqlite(rc);
     }
-    events.push_back(read_event(stmt.get()));
+    LedgerEvent event = read_event(stmt.get());
+    if (!event.export_id.empty()) {
+      Statement batch;
+      if (batch.prepare(impl_->db, kBatchLookup) != ResultCode::Ok) return ResultCode::IoFailed;
+      if (bind_text(batch.get(), 1, event.export_id) != ResultCode::Ok ||
+          bind_text(batch.get(), 2, event.original_id) != ResultCode::Ok) return ResultCode::IoFailed;
+      if (sqlite3_step(batch.get()) == SQLITE_ROW) event.batch_id = column_text(batch.get(), 0);
+    }
+    events.push_back(std::move(event));
   }
 }
 
@@ -347,6 +373,14 @@ ResultCode SqliteLedgerLog::append(const std::vector<LedgerEvent>& events) {
     const int rc = sqlite3_step(stmt.get());
     if (rc != SQLITE_DONE) {
       return map_sqlite(rc);
+    }
+    if (!event.export_id.empty() && !event.batch_id.empty()) {
+      Statement batch;
+      if (batch.prepare(impl_->db, kBatchUpsert) != ResultCode::Ok) return ResultCode::IoFailed;
+      if (bind_text(batch.get(), 1, event.export_id) != ResultCode::Ok ||
+          bind_text(batch.get(), 2, event.batch_id) != ResultCode::Ok ||
+          bind_text(batch.get(), 3, event.original_id) != ResultCode::Ok ||
+          sqlite3_step(batch.get()) != SQLITE_DONE) return map_sqlite(sqlite3_errcode(impl_->db));
     }
   }
   return ResultCode::Ok;

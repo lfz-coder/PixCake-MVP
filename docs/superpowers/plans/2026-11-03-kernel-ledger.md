@@ -44,7 +44,7 @@
 - Consumes: `ResultCode`
 - Produces: `FreeQueuePolicy`、`TaskQuote`、`ExportProduct`、`LedgerEvent`、`CreditLedger`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 把 `tests/kernel/ledger/test_ledger.cpp` 写成下面的文件。根 `CMakeLists.txt` 在 `kernel/sync` 后加入 `add_subdirectory(kernel/ledger)`。`tests/CMakeLists.txt` 在 `test_sync` 后加入 `test_ledger`，链接 `pixcake_ledger`。`kernel/ledger/CMakeLists.txt` 先只编译一个空的 `src/credit_ledger.cpp`，让失败停在缺少声明。
 
@@ -262,13 +262,13 @@ int main() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cmake -S . -B build && cmake --build build --target test_ledger`
 
 Expected: 编译失败，因为还没有 `pixcake/ledger/credit_ledger.hpp`。
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 `kernel/ledger/include/pixcake/ledger/credit_ledger.hpp`：
 
@@ -762,13 +762,13 @@ ResultCode CreditLedger::settle_exports(const std::vector<ExportProduct>& produc
 }  // namespace pixcake
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cmake --build build --target test_ledger && ctest --test-dir build -R '^test_ledger$' --output-on-failure`
 
 Expected: `test_ledger` 通过。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add kernel/ledger tests/kernel/ledger CMakeLists.txt tests/CMakeLists.txt docs/superpowers/plans/2026-11-03-kernel-ledger.md
@@ -800,7 +800,7 @@ EOF
 - Consumes: `CreditLedger`、`LedgerEvent`
 - Produces: `LedgerEventLog`、`LedgerBook`、`SqliteLedgerLog`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 在 `test_ledger.cpp` 增加持久化测试，并从 `main` 调用。测试链接改为 `pixcake_ledger pixcake_storage`。包含 `support/temp_dir.hpp`。
 
@@ -878,13 +878,13 @@ void test_reopen_replays_events_and_repairs_cache() {
 
 测试文件要包含 `sqlite3.h`。项目库测试里的 `user_version == 3` 不能因为这份账本改掉。
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cmake --build build --target test_ledger`
 
 Expected: 编译失败，因为还没有 `LedgerBook`。
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 `LedgerEventLog` 提供 `load`、`append`、`read_cache`、`write_cache`、`in_transaction`。缓存是点数、张数，以及每个任务编号到状态的列表。没有缓存行时 `read_cache` 成功并给出空 optional。
 
@@ -936,13 +936,13 @@ CREATE TABLE ledger_task_cache (
 scan("${SOURCE_DIR}/kernel/ledger" "rule 12" "sqlite3.h" "面部重绘")
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cmake --build build --target test_ledger test_project_paths && ctest --test-dir build --output-on-failure`
 
 Expected: 全量测试通过。`test_ledger` 覆盖重放和缓存改正。`test_project_paths` 仍要求项目库的未来版本是 4，当前版本是 3。`arch_dependencies` 通过。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add kernel/ledger storage/sqlite tests/kernel/ledger tests/CMakeLists.txt tests/arch/check_dependencies.cmake docs/superpowers/plans/2026-11-03-kernel-ledger.md

@@ -43,7 +43,7 @@
 - Consumes: `ResultCode`、`FileSystem`、`FastExportLatch`、`checksum_fnv1a64`、`CommandGate`、`CreditLedger`
 - Produces: `ExportJob`、`ExportEvent`、`ExportProductFact`、`ExportCache`、`ExportEventSink`、`ExportQueue`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 把 `tests/kernel/exportq/test_export_queue.cpp` 写成下面的文件。根 `CMakeLists.txt` 在 `kernel/ledger` 后加入 `add_subdirectory(kernel/exportq)`。`tests/CMakeLists.txt` 在 `test_ledger` 后加入 `test_export_queue`，包含 `${CMAKE_SOURCE_DIR}/tests`，链接 `pixcake_exportq`、`pixcake_command`、`pixcake_ledger`、`pixcake_warnings`。`kernel/exportq/CMakeLists.txt` 先只编译一个空的 `src/export_queue.cpp`，让失败停在缺少声明。
 
@@ -327,13 +327,13 @@ int main() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cmake -S . -B build && cmake --build build --target test_export_queue`
 
 Expected: 编译失败，因为还没有 `pixcake/exportq/export_queue.hpp`。
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 `kernel/exportq/include/pixcake/exportq/export_queue.hpp`：
 
@@ -1006,13 +1006,13 @@ ResultCode ExportQueue::recover_one(const std::string& export_id, FileSystem& fi
 
 `commit_product` 在目标已有相同字节时不调用 `write_new`。磁盘满时先记 `temp-begin`，写入失败后再记 `fail`，所以事件增加 2 条，目标路径不出现。换名失败时已经记了 `temp-begin`、`temp-end`、`commit-begin`，状态停在「提交到目标路径」，临时文件还在，函数返回换名的错误码，不记 `fail`。`recover` 在还没有 `temp-end` 时删除临时文件并记 `fail`，不碰目标路径上已有的文件。已经有 `temp-end` 但还没有 `commit-begin` 时，先补开始事件，再换名；目标路径上如果已经有文件，不把它认作成品，也不删除，任务记 `fail` 并删掉临时文件。已经有 `commit-begin` 时，目标字节和开始事件的校验和不同就删掉目标文件和临时文件并记 `fail`。校验和相同，或换名成功后校验通过，才记 `commit-end`。准备或渲染中恢复只记 `requeue`。
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cmake --build build --target test_export_queue && ctest --test-dir build -R '^test_export_queue$' --output-on-failure`
 
 Expected: `test_export_queue` 通过。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add kernel/exportq tests/kernel/exportq CMakeLists.txt tests/CMakeLists.txt tests/arch/check_dependencies.cmake docs/superpowers/plans/2026-11-03-kernel-export-queue.md
@@ -1043,7 +1043,7 @@ EOF
 - Consumes: `ExportQueue`、`ExportEvent`、`ExportCache`、`ExportEventSink`
 - Produces: `ExportEventLog`、`ExportBook`、`SqliteExportLog`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 在 `test_export_queue.cpp` 增加下面的测试，并从 `main` 调用。测试增加 `#include "pixcake/exportq/export_book.hpp"`、`#include "pixcake/storage/sqlite_export_log.hpp"`、`#include <sqlite3.h>`、`#include <memory>`、`#include "support/temp_dir.hpp"`。链接改为 `pixcake_exportq pixcake_storage pixcake_command pixcake_ledger pixcake_warnings`。
 
@@ -1124,13 +1124,13 @@ void test_reopen_repairs_cache_and_finishes_rename() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cmake --build build --target test_export_queue`
 
 Expected: 编译失败，因为还没有 `ExportBook`。
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 `ExportEventLog` 提供 `load`、`append`、`read_cache`、`write_cache`、`in_transaction`。没有 `export_cache` 行时 `read_cache` 成功并给出空 optional。
 
@@ -1693,13 +1693,13 @@ ResultCode SqliteExportLog::in_transaction(const std::function<ResultCode()>& bo
 }  // namespace pixcake
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cmake --build build --target test_export_queue test_project_paths test_ledger && ctest --test-dir build --output-on-failure`
 
 Expected: 全量测试通过。`test_export_queue` 覆盖换名中断后的重开。`test_project_paths` 仍要求项目库当前版本是 3、未来版本是 4。`test_ledger` 仍通过。`arch_dependencies` 通过。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add kernel/exportq storage/sqlite tests/kernel/exportq tests/CMakeLists.txt docs/superpowers/plans/2026-11-03-kernel-export-queue.md

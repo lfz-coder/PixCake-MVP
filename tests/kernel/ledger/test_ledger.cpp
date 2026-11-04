@@ -201,6 +201,65 @@ void test_export_sheets_count_originals_once_per_settlement() {
   EXPECT(poor.events().size() == before);
 }
 
+void test_export_batch_identity_deduplicates_partial_completion_but_not_new_batch() {
+  auto ledger = charged(version_930(), 10, 3);
+  std::vector<pixcake::ExportProduct> first_part = {
+      {"batch-a-1", "orig-1", false, true, "batch-a"},
+  };
+  std::vector<pixcake::ExportProduct> second_part = {
+      {"batch-a-1", "orig-1", false, true, "batch-a"},
+      {"batch-a-2", "orig-1", false, true, "batch-a"},
+  };
+  EXPECT(ledger.settle_exports(first_part) == pixcake::ResultCode::Ok);
+  EXPECT(ledger.export_sheets() == 2);
+  EXPECT(ledger.settle_exports(second_part) == pixcake::ResultCode::Ok);
+  EXPECT(ledger.export_sheets() == 2);
+
+  std::vector<pixcake::ExportProduct> new_batch = {
+      {"batch-b-1", "orig-1", false, true, "batch-b"},
+  };
+  EXPECT(ledger.settle_exports(new_batch) == pixcake::ResultCode::Ok);
+  EXPECT(ledger.export_sheets() == 1);
+}
+
+void test_export_batch_identity_survives_sqlite_reopen() {
+  pixcake::test::TempDir dir;
+  const std::string path = dir.path() + "/ledger.db";
+  auto policy = version_930();
+  {
+    std::unique_ptr<pixcake::SqliteLedgerLog> log;
+    EXPECT(pixcake::SqliteLedgerLog::open(path, log) == pixcake::ResultCode::Ok);
+    std::unique_ptr<pixcake::LedgerBook> book;
+    EXPECT(pixcake::LedgerBook::open(policy, *log, book) == pixcake::ResultCode::Ok);
+    EXPECT(book->credit_sheets(3) == pixcake::ResultCode::Ok);
+    EXPECT(book->settle_exports({{"batch-a-1", "orig-1", false, true, "batch-a"}}) == pixcake::ResultCode::Ok);
+    EXPECT(book->ledger().export_sheets() == 2);
+  }
+
+  std::unique_ptr<pixcake::SqliteLedgerLog> reopened_log;
+  EXPECT(pixcake::SqliteLedgerLog::open(path, reopened_log) == pixcake::ResultCode::Ok);
+  std::unique_ptr<pixcake::LedgerBook> reopened;
+  EXPECT(pixcake::LedgerBook::open(policy, *reopened_log, reopened) == pixcake::ResultCode::Ok);
+  EXPECT(reopened->settle_exports({
+            {"batch-a-2", "orig-1", false, true, "batch-a"},
+            {"batch-b-1", "orig-1", false, true, "batch-b"},
+        }) == pixcake::ResultCode::Ok);
+  EXPECT(reopened->ledger().export_sheets() == 1);
+
+  sqlite3* raw = nullptr;
+  EXPECT(sqlite3_open(path.c_str(), &raw) == SQLITE_OK);
+  sqlite3_stmt* statement = nullptr;
+  EXPECT(sqlite3_prepare_v2(raw, "SELECT b.batch_id FROM ledger_event e JOIN ledger_export_batch b ON b.export_id = e.export_id AND b.original_id = e.original_id WHERE e.kind = 'export-sheet' ORDER BY e.seq;", -1,
+                            &statement, nullptr) == SQLITE_OK);
+  EXPECT(sqlite3_step(statement) == SQLITE_ROW);
+  EXPECT(std::string(reinterpret_cast<const char*>(sqlite3_column_text(statement, 0))) == "batch-a");
+  EXPECT(sqlite3_step(statement) == SQLITE_ROW);
+  EXPECT(std::string(reinterpret_cast<const char*>(sqlite3_column_text(statement, 0))) == "batch-b");
+  EXPECT(sqlite3_step(statement) == SQLITE_DONE);
+  sqlite3_finalize(statement);
+  sqlite3_close(raw);
+}
+
 void test_reopen_replays_events_and_repairs_cache() {
   pixcake::test::TempDir dir;
   const std::string path = dir.path() + "/ledger.db";
@@ -326,6 +385,8 @@ int main() {
   test_accelerate_is_charged_once_and_strokes_dedupe();
   test_free_queue_switches_and_master_allowance();
   test_export_sheets_count_originals_once_per_settlement();
+  test_export_batch_identity_deduplicates_partial_completion_but_not_new_batch();
+  test_export_batch_identity_survives_sqlite_reopen();
   test_reopen_replays_events_and_repairs_cache();
   test_sqlite_handles_reject_stale_duplicate_charge();
   test_master_acceleration_does_not_bypass_subscription();

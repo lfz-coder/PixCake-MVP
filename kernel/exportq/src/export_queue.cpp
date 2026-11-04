@@ -27,6 +27,7 @@ ExportJob job_from(const ExportEvent& event) {
   ExportJob job;
   job.export_id = event.export_id;
   job.original_id = event.original_id;
+  job.batch_id = event.batch_id;
   job.document_revision = event.document_revision;
   job.document_snapshot = event.document_snapshot;
   job.destination_path = event.destination_path;
@@ -41,6 +42,7 @@ ExportEvent event_from(const ExportJob& job, std::string kind) {
   event.kind = std::move(kind);
   event.export_id = job.export_id;
   event.original_id = job.original_id;
+  event.batch_id = job.batch_id.empty() ? job.export_id : job.batch_id;
   event.document_revision = job.document_revision;
   event.document_snapshot = job.document_snapshot;
   event.destination_path = job.destination_path;
@@ -85,6 +87,7 @@ Fold fold(const std::vector<ExportEvent>& events) {
       ExportProductFact fact;
       fact.export_id = job.job.export_id;
       fact.original_id = job.job.original_id;
+      fact.batch_id = job.job.batch_id;
       fact.watermark_free_second = job.job.watermark_free_second;
       fact.product_exists = true;
       shot.products.push_back(std::move(fact));
@@ -244,16 +247,20 @@ ResultCode ExportQueue::set_fast_export(bool on) {
 }
 
 ResultCode ExportQueue::enqueue(const ExportJob& job) {
-  if (!safe_export_id(job.export_id) || job.original_id.empty() || job.document_snapshot.empty() ||
-      job.original_id.find('\0') != std::string::npos ||
-      !absolute_destination(job.destination_path)) {
+  ExportJob normalized = job;
+  if (normalized.batch_id.empty()) {
+    normalized.batch_id = normalized.export_id;
+  }
+  if (!safe_export_id(normalized.export_id) || normalized.original_id.empty() || normalized.document_snapshot.empty() ||
+      normalized.original_id.find('\0') != std::string::npos ||
+      !absolute_destination(normalized.destination_path)) {
     return ResultCode::StateConflict;
   }
   const auto shot = fold(events_);
-  if (shot.jobs.find(job.export_id) != shot.jobs.end()) {
+  if (shot.jobs.find(normalized.export_id) != shot.jobs.end()) {
     return ResultCode::Ok;
   }
-  return note(event_from(job, "enqueue"));
+  return note(event_from(normalized, "enqueue"));
 }
 
 ResultCode ExportQueue::prepare(const std::string& export_id) {

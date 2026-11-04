@@ -30,7 +30,8 @@ constexpr const char* kSchema =
     "fast_export INTEGER NOT NULL);"
     "CREATE TABLE export_task_cache ("
     "export_id TEXT PRIMARY KEY,"
-    "status TEXT NOT NULL);";
+    "status TEXT NOT NULL);"
+    "CREATE TABLE export_batch (export_id TEXT PRIMARY KEY, batch_id TEXT NOT NULL, original_id TEXT NOT NULL);";
 
 ResultCode map_sqlite(int rc) {
   if (rc == SQLITE_OK || rc == SQLITE_DONE || rc == SQLITE_ROW) {
@@ -177,6 +178,10 @@ ResultCode create_schema(sqlite3* db) {
   return ResultCode::Ok;
 }
 
+ResultCode ensure_batch_schema(sqlite3* db) {
+  return exec_sql(db, "CREATE TABLE IF NOT EXISTS export_batch (export_id TEXT PRIMARY KEY, batch_id TEXT NOT NULL, original_id TEXT NOT NULL);");
+}
+
 }  // namespace
 
 struct SqliteExportLog::Impl {
@@ -231,6 +236,10 @@ ResultCode SqliteExportLog::open(const std::string& path, std::unique_ptr<Sqlite
       return schema;
     }
   }
+  if (const ResultCode batches = ensure_batch_schema(db); batches != ResultCode::Ok) {
+    sqlite3_close(db);
+    return batches;
+  }
   auto impl = std::make_unique<Impl>();
   impl->db = db;
   out.reset(new SqliteExportLog(std::move(impl)));
@@ -260,6 +269,12 @@ ResultCode SqliteExportLog::load(std::vector<ExportEvent>& out) {
     event.watermark_free_second = sqlite3_column_int(stmt.get(), 7) != 0;
     event.print_requested = sqlite3_column_int(stmt.get(), 8) != 0;
     event.checksum = parse_hex16(column_text(stmt.get(), 9));
+    Statement batch;
+    if (batch.prepare(impl_->db, "SELECT batch_id FROM export_batch WHERE export_id = ? AND original_id = ?;") == ResultCode::Ok &&
+        bind_text(batch.get(), 1, event.export_id) == ResultCode::Ok &&
+        bind_text(batch.get(), 2, event.original_id) == ResultCode::Ok && sqlite3_step(batch.get()) == SQLITE_ROW) {
+      event.batch_id = column_text(batch.get(), 0);
+    }
     out.push_back(std::move(event));
   }
   return stepped == SQLITE_DONE ? ResultCode::Ok : ResultCode::IoFailed;
@@ -317,6 +332,11 @@ ResultCode SqliteExportLog::append(const std::vector<ExportEvent>& events) {
     const int inserted = sqlite3_step(stmt.get());
     if (inserted != SQLITE_DONE) {
       return map_sqlite(inserted);
+    }
+    if (!event.export_id.empty() && !event.batch_id.empty()) {
+      Statement batch;
+      if (batch.prepare(impl_->db, "INSERT INTO export_batch(export_id, batch_id, original_id) VALUES (?, ?, ?) ON CONFLICT(export_id) DO UPDATE SET batch_id = excluded.batch_id, original_id = excluded.original_id;") != ResultCode::Ok) return ResultCode::IoFailed;
+      if (bind_text(batch.get(), 1, event.export_id) != ResultCode::Ok || bind_text(batch.get(), 2, event.batch_id) != ResultCode::Ok || bind_text(batch.get(), 3, event.original_id) != ResultCode::Ok || sqlite3_step(batch.get()) != SQLITE_DONE) return map_sqlite(sqlite3_errcode(impl_->db));
     }
   }
   return ResultCode::Ok;
