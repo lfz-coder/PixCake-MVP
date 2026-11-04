@@ -3,6 +3,8 @@ find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
 add_executable(pixcake_app_shell
   main.cpp
 )
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/login-hero.png
+               ${CMAKE_CURRENT_BINARY_DIR}/login-hero.png COPYONLY)
 set_target_properties(pixcake_app_shell PROPERTIES
   MACOSX_BUNDLE TRUE
   MACOSX_BUNDLE_GUI_IDENTIFIER "com.pixcake.desktop.shell"
