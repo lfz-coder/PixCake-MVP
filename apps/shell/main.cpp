@@ -1,5 +1,6 @@
 #include "pixcake/ui/shell/shell_display.hpp"
 #include "pixcake_theme.hpp"
+#include "pixcake_widgets.hpp"
 #include <QApplication>
 #include <QCommandLineOption>
 #include <QCommandLineParser>
@@ -65,7 +66,7 @@ class ShellWindow final : public QMainWindow {
     auto* root = new QWidget(this);
     root->setObjectName(QStringLiteral("shell-root"));
     auto* layout = new QVBoxLayout(root);
-    layout->setContentsMargins(24, 18, 24, 18);
+    layout->setContentsMargins(0, 0, 0, 0);
     title_ = text(QStringLiteral("登录页面"));
     title_->setObjectName(QStringLiteral("page-title"));
     QFont font = title_->font(); font.setPointSize(20); font.setBold(true); title_->setFont(font);
@@ -73,10 +74,16 @@ class ShellWindow final : public QMainWindow {
     body_ = new QWidget(root); layout->addWidget(body_, 1); setCentralWidget(root); render();
   }
   QPushButton* action(const QString& label, QWidget* parent, bool enabled = false) {
-    auto* button = new QPushButton(label, parent); button->setEnabled(enabled); return button;
+    auto* button = new pixcake::shell::PixCakeButton(label, parent);
+    button->setEnabled(enabled);
+    return button;
   }
   void add_nav_button(QLayout* layout, const QString& label, Page target, bool enabled = true) {
-    auto* button = new QPushButton(label); button->setObjectName(QStringLiteral("navigate-%1").arg(label)); button->setEnabled(enabled);
+    auto* button = new pixcake::shell::PixCakeButton(label);
+    button->setObjectName(QStringLiteral("navigate-%1").arg(label));
+    button->setProperty("selected", display_.page() == target);
+    button->setProperty("page-tab", true);
+    button->setEnabled(enabled);
     connect(button, &QPushButton::clicked, this, [this, target] { if (display_.navigate(target) == ResultCode::Ok) render(); });
     layout->addWidget(button);
   }
@@ -90,8 +97,9 @@ class ShellWindow final : public QMainWindow {
   }
   QFrame* workspace_tool(const QString& label, QWidget* parent) {
     auto* frame = new QFrame(parent); frame->setObjectName(QStringLiteral("workspace-tool-button"));
+    frame->setAccessibleName(label);
     auto* layout = new QVBoxLayout(frame); layout->setContentsMargins(5, 6, 5, 6); layout->setSpacing(4);
-    auto* glyph = text(QStringLiteral("◇")); glyph->setAlignment(Qt::AlignCenter); layout->addWidget(glyph);
+    auto* glyph = text(QString()); glyph->setObjectName(QStringLiteral("pending-icon")); glyph->setFixedHeight(12); layout->addWidget(glyph);
     auto* name = text(label); name->setObjectName(QStringLiteral("workspace-tool-label")); name->setAlignment(Qt::AlignCenter); name->setWordWrap(true); layout->addWidget(name);
     return frame;
   }
@@ -104,22 +112,35 @@ class ShellWindow final : public QMainWindow {
   }
   void render_login() {
     auto* page = new QWidget; page->setObjectName(QStringLiteral("login-page"));
-    auto* outer = new QHBoxLayout(page); outer->setContentsMargins(0, 0, 0, 0); outer->setSpacing(0);
+    auto* outer = new QHBoxLayout(page); outer->setContentsMargins(48, 48, 48, 40); outer->setSpacing(36);
     auto* hero = new QLabel(page); hero->setObjectName(QStringLiteral("login-hero")); hero->setAlignment(Qt::AlignCenter);
-    const auto hero_path = QCoreApplication::applicationDirPath() + QStringLiteral("/login-hero.png");
-    QPixmap hero_pix(hero_path); if (!hero_pix.isNull()) hero->setPixmap(hero_pix.scaled(430, 620, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation));
-    hero->setMinimumWidth(430); hero->setMaximumWidth(560); outer->addWidget(hero, 1);
-    auto* right = new QWidget(page); right->setMinimumWidth(480); auto* panel = new QVBoxLayout(right); panel->setContentsMargins(70, 80, 70, 70); panel->setSpacing(16);
-    auto* heading = text(QStringLiteral("手机验证码登录")); heading->setAlignment(Qt::AlignCenter); heading->setObjectName(QStringLiteral("login-heading")); QFont hf = heading->font(); hf.setPointSize(20); heading->setFont(hf); panel->addWidget(heading);
+    const auto app_dir = QCoreApplication::applicationDirPath();
+    const QStringList hero_paths = {
+        app_dir + QStringLiteral("/../Resources/login-hero.png"),
+        app_dir + QStringLiteral("/login-hero.png"),
+        app_dir + QStringLiteral("/../../login-hero.png")};
+    QPixmap hero_pix;
+    for (const auto& path : hero_paths) {
+      hero_pix.load(path);
+      if (!hero_pix.isNull()) break;
+    }
+    if (!hero_pix.isNull()) hero->setPixmap(hero_pix.scaled(620, 760, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation));
+    hero->setMinimumWidth(470); hero->setMaximumWidth(690); outer->addWidget(hero, 11);
+    auto* right = new QWidget(page); right->setObjectName(QStringLiteral("login-panel")); right->setMinimumWidth(520); auto* panel = new QVBoxLayout(right); panel->setContentsMargins(84, 0, 84, 0); panel->setSpacing(14); panel->setAlignment(Qt::AlignCenter);
+    auto* heading = text(QStringLiteral("手机验证码登录")); heading->setAlignment(Qt::AlignCenter); heading->setObjectName(QStringLiteral("login-heading")); QFont hf = heading->font(); hf.setPointSize(21); heading->setFont(hf); panel->addWidget(heading);
     auto* account = new QLineEdit(right); account->setObjectName(QStringLiteral("login-account-input")); account->setAccessibleName(QStringLiteral("账号输入框")); account->setPlaceholderText(QStringLiteral("输入手机号")); panel->addWidget(account);
     auto* code = new QLineEdit(right); code->setObjectName(QStringLiteral("login-code-input")); code->setAccessibleName(QStringLiteral("验证码输入框")); code->setMaxLength(6); code->setPlaceholderText(QStringLiteral("输入短信中的验证码"));
     auto* code_row = new QWidget(right); auto* code_layout = new QHBoxLayout(code_row); code_layout->setContentsMargins(0,0,0,0); code_layout->addWidget(code,1); auto* get_code = action(QStringLiteral("获取验证码"), code_row); get_code->setObjectName(QStringLiteral("get-code")); code_layout->addWidget(get_code); panel->addWidget(code_row);
     auto* login = action(QStringLiteral("登录"), right); login->setObjectName(QStringLiteral("primary")); login->setEnabled(false); panel->addWidget(login);
     auto* agreement = new QCheckBox(QStringLiteral("已阅读并同意像素蛋糕《用户使用协议》《隐私政策》"), right); agreement->setObjectName(QStringLiteral("login-agreement")); panel->addWidget(agreement);
-    panel->addSpacing(70);
-    auto* divider = new QLabel(QStringLiteral("──────────────  or  ──────────────"), right); divider->setAlignment(Qt::AlignCenter); divider->setProperty("muted", true); panel->addWidget(divider);
-    auto* methods = new QHBoxLayout; auto* wechat = action(QStringLiteral("◉  微信登录"), right); wechat->setObjectName(QStringLiteral("wechat-login")); auto* merchant = action(QStringLiteral("▰  商家账号"), right); merchant->setObjectName(QStringLiteral("merchant-login")); methods->addStretch(); methods->addWidget(wechat); methods->addWidget(merchant); methods->addStretch(); panel->addLayout(methods); panel->addStretch();
-    auto* help = action(QStringLiteral("?"), page); help->setObjectName(QStringLiteral("icon-button")); help->setAccessibleName(QStringLiteral("帮助")); help->setToolTip(QStringLiteral("联系售后 / 查看快捷键")); auto* help_row = new QHBoxLayout; help_row->addStretch(); help_row->addWidget(help); panel->addLayout(help_row); outer->addWidget(right, 1); set_body(page);
+    panel->addSpacing(50);
+    auto* divider_row = new QHBoxLayout;
+    divider_row->setSpacing(12);
+    divider_row->addWidget(pixcake::shell::horizontalRule(right), 1);
+    auto* or_label = text(QStringLiteral("or"), true); or_label->setAlignment(Qt::AlignCenter); divider_row->addWidget(or_label);
+    divider_row->addWidget(pixcake::shell::horizontalRule(right), 1); panel->addLayout(divider_row);
+    auto* methods = new QHBoxLayout; methods->setSpacing(10); auto* wechat = action(QStringLiteral("微信登录"), right); wechat->setObjectName(QStringLiteral("pill")); wechat->setEnabled(false); auto* merchant = action(QStringLiteral("商家账号"), right); merchant->setObjectName(QStringLiteral("pill")); merchant->setEnabled(false); methods->addStretch(); methods->addWidget(wechat); methods->addWidget(merchant); methods->addStretch(); panel->addLayout(methods); panel->addStretch();
+    auto* help = action(QStringLiteral("?"), right); help->setObjectName(QStringLiteral("login-help")); help->setAccessibleName(QStringLiteral("帮助")); help->setToolTip(QStringLiteral("联系售后 / 查看快捷键")); auto* help_row = new QHBoxLayout; help_row->addStretch(); help_row->addWidget(help); help_row->setContentsMargins(0, 0, 8, 16); panel->addLayout(help_row); outer->addWidget(right, 13); set_body(page);
   }
   void render_home() {
     auto* page = new QWidget; page->setObjectName(QStringLiteral("home-page"));
@@ -127,24 +148,24 @@ class ShellWindow final : public QMainWindow {
 
     auto* nav = new QFrame(page); nav->setObjectName(QStringLiteral("home-sidebar")); nav->setFixedWidth(220);
     auto* nav_layout = new QVBoxLayout(nav); nav_layout->setContentsMargins(18, 20, 18, 18); nav_layout->setSpacing(6);
-    auto* brand = text(QStringLiteral("▰  像素蛋糕")); brand->setObjectName(QStringLiteral("home-brand")); nav_layout->addWidget(brand); nav_layout->addSpacing(18);
+    auto* brand = text(QStringLiteral("像素蛋糕")); brand->setObjectName(QStringLiteral("home-brand")); nav_layout->addWidget(brand); nav_layout->addSpacing(18);
     const auto nav_items = {QStringLiteral("主页"), QStringLiteral("AI 工具箱"), QStringLiteral("本地项目"), QStringLiteral("云空间"), QStringLiteral("工作流"), QStringLiteral("选片交付"), QStringLiteral("回收站")};
     for (const auto& label : nav_items) { auto* b = action(label, nav); b->setObjectName(QStringLiteral("home-nav")); b->setProperty("selected", label == QStringLiteral("主页")); b->setEnabled(label == QStringLiteral("主页")); nav_layout->addWidget(b); }
     nav_layout->addStretch();
     auto* support = action(QStringLiteral("了解更多版本功能"), nav); support->setEnabled(false); nav_layout->addWidget(support);
     outer->addWidget(nav);
 
-    auto* content = new QFrame(page); content->setObjectName(QStringLiteral("home-content")); auto* main = new QVBoxLayout(content); main->setContentsMargins(24, 18, 24, 18); main->setSpacing(16);
-    auto* top = new QHBoxLayout; auto* search = new QLineEdit(content); search->setObjectName(QStringLiteral("home-search")); search->setPlaceholderText(QStringLiteral("⌕  搜索所有项目")); search->setMaximumWidth(420); top->addStretch(); top->addWidget(search); top->addStretch();
+    auto* content = new QFrame(page); content->setObjectName(QStringLiteral("home-content")); auto* main = new QVBoxLayout(content); main->setContentsMargins(24, 16, 24, 18); main->setSpacing(12);
+    auto* top = new QHBoxLayout; auto* search = new QLineEdit(content); search->setObjectName(QStringLiteral("home-search")); search->setPlaceholderText(QStringLiteral("搜索所有项目")); search->setMaximumWidth(420); top->addStretch(); top->addWidget(search); top->addStretch();
     for (const auto& label : {QStringLiteral("会员续费"), QStringLiteral("技术支持"), QStringLiteral("个人中心"), QStringLiteral("消息中心"), QStringLiteral("传输列表"), QStringLiteral("导出列表")}) { auto* b = action(label, content); b->setObjectName(QStringLiteral("home-toolbar")); b->setToolTip(label); b->setEnabled(false); top->addWidget(b); } main->addLayout(top);
     auto* page_title = text(QStringLiteral("主页")); page_title->setObjectName(QStringLiteral("home-section-title")); main->addWidget(page_title);
 
-    auto* import = new QFrame(content); import->setObjectName(QStringLiteral("home-import")); auto* import_layout = new QVBoxLayout(import); import_layout->setContentsMargins(24, 20, 24, 20); import_layout->setAlignment(Qt::AlignCenter);
+    auto* import = new pixcake::shell::PixCakePanel(QStringLiteral("home-import"), content); auto* import_layout = new QVBoxLayout(import); import_layout->setContentsMargins(24, 14, 24, 14); import_layout->setAlignment(Qt::AlignCenter);
     auto* plus = text(QStringLiteral("＋")); plus->setAlignment(Qt::AlignCenter); QFont pf = plus->font(); pf.setPointSize(30); plus->setFont(pf); import_layout->addWidget(plus);
     auto* import_title = text(QStringLiteral("照片导入")); import_title->setAlignment(Qt::AlignCenter); import_layout->addWidget(import_title); import_layout->addWidget(text(QStringLiteral("拖动或点击导入图片"), true), 0, Qt::AlignCenter); auto* import_button = action(QStringLiteral("导入照片"), import); import_button->setEnabled(false); import_button->setObjectName(QStringLiteral("primary")); import_button->setMaximumWidth(120); import_layout->addWidget(import_button, 0, Qt::AlignCenter); main->addWidget(import);
 
     auto* common_title = text(QStringLiteral("常用功能")); common_title->setObjectName(QStringLiteral("home-section-title")); main->addWidget(common_title);
-    auto* common = new QHBoxLayout; common->setSpacing(12); for (const auto& label : {QStringLiteral("联机拍摄"), QStringLiteral("AI工具箱"), QStringLiteral("像素助手")}) { auto* card = new QFrame(content); card->setObjectName(QStringLiteral("home-card")); card->setMinimumHeight(116); auto* l = new QVBoxLayout(card); l->setAlignment(Qt::AlignCenter); l->addWidget(text(QStringLiteral("◇")), 0, Qt::AlignCenter); auto* t = text(label); t->setObjectName(QStringLiteral("home-card-title")); t->setAlignment(Qt::AlignCenter); l->addWidget(t); l->addWidget(text(QStringLiteral("暂无内容"), true), 0, Qt::AlignCenter); common->addWidget(card, 1); } main->addLayout(common);
+    auto* common = new QHBoxLayout; common->setSpacing(12); for (const auto& label : {QStringLiteral("联机拍摄"), QStringLiteral("AI工具箱"), QStringLiteral("像素助手")}) { auto* card = new QFrame(content); card->setObjectName(QStringLiteral("home-card")); card->setMinimumHeight(116); auto* l = new QVBoxLayout(card); l->setAlignment(Qt::AlignCenter); auto* icon_pending = text(QString()); icon_pending->setObjectName(QStringLiteral("pending-icon")); icon_pending->setFixedHeight(12); l->addWidget(icon_pending, 0, Qt::AlignCenter); auto* t = text(label); t->setObjectName(QStringLiteral("home-card-title")); t->setAlignment(Qt::AlignCenter); l->addWidget(t); l->addWidget(text(QStringLiteral("暂无内容"), true), 0, Qt::AlignCenter); common->addWidget(card, 1); } main->addLayout(common);
 
     auto* quick_title = text(QStringLiteral("快捷功能")); quick_title->setObjectName(QStringLiteral("home-section-title")); main->addWidget(quick_title);
     auto* quick = new QFrame(content); quick->setObjectName(QStringLiteral("home-card")); auto* quick_layout = new QHBoxLayout(quick); quick_layout->setContentsMargins(16, 12, 16, 12); quick_layout->addWidget(text(QStringLiteral("暂无快捷功能"), true)); quick_layout->addStretch(); main->addWidget(quick);
@@ -156,7 +177,7 @@ class ShellWindow final : public QMainWindow {
   void render_workspace() {
     auto* page = new QWidget; page->setObjectName(QStringLiteral("refine-page")); auto* outer = new QVBoxLayout(page); outer->setContentsMargins(0, 0, 0, 0); outer->setSpacing(4);
     auto* top = new QFrame(page); top->setObjectName(QStringLiteral("workspace-top")); auto* top_layout = new QHBoxLayout(top); top_layout->setContentsMargins(8, 6, 8, 6);
-    auto* back = action(QStringLiteral("⌂"), top); back->setObjectName(QStringLiteral("icon-button")); back->setAccessibleName(QStringLiteral("返回主页面")); connect(back, &QPushButton::clicked, this, [this] { if (display_.navigate(Page::Home) == ResultCode::Ok) render(); }); top_layout->addWidget(back); top_layout->addWidget(action(QStringLiteral("⌕"), top)); top_layout->addWidget(action(QStringLiteral("✧"), top)); top_layout->addStretch();
+    auto* back = action(QStringLiteral("返回"), top); back->setObjectName(QStringLiteral("top-action")); back->setAccessibleName(QStringLiteral("返回主页面")); connect(back, &QPushButton::clicked, this, [this] { if (display_.navigate(Page::Home) == ResultCode::Ok) render(); }); top_layout->addWidget(back); top_layout->addWidget(action(QStringLiteral("搜索"), top)); top_layout->addWidget(action(QStringLiteral("像素助手"), top)); top_layout->addStretch();
     auto* tabs = new QHBoxLayout; add_nav_button(tabs, QStringLiteral("图库"), Page::Library); add_nav_button(tabs, QStringLiteral("精修"), Page::Refine); add_nav_button(tabs, QStringLiteral("创意"), Page::Creative); top_layout->addLayout(tabs); top_layout->addStretch(); for (const auto& label : {QStringLiteral("技术支持"), QStringLiteral("个人中心"), QStringLiteral("消息中心"), QStringLiteral("传输列表"), QStringLiteral("导出列表"), QStringLiteral("导出")}) { auto* b = action(label, top); b->setEnabled(false); top_layout->addWidget(b); } outer->addWidget(top);
     auto* toolbar = new QFrame(page); toolbar->setObjectName(QStringLiteral("workspace-tools")); auto* toolbar_layout = new QHBoxLayout(toolbar); toolbar_layout->setContentsMargins(8, 5, 8, 5); toolbar_layout->setSpacing(4);
     const auto tools = {QStringLiteral("缩放"), QStringLiteral("合适"), QStringLiteral("抓手"), QStringLiteral("祛边"), QStringLiteral("参考线"), QStringLiteral("液化"), QStringLiteral("污点修复"), QStringLiteral("修补"), QStringLiteral("仿制图章"), QStringLiteral("智能消除"), QStringLiteral("AI点修"), QStringLiteral("重置效果"), QStringLiteral("预设")}; for (const auto& label : tools) toolbar_layout->addWidget(workspace_tool(label, toolbar)); toolbar_layout->addStretch(); outer->addWidget(toolbar);
@@ -165,18 +186,18 @@ class ShellWindow final : public QMainWindow {
   }
   void render_library() {
     auto* page = new QWidget; page->setObjectName(QStringLiteral("library-page")); auto* outer = new QVBoxLayout(page); outer->setContentsMargins(0, 0, 0, 0); outer->setSpacing(4);
-    auto* top = new QFrame(page); top->setObjectName(QStringLiteral("workspace-top")); auto* top_layout = new QHBoxLayout(top); top_layout->setContentsMargins(8, 6, 8, 6); auto* home = action(QStringLiteral("⌂"), top); home->setObjectName(QStringLiteral("icon-button")); home->setAccessibleName(QStringLiteral("首页")); top_layout->addWidget(home); top_layout->addWidget(action(QStringLiteral("⌕"), top)); top_layout->addStretch(); auto* tabs = new QHBoxLayout; add_nav_button(tabs, QStringLiteral("图库"), Page::Library); add_nav_button(tabs, QStringLiteral("精修"), Page::Refine); add_nav_button(tabs, QStringLiteral("创意"), Page::Creative); top_layout->addLayout(tabs); top_layout->addStretch(); for (const auto& label : {QStringLiteral("会员续费"), QStringLiteral("技术支持"), QStringLiteral("个人中心"), QStringLiteral("消息中心"), QStringLiteral("传输列表"), QStringLiteral("导出列表"), QStringLiteral("导出")}) { auto* b = action(label, top); b->setEnabled(false); top_layout->addWidget(b); } outer->addWidget(top);
+    auto* top = new QFrame(page); top->setObjectName(QStringLiteral("workspace-top")); auto* top_layout = new QHBoxLayout(top); top_layout->setContentsMargins(8, 6, 8, 6); auto* home = action(QStringLiteral("首页"), top); home->setObjectName(QStringLiteral("top-action")); home->setAccessibleName(QStringLiteral("首页")); top_layout->addWidget(home); top_layout->addWidget(action(QStringLiteral("搜索"), top)); top_layout->addStretch(); auto* tabs = new QHBoxLayout; add_nav_button(tabs, QStringLiteral("图库"), Page::Library); add_nav_button(tabs, QStringLiteral("精修"), Page::Refine); add_nav_button(tabs, QStringLiteral("创意"), Page::Creative); top_layout->addLayout(tabs); top_layout->addStretch(); for (const auto& label : {QStringLiteral("会员续费"), QStringLiteral("技术支持"), QStringLiteral("个人中心"), QStringLiteral("消息中心"), QStringLiteral("传输列表"), QStringLiteral("导出列表"), QStringLiteral("导出")}) { auto* b = action(label, top); b->setEnabled(false); top_layout->addWidget(b); } outer->addWidget(top);
     auto* controls = new QFrame(page); controls->setObjectName(QStringLiteral("workspace-tools")); auto* controls_layout = new QHBoxLayout(controls); controls_layout->setContentsMargins(8, 5, 8, 5); for (const auto& label : {QStringLiteral("显示状态"), QStringLiteral("全效果模式"), QStringLiteral("导入新图片"), QStringLiteral("筛选"), QStringLiteral("排序")}) { auto* b = action(label, controls); b->setEnabled(false); controls_layout->addWidget(b); } controls_layout->addStretch(); auto* selected = text(QStringLiteral("已选 0 张（共 0 张）"), true); controls_layout->addWidget(selected); auto* del = action(QStringLiteral("批量删除"), controls); del->setEnabled(false); controls_layout->addWidget(del); outer->addWidget(controls);
-    auto* content = new QHBoxLayout; content->setSpacing(4); auto* grid = new QFrame(page); grid->setObjectName(QStringLiteral("library-grid")); auto* grid_layout = new QVBoxLayout(grid); grid_layout->setContentsMargins(16, 16, 16, 16); auto* grid_empty = text(QStringLiteral("暂无照片\n导入图片后将在此显示"), true); grid_empty->setAlignment(Qt::AlignCenter); grid_layout->addWidget(grid_empty, 1); content->addWidget(grid, 1);
+    auto* content = new QHBoxLayout; content->setSpacing(4); auto* grid = new pixcake::shell::PixCakePanel(QStringLiteral("library-grid"), page); auto* grid_layout = new QVBoxLayout(grid); grid_layout->setContentsMargins(16, 16, 16, 16); auto* grid_empty = new pixcake::shell::PixCakeEmptyState(QStringLiteral("暂无照片"), QStringLiteral("导入图片后将在此显示"), grid); grid_layout->addWidget(grid_empty, 1); content->addWidget(grid, 1);
     auto* side = new QFrame(page); side->setObjectName(QStringLiteral("workspace-side")); side->setMinimumWidth(260); auto* side_layout = new QVBoxLayout(side); side_layout->addWidget(text(QStringLiteral("侧边栏"))); for (const auto& label : {QStringLiteral("AI挑图"), QStringLiteral("预设"), QStringLiteral("元数据")}) { auto* section = new QGroupBox(label, side); auto* l = new QVBoxLayout(section); l->addWidget(text(QStringLiteral("暂无内容"), true)); side_layout->addWidget(section); } side_layout->addStretch(); content->addWidget(side); outer->addLayout(content, 1);
     outer->addWidget(thumbnail_strip(page, true)); set_body(page);
   }
   void render_creative() {
     auto* page = new QWidget; page->setObjectName(QStringLiteral("creative-page")); auto* outer = new QVBoxLayout(page); outer->setContentsMargins(0, 0, 0, 0); outer->setSpacing(4);
-    auto* top = new QFrame(page); top->setObjectName(QStringLiteral("workspace-top")); auto* top_layout = new QHBoxLayout(top); top_layout->setContentsMargins(8, 6, 8, 6); auto* home = action(QStringLiteral("⌂"), top); home->setObjectName(QStringLiteral("icon-button")); top_layout->addWidget(home); top_layout->addStretch(); auto* tabs = new QHBoxLayout; add_nav_button(tabs, QStringLiteral("图库"), Page::Library); add_nav_button(tabs, QStringLiteral("精修"), Page::Refine); add_nav_button(tabs, QStringLiteral("创意"), Page::Creative); top_layout->addLayout(tabs); top_layout->addStretch(); for (const auto& label : {QStringLiteral("AI工具"), QStringLiteral("历史"), QStringLiteral("批量"), QStringLiteral("帮助"), QStringLiteral("导出")}) { auto* b = action(label, top); b->setEnabled(false); top_layout->addWidget(b); } outer->addWidget(top);
-    auto* center = new QHBoxLayout; center->setSpacing(4); auto* tool_panel = new QFrame(page); tool_panel->setObjectName(QStringLiteral("workspace-tools")); tool_panel->setMaximumWidth(150); auto* tool_layout = new QVBoxLayout(tool_panel); for (const auto& label : {QStringLiteral("缩放"), QStringLiteral("屏幕模式"), QStringLiteral("抓手"), QStringLiteral("移动图层"), QStringLiteral("缩放工具"), QStringLiteral("液化"), QStringLiteral("污点修复"), QStringLiteral("修补"), QStringLiteral("仿制图章"), QStringLiteral("矩形选区"), QStringLiteral("套索工具"), QStringLiteral("裁切")}) tool_layout->addWidget(workspace_tool(label, tool_panel)); tool_layout->addStretch(); center->addWidget(tool_panel);
-    auto* canvas = new QFrame(page); canvas->setObjectName(QStringLiteral("creative-canvas")); auto* canvas_layout = new QVBoxLayout(canvas); auto* preview = text(QStringLiteral("画布\n暂无图片或图层"), true); preview->setAlignment(Qt::AlignCenter); canvas_layout->addWidget(preview, 1); center->addWidget(canvas, 1);
-    auto* side = new QFrame(page); side->setObjectName(QStringLiteral("workspace-side")); side->setMinimumWidth(250); auto* side_layout = new QVBoxLayout(side); for (const auto& title : {QStringLiteral("AI工具箱"), QStringLiteral("侧边栏"), QStringLiteral("图层面板")}) { auto* group = new QGroupBox(title, side); auto* l = new QVBoxLayout(group); l->addWidget(text(QStringLiteral("暂无内容"), true)); side_layout->addWidget(group); } side_layout->addStretch(); center->addWidget(side); outer->addLayout(center, 1); outer->addWidget(thumbnail_strip(page)); set_body(page);
+    auto* top = new QFrame(page); top->setObjectName(QStringLiteral("workspace-top")); auto* top_layout = new QHBoxLayout(top); top_layout->setContentsMargins(8, 6, 8, 6); auto* home = action(QStringLiteral("首页"), top); home->setObjectName(QStringLiteral("top-action")); top_layout->addWidget(home); top_layout->addStretch(); auto* tabs = new QHBoxLayout; add_nav_button(tabs, QStringLiteral("图库"), Page::Library); add_nav_button(tabs, QStringLiteral("精修"), Page::Refine); add_nav_button(tabs, QStringLiteral("创意"), Page::Creative); top_layout->addLayout(tabs); top_layout->addStretch(); for (const auto& label : {QStringLiteral("AI工具"), QStringLiteral("历史"), QStringLiteral("批量"), QStringLiteral("帮助"), QStringLiteral("导出")}) { auto* b = action(label, top); b->setEnabled(false); top_layout->addWidget(b); } outer->addWidget(top);
+    auto* center = new QHBoxLayout; center->setSpacing(4); auto* tool_panel = new QFrame(page); tool_panel->setObjectName(QStringLiteral("workspace-tools")); auto* tool_layout = new QHBoxLayout(tool_panel); tool_layout->setContentsMargins(8, 5, 8, 5); tool_layout->setSpacing(4); for (const auto& label : {QStringLiteral("缩放"), QStringLiteral("屏幕模式"), QStringLiteral("抓手"), QStringLiteral("移动图层"), QStringLiteral("缩放工具"), QStringLiteral("液化"), QStringLiteral("污点修复画笔"), QStringLiteral("修补工具"), QStringLiteral("仿制图章"), QStringLiteral("矩形/椭圆选区"), QStringLiteral("套索/选区画笔"), QStringLiteral("裁切")}) tool_layout->addWidget(workspace_tool(label, tool_panel)); tool_layout->addStretch();
+    auto* canvas = new pixcake::shell::PixCakePanel(QStringLiteral("creative-canvas"), page); auto* canvas_layout = new QVBoxLayout(canvas); auto* preview = new pixcake::shell::PixCakeEmptyState(QStringLiteral("暂无图片或图层"), QStringLiteral("将照片拖入画布后开始创作"), canvas); canvas_layout->addWidget(preview, 1); center->addWidget(canvas, 1);
+    auto* side = new QFrame(page); side->setObjectName(QStringLiteral("workspace-side")); side->setMinimumWidth(250); auto* side_layout = new QVBoxLayout(side); for (const auto& title : {QStringLiteral("AI工具箱"), QStringLiteral("侧边栏"), QStringLiteral("图层面板")}) { auto* group = new QGroupBox(title, side); auto* l = new QVBoxLayout(group); l->addWidget(text(QStringLiteral("暂无内容"), true)); side_layout->addWidget(group); } side_layout->addStretch(); center->addWidget(side); outer->insertWidget(1, tool_panel); outer->addLayout(center, 1); outer->addWidget(thumbnail_strip(page)); set_body(page);
   }
   void set_body(QWidget* page) {
     auto* layout = body_->layout();
