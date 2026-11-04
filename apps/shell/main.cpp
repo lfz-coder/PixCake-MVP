@@ -8,6 +8,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QFileInfo>
 #include <QPixmap>
 #include <QCheckBox>
 #include <QFrame>
@@ -191,5 +192,5 @@ class ShellWindow final : public QMainWindow {
 };
 }
 int main(int argc, char** argv) {
-  QApplication app(argc, argv); pixcake::shell::PixCakeTheme::apply(app); QCoreApplication::setApplicationName(QStringLiteral("PixCake")); QCoreApplication::setApplicationVersion(QStringLiteral("0.1")); QCommandLineParser parser; parser.setApplicationDescription(QStringLiteral("PixCake desktop shell")); parser.addHelpOption(); QCommandLineOption page_option(QStringList() << QStringLiteral("page"), QStringLiteral("Display a read-only shell page: login, home, library, refine, creative."), QStringLiteral("page"), QStringLiteral("login")); QCommandLineOption smoke_option(QStringList() << QStringLiteral("smoke"), QStringLiteral("Construct the selected page and exit without showing a window.")); parser.addOption(page_option); parser.addOption(smoke_option); parser.process(app); ShellWindow window(parse_page(parser.value(page_option))); if (parser.isSet(smoke_option)) return 0; window.show(); return app.exec();
+  QApplication app(argc, argv); pixcake::shell::PixCakeTheme::apply(app); QCoreApplication::setApplicationName(QStringLiteral("PixCake")); QCoreApplication::setApplicationVersion(QStringLiteral("0.1")); QCommandLineParser parser; parser.setApplicationDescription(QStringLiteral("PixCake desktop shell")); parser.addHelpOption(); QString default_page = QStringLiteral("login"); const auto executable = QFileInfo(QString::fromLocal8Bit(argv[0])).baseName(); for (const auto& page : {QStringLiteral("home"), QStringLiteral("library"), QStringLiteral("refine"), QStringLiteral("creative")}) if (executable.endsWith(QStringLiteral("-") + page)) default_page = page; QCommandLineOption page_option(QStringList() << QStringLiteral("page"), QStringLiteral("Display a read-only shell page: login, home, library, refine, creative."), QStringLiteral("page"), default_page); QCommandLineOption smoke_option(QStringList() << QStringLiteral("smoke"), QStringLiteral("Construct the selected page and exit without showing a window.")); parser.addOption(page_option); parser.addOption(smoke_option); parser.process(app); ShellWindow window(parse_page(parser.value(page_option))); if (parser.isSet(smoke_option)) return 0; window.show(); return app.exec();
 }
