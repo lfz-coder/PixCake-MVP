@@ -123,4 +123,16 @@ scan("${SOURCE_DIR}/kernel/layerdoc" "rule 13" "sqlite3.h" "pixcake/ledger/" "jp
 # 14. 工作区展示不画窗口，也不进账本或 SQLite。
 scan("${SOURCE_DIR}/kernel/workspace" "rule 14" "sqlite3.h" "pixcake/ledger/" "jpeglib.h" "QOpenGL" "#include <Q")
 
+# 15. Kernel target build files must not link forbidden UI/GPU/runtime dependencies.
+file(GLOB_RECURSE kernel_cmake "${SOURCE_DIR}/kernel/*/CMakeLists.txt")
+foreach(path ${kernel_cmake})
+  file(READ "${path}" text)
+  foreach(token "Qt5::" "Qt6::" "OpenGL" "GL/" "opencv" "cuda" "torch" "onnxruntime")
+    string(FIND "${text}" "${token}" found)
+    if(NOT found EQUAL -1)
+      message(FATAL_ERROR "rule 15: ${path} contains forbidden kernel dependency ${token}")
+    endif()
+  endforeach()
+endforeach()
+
 message(STATUS "arch dependencies ok")
