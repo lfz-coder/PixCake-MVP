@@ -29,3 +29,11 @@ add_subdirectory(kernel/command)
 add_subdirectory(kernel/project)
 add_subdirectory(storage/sqlite)
 add_subdirectory(tests)
+
+# Architecture rules are a build gate as well as a test. A forbidden kernel
+# dependency must fail the build before an artifact can be produced.
+add_custom_target(architecture_gate ALL
+  COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P ${CMAKE_SOURCE_DIR}/tests/arch/check_dependencies.cmake
+  COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P ${CMAKE_SOURCE_DIR}/tests/arch/check_capability_ownership.cmake
+  VERBATIM
+)
