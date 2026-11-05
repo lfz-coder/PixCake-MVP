@@ -77,6 +77,38 @@ const RenderMask* mask_for(const RenderInputs& inputs, const std::string& id) {
   for (const auto& mask : inputs.masks) if (mask.id == id) return &mask;
   return nullptr;
 }
+bool valid_lut(const Lut3DView& lut) {
+  if (lut.id.empty() || lut.size < 2 || lut.rgb == nullptr || lut.revision == 0) return false;
+  const auto required = static_cast<std::size_t>(lut.size) * lut.size * lut.size * 3;
+  if (lut.sample_count < required) return false;
+  for (std::size_t i = 0; i < required; ++i) if (!std::isfinite(lut.rgb[i])) return false;
+  return true;
+}
+Pixel lut_sample(const Lut3DView& lut, Pixel input) {
+  const float coordinate[3] = {clamp01(input.r) * (lut.size - 1), clamp01(input.g) * (lut.size - 1), clamp01(input.b) * (lut.size - 1)};
+  const std::uint32_t base[3] = {static_cast<std::uint32_t>(coordinate[0]), static_cast<std::uint32_t>(coordinate[1]), static_cast<std::uint32_t>(coordinate[2])};
+  const float fraction[3] = {coordinate[0] - base[0], coordinate[1] - base[1], coordinate[2] - base[2]};
+  auto sample = [&](std::uint32_t r, std::uint32_t g, std::uint32_t b) {
+    const auto index = (static_cast<std::size_t>(b) * lut.size * lut.size + static_cast<std::size_t>(g) * lut.size + r) * 3;
+    return Pixel{lut.rgb[index], lut.rgb[index + 1], lut.rgb[index + 2], input.a};
+  };
+  const std::uint32_t hi[3] = {std::min(base[0] + 1, lut.size - 1), std::min(base[1] + 1, lut.size - 1), std::min(base[2] + 1, lut.size - 1)};
+  Pixel c000 = sample(base[0], base[1], base[2]);
+  Pixel c100 = sample(hi[0], base[1], base[2]);
+  Pixel c010 = sample(base[0], hi[1], base[2]);
+  Pixel c110 = sample(hi[0], hi[1], base[2]);
+  Pixel c001 = sample(base[0], base[1], hi[2]);
+  Pixel c101 = sample(hi[0], base[1], hi[2]);
+  Pixel c011 = sample(base[0], hi[1], hi[2]);
+  Pixel c111 = sample(hi[0], hi[1], hi[2]);
+  const Pixel x00 = mix(c000, c100, fraction[0]);
+  const Pixel x10 = mix(c010, c110, fraction[0]);
+  const Pixel x01 = mix(c001, c101, fraction[0]);
+  const Pixel x11 = mix(c011, c111, fraction[0]);
+  const Pixel y0 = mix(x00, x10, fraction[1]);
+  const Pixel y1 = mix(x01, x11, fraction[1]);
+  return mix(y0, y1, fraction[2]);
+}
 
 }  // namespace
 
@@ -124,20 +156,21 @@ bool RenderExecutor::renderReference(const pixcake::render::RenderDescription& d
     if (status == PassStatus::Unregistered) record.reason = "渲染程序未注册，跳过操作";
     if (status == PassStatus::ReferenceOnly) record.reason = "仅有 reference 实现";
     result.statuses.push_back(record);
+    Lut3DView lut;
+    bool has_lut = false;
     if (status == PassStatus::MissingResource && inputs.resources != nullptr) {
-      ResolvedResource resource;
-      std::string resource_error;
-      const ResourceKind expected_kind = operation.program.find("profile") != std::string::npos ? ResourceKind::Profile : ResourceKind::Lut;
-      if (inputs.resources->resolve(operation.program, resource, resource_error) && resource.kind == expected_kind && !resource.id.empty() && resource.data != nullptr && resource.bytes != 0) {
+      std::string lut_error;
+      if (inputs.resources->resolveLut(operation.program, lut, lut_error) && valid_lut(lut) && lut.revision == description.document_revision) {
+        has_lut = true;
         result.statuses.back().status = PassStatus::ReferenceOnly;
-        result.statuses.back().reason = "资源已解析，当前 reference 不执行 LUT/Profile 像素处理";
+        result.statuses.back().reason = "结构化 3D LUT 已解析，由 reference 三线性采样";
         result.diagnostics.push_back({operation.capability_id, result.statuses.back().reason, false});
       } else {
-        result.diagnostics.push_back({operation.capability_id, resource_error.empty() ? record.reason : resource_error, false});
+        result.diagnostics.push_back({operation.capability_id, lut_error.empty() ? record.reason : lut_error, false});
+        continue;
       }
-      continue;
     }
-    if (status == PassStatus::Unregistered || status == PassStatus::MissingResource) {
+    if (status == PassStatus::Unregistered || (status == PassStatus::MissingResource && !has_lut)) {
       result.diagnostics.push_back({operation.capability_id, record.reason, false});
       continue;
     }
@@ -163,12 +196,16 @@ bool RenderExecutor::renderReference(const pixcake::render::RenderDescription& d
     for (const auto& value : operation.values) values[value.channel] = static_cast<float>(value.numeric_value);
     const bool is_color = operation.stage == "color" || operation.program.find("color") != std::string::npos;
     const bool is_tone = operation.stage == "tone" || operation.capability_id == "color.global" || operation.capability_id == "color.local" || operation.capability_id == "color.post";
-    if (!is_color && !is_tone) continue;
+    if (!is_color && !is_tone && !has_lut) continue;
     for (std::uint32_t y = 0; y < input.height; ++y) for (std::uint32_t x = 0; x < input.width; ++x) {
       const Pixel before = read(result.image, x, y);
       Pixel after = before;
-      if (is_color) after = color(after, values);
-      if (is_tone) after = tone(after, values);
+      if (has_lut) {
+        const float amount = values.find("amount") == values.end() ? 1.0F : clamp01(get(values, "amount") / 100.0F);
+        after = mix(before, lut_sample(lut, before), amount);
+      }
+      if (!has_lut && is_color) after = color(after, values);
+      if (!has_lut && is_tone) after = tone(after, values);
       float weight = 1.0F;
       for (const auto* mask : masks) weight *= mask->alpha[static_cast<std::size_t>(y) * input.width + x] / 255.0F;
       write(result.image, x, y, composite(before, after, weight, operation.blend_mode));

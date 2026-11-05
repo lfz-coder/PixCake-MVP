@@ -18,6 +18,15 @@ struct ResolvedResource {
   const std::byte* data = nullptr;
   std::size_t bytes = 0;
 };
+struct Lut3DView {
+  std::string id;
+  std::uint32_t size = 0;
+  // RGB float triples, R varying fastest, then G, then B. The provider owns
+  // the memory for the duration of resolveLut and the render call.
+  const float* rgb = nullptr;
+  std::size_t sample_count = 0;
+  std::uint64_t revision = 0;
+};
 class ResourceProvider {
  public:
   virtual ~ResourceProvider() = default;
@@ -25,6 +34,13 @@ class ResourceProvider {
   // already-resolved handle and never interprets CUBE/XMP bytes.
   virtual bool resolve(std::string_view program, ResolvedResource& resource,
                        std::string& error) const = 0;
+  virtual bool resolveLut(std::string_view program, Lut3DView& lut,
+                          std::string& error) const {
+    (void)program;
+    lut = {};
+    error = "structured 3D LUT is unavailable";
+    return false;
+  }
 };
 struct RenderInputs { std::vector<RenderMask> masks; std::vector<RenderLayer> layers; std::uint32_t preview_max_dimension = 4000; bool preview = true; const ResourceProvider* resources = nullptr; };
 struct ExecutionDiagnostic { std::string capability_id; std::string reason; bool blocking = false; };

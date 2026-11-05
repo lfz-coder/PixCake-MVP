@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cstdint>
 #include <initializer_list>
+#include <array>
 #include <string>
 #include <utility>
 
@@ -48,6 +49,34 @@ class FakeResources final : public pixcake::gpu::ResourceProvider {
   inline static const std::byte bytes_[4]{};
 };
 
+class StructuredLut final : public pixcake::gpu::ResourceProvider {
+ public:
+  explicit StructuredLut(std::uint64_t revision, bool identity = false) : revision_(revision), identity_(identity) {}
+  bool resolve(std::string_view, pixcake::gpu::ResolvedResource&, std::string& error) const override {
+    error = "opaque resource intentionally unavailable";
+    return false;
+  }
+  bool resolveLut(std::string_view, pixcake::gpu::Lut3DView& view, std::string&) const override {
+    const auto& samples = identity_ ? identity_samples_ : samples_;
+    view = {"lut-2", 2, samples.data(), samples.size(), revision_};
+    return true;
+  }
+
+ private:
+  std::uint64_t revision_;
+  bool identity_;
+  inline static constexpr std::array<float, 24> samples_ = {
+      1.0F, 0.0F, 1.0F, 0.0F, 0.0F, 1.0F,
+      1.0F, 1.0F, 1.0F, 0.0F, 1.0F, 1.0F,
+      1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F,
+      1.0F, 1.0F, 0.0F, 0.0F, 1.0F, 0.0F};
+  inline static constexpr std::array<float, 24> identity_samples_ = {
+      0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F,
+      0.0F, 1.0F, 0.0F, 1.0F, 1.0F, 0.0F,
+      0.0F, 0.0F, 1.0F, 1.0F, 0.0F, 1.0F,
+      0.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F};
+};
+
 }  // namespace
 
 int main() {
@@ -89,12 +118,42 @@ int main() {
   FakeResources resources(true);
   inputs.resources = &resources;
   assert(executor.renderReference(filter, image(128, 128, 128), inputs, result));
-  assert(!result.statuses.empty() && result.statuses.front().status == pixcake::gpu::PassStatus::ReferenceOnly);
+  assert(!result.statuses.empty() && result.statuses.front().status == pixcake::gpu::PassStatus::MissingResource);
   assert(result.image.pixels[0] == 128 && result.image.pixels[2] == 128);
   FakeResources missing_resources(false);
   inputs.resources = &missing_resources;
   assert(executor.renderReference(filter, image(128, 128, 128), inputs, result));
   assert(!result.statuses.empty() && result.statuses.front().status == pixcake::gpu::PassStatus::MissingResource);
+  inputs.resources = nullptr;
+
+  StructuredLut lut(77);
+  inputs.resources = &lut;
+  auto lut_filter = operation("color.global", "color", "pixcake.filter", {value("amount", 100.0)});
+  assert(executor.renderReference(lut_filter, image(64, 128, 192), inputs, result));
+  assert(result.statuses.front().status == pixcake::gpu::PassStatus::ReferenceOnly);
+  assert(result.image.pixels[0] >= 190 && result.image.pixels[0] <= 192);
+  assert(result.image.pixels[1] >= 127 && result.image.pixels[1] <= 129);
+  assert(result.image.pixels[2] >= 62 && result.image.pixels[2] <= 64);
+  StructuredLut identity_lut(77, true);
+  inputs.resources = &identity_lut;
+  assert(executor.renderReference(lut_filter, image(64, 128, 192), inputs, result));
+  assert(result.image.pixels[0] == 64 && result.image.pixels[1] == 128 && result.image.pixels[2] == 192);
+
+  auto half_lut = operation("color.global", "color", "pixcake.filter", {value("amount", 50.0)});
+  inputs.resources = &lut;
+  assert(executor.renderReference(half_lut, image(64, 128, 192), inputs, result));
+  assert(result.image.pixels[0] >= 126 && result.image.pixels[0] <= 129);
+  auto masked_lut = half_lut;
+  masked_lut.operations[0].mask_ids = {"half"};
+  inputs.masks.push_back({"half", 1, 1, {128}});
+  assert(executor.renderReference(masked_lut, image(64, 128, 192), inputs, result));
+  assert(result.image.pixels[0] >= 94 && result.image.pixels[0] <= 98);
+  inputs.masks.clear();
+  StructuredLut stale_lut(78);
+  inputs.resources = &stale_lut;
+  assert(executor.renderReference(lut_filter, image(64, 128, 192), inputs, result));
+  assert(result.statuses.front().status == pixcake::gpu::PassStatus::MissingResource);
+  assert(result.image.pixels[0] == 64);
   inputs.resources = nullptr;
 
   auto profile = operation("color.global", "color", "pixcake.profile", {value("amount", 100.0)});
