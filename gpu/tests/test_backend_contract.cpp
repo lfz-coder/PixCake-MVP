@@ -45,11 +45,16 @@ int main(int argc, char** argv) {
 
   pixcake::gl::Buffer buffer;
   EXPECT(!buffer.bind(&error));
+  EXPECT(!buffer.write(0, nullptr, 1, &error));
   pixcake::gl::VertexArray vertex_array;
   EXPECT(!vertex_array.bind(&error));
+  EXPECT(!vertex_array.enableAttribute(0, 0, pixcake::gl::AttributeType::Float32, 8, 0, false,
+                                       &error));
   pixcake::gl::Texture2D texture;
+  EXPECT(!texture.allocate(0, 1, pixcake::gl::PixelFormat::RGBA8, &error));
   EXPECT(!texture.bind(0, &error));
   pixcake::gl::Framebuffer framebuffer;
+  EXPECT(!framebuffer.attachColor(texture, &error));
   EXPECT(!framebuffer.complete(&error));
   pixcake::gl::Fence fence;
   EXPECT(!fence.wait(0, &error));
