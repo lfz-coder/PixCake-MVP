@@ -206,6 +206,15 @@ int main() {
   assert(result.image.pixels[0] >= 63 && result.image.pixels[0] <= 65);
   assert(result.image.pixels[2] >= 126 && result.image.pixels[2] <= 129);
 
+  pixcake::gpu::RenderInputs blend_layers;
+  blend_layers.layers.push_back({image(255, 0, 0), "", 1.0F, "multiply", true, 2});
+  blend_layers.layers.push_back({image(0, 0, 255), "", 0.5F, "screen", true, 1});
+  assert(executor.renderReference(empty, image(128, 128, 128), blend_layers, result));
+  // Order 1 (screen blue at 50%) is applied before order 2 (multiply red).
+  assert(result.image.pixels[0] >= 127 && result.image.pixels[0] <= 129);
+  assert(result.image.pixels[1] == 0);
+  assert(result.image.pixels[2] == 0);
+
   pixcake::gpu::RenderInputs hidden_layer;
   hidden_layer.layers.push_back({image(255, 0, 0), "", 1.0F, "normal", false, 1});
   assert(executor.renderReference(empty, image(0, 0, 0), hidden_layer, result));
