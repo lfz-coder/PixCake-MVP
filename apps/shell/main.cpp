@@ -244,6 +244,40 @@ class ShellWindow final : public QMainWindow {
       color_layout->addWidget(name);
     }
     modules_layout->addWidget(color_labels);
+    auto* clothing_labels = new QFrame(modules);
+    clothing_labels->setObjectName(QStringLiteral("refine-clothing-labels"));
+    clothing_labels->setAccessibleName(QStringLiteral("衣服调整"));
+    auto* clothing_layout = new QVBoxLayout(clothing_labels);
+    clothing_layout->setContentsMargins(0, 0, 0, 0);
+    const QStringList clothing_visible = {
+        QStringLiteral("上衣祛褶皱"), QStringLiteral("上衣祛褶皱-祛粗褶皱"),
+        QStringLiteral("上衣祛褶皱-祛细褶皱"), QStringLiteral("下装祛褶皱"),
+        QStringLiteral("下装祛褶皱-祛粗褶皱"), QStringLiteral("下装祛褶皱-祛细褶皱"),
+        QStringLiteral("衣服祛汗渍"), QStringLiteral("衣服祛瑕疵"),
+        QStringLiteral("衣服祛褶皱"), QStringLiteral("衣服祛褶皱-祛粗褶皱"),
+        QStringLiteral("衣服祛褶皱-祛细褶皱"), QStringLiteral("衣服边缘平整"),
+        QStringLiteral("道具保护")};
+    const QStringList clothing_full = {
+        QStringLiteral("衣物美化-衣服调整-上衣祛褶皱"),
+        QStringLiteral("衣物美化-衣服调整-上衣祛褶皱-祛粗褶皱"),
+        QStringLiteral("衣物美化-衣服调整-上衣祛褶皱-祛细褶皱"),
+        QStringLiteral("衣物美化-衣服调整-下装祛褶皱"),
+        QStringLiteral("衣物美化-衣服调整-下装祛褶皱-祛粗褶皱"),
+        QStringLiteral("衣物美化-衣服调整-下装祛褶皱-祛细褶皱"),
+        QStringLiteral("衣物美化-衣服调整-衣服祛汗渍"),
+        QStringLiteral("衣物美化-衣服调整-衣服祛瑕疵"),
+        QStringLiteral("衣物美化-衣服调整-衣服祛褶皱"),
+        QStringLiteral("衣物美化-衣服调整-衣服祛褶皱-祛粗褶皱"),
+        QStringLiteral("衣物美化-衣服调整-衣服祛褶皱-祛细褶皱"),
+        QStringLiteral("衣物美化-衣服调整-衣服边缘平整"),
+        QStringLiteral("衣物美化-衣服调整-道具保护")};
+    for (int i = 0; i < clothing_visible.size(); ++i) {
+      auto* name = text(clothing_visible.at(i));
+      name->setAccessibleName(clothing_full.at(i));
+      name->setEnabled(false);
+      clothing_layout->addWidget(name);
+    }
+    modules_layout->addWidget(clothing_labels);
     modules_layout->addStretch(); center->addWidget(modules); outer->addLayout(center, 1); outer->addWidget(thumbnail_strip(page)); set_body(page);
   }
   void render_library() {
