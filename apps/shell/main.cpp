@@ -1,6 +1,7 @@
 #include "pixcake/ui/shell/shell_display.hpp"
 #include "pixcake_theme.hpp"
 #include "pixcake_widgets.hpp"
+#include "refine_verified_labels.hpp"
 #include <QApplication>
 #include <QCommandLineOption>
 #include <QCommandLineParser>
@@ -278,6 +279,23 @@ class ShellWindow final : public QMainWindow {
       clothing_layout->addWidget(name);
     }
     modules_layout->addWidget(clothing_labels);
+    const auto add_verified = [&](const QString& object_name, const QString& accessible, const QStringList& labels) {
+      auto* frame = new QFrame(modules);
+      frame->setObjectName(object_name);
+      frame->setAccessibleName(accessible);
+      auto* layout = new QVBoxLayout(frame);
+      layout->setContentsMargins(0, 0, 0, 0);
+      for (const auto& label : labels) {
+        auto* name = text(label);
+        name->setAccessibleName(label);
+        name->setEnabled(false);
+        layout->addWidget(name);
+      }
+      modules_layout->addWidget(frame);
+    };
+    add_verified(QStringLiteral("refine-portrait-labels"), QStringLiteral("人像美化"), pixcake::shell::verifiedPortraitLabels());
+    add_verified(QStringLiteral("refine-image-labels"), QStringLiteral("图像美化"), pixcake::shell::verifiedImageLabels());
+    add_verified(QStringLiteral("refine-pet-labels"), QStringLiteral("宠物"), pixcake::shell::verifiedPetLabels());
     modules_layout->addStretch(); center->addWidget(modules); outer->addLayout(center, 1); outer->addWidget(thumbnail_strip(page)); set_body(page);
   }
   void render_library() {
