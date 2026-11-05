@@ -5,6 +5,7 @@
 #include <QCommandLineOption>
 #include <QCommandLineParser>
 #include <QGroupBox>
+#include <QHash>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QFileInfo>
@@ -205,7 +206,45 @@ class ShellWindow final : public QMainWindow {
     auto* toolbar = new pixcake::shell::PixCakeToolbar(QStringLiteral("workspace-tools"), page); auto* toolbar_layout = static_cast<QHBoxLayout*>(toolbar->layout()); toolbar_layout->setSpacing(4);
     const auto tools = {QStringLiteral("显示比例调整"), QStringLiteral("抓手"), QStringLiteral("祛边"), QStringLiteral("参考线"), QStringLiteral("液化"), QStringLiteral("污点修复"), QStringLiteral("修补"), QStringLiteral("仿制图章"), QStringLiteral("智能消除"), QStringLiteral("AI点修"), QStringLiteral("重置效果"), QStringLiteral("预设")}; for (const auto& label : tools) toolbar_layout->addWidget(workspace_tool(label, toolbar)); toolbar_layout->addStretch(); outer->addWidget(toolbar);
     auto* center = new QHBoxLayout; center->setSpacing(4); auto* canvas = new QFrame(page); canvas->setObjectName(QStringLiteral("workspace-canvas")); auto* canvas_layout = new QVBoxLayout(canvas); auto* preview = text(QStringLiteral("预览区域\n暂无已加载照片"), true); preview->setAlignment(Qt::AlignCenter); canvas_layout->addWidget(preview, 1); auto* compare = action(QStringLiteral("查看对比"), canvas); compare->setEnabled(false); canvas_layout->addWidget(compare, 0, Qt::AlignRight); center->addWidget(canvas, 1);
-    auto* modules = new QFrame(page); modules->setObjectName(QStringLiteral("workspace-side")); modules->setMinimumWidth(pixcake::shell::PixCakeTheme::kWorkspaceSideWidth); modules->setAccessibleName(QStringLiteral("功能区")); auto* modules_layout = new QVBoxLayout(modules); modules_layout->setContentsMargins(14, 12, 14, 12); modules_layout->addWidget(text(QStringLiteral("功能区"))); const QStringList module_labels = {QStringLiteral("AI色彩"), QStringLiteral("调色"), QStringLiteral("局部"), QStringLiteral("人像"), QStringLiteral("图像"), QStringLiteral("衣物"), QStringLiteral("宠物"), QStringLiteral("后调色"), QStringLiteral("裁剪"), QStringLiteral("历史"), QStringLiteral("联机")}; for (const auto& label : module_labels) { auto* button = action(label, modules); button->setEnabled(false); modules_layout->addWidget(button); } modules_layout->addStretch(); center->addWidget(modules); outer->addLayout(center, 1); outer->addWidget(thumbnail_strip(page)); set_body(page);
+    auto* modules = new QFrame(page); modules->setObjectName(QStringLiteral("workspace-side")); modules->setMinimumWidth(pixcake::shell::PixCakeTheme::kWorkspaceSideWidth); modules->setAccessibleName(QStringLiteral("功能区")); auto* modules_layout = new QVBoxLayout(modules); modules_layout->setContentsMargins(14, 12, 14, 12); modules_layout->addWidget(text(QStringLiteral("功能区"))); const QStringList module_labels = {QStringLiteral("AI色彩"), QStringLiteral("调色"), QStringLiteral("局部"), QStringLiteral("人像"), QStringLiteral("图像"), QStringLiteral("衣物"), QStringLiteral("宠物"), QStringLiteral("后调色"), QStringLiteral("裁剪"), QStringLiteral("历史"), QStringLiteral("联机")};
+    const QHash<QString, QString> module_descriptions = {
+        {QStringLiteral("调色"), QStringLiteral("色彩调节")},
+        {QStringLiteral("局部"), QStringLiteral("局部调色")},
+        {QStringLiteral("人像"), QStringLiteral("人像美化")},
+        {QStringLiteral("图像"), QStringLiteral("图像美化")},
+        {QStringLiteral("衣物"), QStringLiteral("衣物美化")},
+        {QStringLiteral("后调色"), QStringLiteral("后期调色")},
+        {QStringLiteral("裁剪"), QStringLiteral("裁剪、旋转")},
+        {QStringLiteral("历史"), QStringLiteral("历史记录")},
+        {QStringLiteral("联机"), QStringLiteral("联机拍摄")}};
+    for (const auto& label : module_labels) { auto* button = action(label, modules); button->setEnabled(false); if (module_descriptions.contains(label)) button->setAccessibleDescription(module_descriptions.value(label)); modules_layout->addWidget(button); }
+    auto* color_labels = new QFrame(modules);
+    color_labels->setObjectName(QStringLiteral("refine-color-labels"));
+    color_labels->setAccessibleName(QStringLiteral("色彩调节"));
+    auto* color_layout = new QVBoxLayout(color_labels);
+    color_layout->setContentsMargins(0, 0, 0, 0);
+    const QStringList color_names = {
+        QStringLiteral("开启 AI 色彩风格"), QStringLiteral("配置文件"),
+        QStringLiteral("色彩调节"), QStringLiteral("预设"), QStringLiteral("滤镜"),
+        QStringLiteral("推荐"), QStringLiteral("我的"), QStringLiteral("AI 校准"),
+        QStringLiteral("程度"), QStringLiteral("白平衡"), QStringLiteral("AI校准白平衡"),
+        QStringLiteral("白平衡选择器"), QStringLiteral("色温"), QStringLiteral("色调"),
+        QStringLiteral("影调"), QStringLiteral("AI校准曝光"), QStringLiteral("曝光"),
+        QStringLiteral("对比度"), QStringLiteral("亮度"), QStringLiteral("高光"),
+        QStringLiteral("阴影"), QStringLiteral("白色"), QStringLiteral("黑色"),
+        QStringLiteral("纹理"), QStringLiteral("清晰度"), QStringLiteral("祛雾"),
+        QStringLiteral("鲜艳度"), QStringLiteral("饱和度"), QStringLiteral("色阶"),
+        QStringLiteral("曲线"), QStringLiteral("HSL"), QStringLiteral("色彩编辑器"),
+        QStringLiteral("颜色分级"), QStringLiteral("可选颜色"), QStringLiteral("细节"),
+        QStringLiteral("颗粒"), QStringLiteral("镜头调整"), QStringLiteral("透视矫正"),
+        QStringLiteral("校准"), QStringLiteral("创意色彩")};
+    for (const auto& label : color_names) {
+      auto* name = text(label);
+      name->setEnabled(false);
+      color_layout->addWidget(name);
+    }
+    modules_layout->addWidget(color_labels);
+    modules_layout->addStretch(); center->addWidget(modules); outer->addLayout(center, 1); outer->addWidget(thumbnail_strip(page)); set_body(page);
   }
   void render_library() {
     auto* page = new QWidget; page->setObjectName(QStringLiteral("library-page")); auto* outer = new QVBoxLayout(page); outer->setContentsMargins(0, 0, 0, 0); outer->setSpacing(4);
