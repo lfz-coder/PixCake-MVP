@@ -1,0 +1,13 @@
+set(PIXCAKE_GL_BACKEND "qt" CACHE STRING "GPU backend used by pixcake_gpu_facade (qt or native)")
+set_property(CACHE PIXCAKE_GL_BACKEND PROPERTY STRINGS qt native)
+
+add_subdirectory(facade)
+if(PIXCAKE_GL_BACKEND STREQUAL "qt")
+  add_subdirectory(backend/qt)
+  target_link_libraries(pixcake_gpu_facade INTERFACE pixcake_gpu_backend_qt)
+elseif(PIXCAKE_GL_BACKEND STREQUAL "native")
+  add_subdirectory(backend/native)
+  target_link_libraries(pixcake_gpu_facade INTERFACE pixcake_gpu_backend_native)
+else()
+  message(FATAL_ERROR "PIXCAKE_GL_BACKEND must be qt or native")
+endif()

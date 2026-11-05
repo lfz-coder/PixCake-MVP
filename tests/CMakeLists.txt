@@ -1,3 +1,8 @@
+add_executable(test_gpu_backend ${CMAKE_SOURCE_DIR}/gpu/tests/test_backend_contract.cpp)
+target_link_libraries(test_gpu_backend PRIVATE pixcake_gpu_facade pixcake_warnings)
+add_test(NAME test_gpu_backend COMMAND test_gpu_backend)
+set_tests_properties(test_gpu_backend PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(test_support kernel/support/test_support.cpp)
 target_link_libraries(test_support PRIVATE pixcake_support pixcake_warnings)
 add_test(NAME test_support COMMAND test_support)
