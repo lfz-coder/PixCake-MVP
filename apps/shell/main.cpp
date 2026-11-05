@@ -502,6 +502,28 @@ class ShellWindow final : public QMainWindow {
     add_verified(QStringLiteral("refine-portrait-labels"), QStringLiteral("人像美化"), pixcake::shell::verifiedPortraitLabels());
     add_verified(QStringLiteral("refine-image-labels"), QStringLiteral("图像美化"), pixcake::shell::verifiedImageLabels());
     add_verified(QStringLiteral("refine-pet-labels"), QStringLiteral("宠物"), pixcake::shell::verifiedPetLabels());
+    auto* crop_labels = new QFrame(modules);
+    crop_labels->setObjectName(QStringLiteral("refine-crop-labels"));
+    crop_labels->setAccessibleName(QStringLiteral("裁剪、旋转"));
+    auto* crop_layout = new QVBoxLayout(crop_labels);
+    crop_layout->setContentsMargins(0, 0, 0, 0);
+    const QStringList crop_names = {
+        QStringLiteral("裁剪"), QStringLiteral("原始尺寸"), QStringLiteral("原照设置"),
+        QStringLiteral("固定比例"), QStringLiteral("长*宽*分辨率"), QStringLiteral("自由尺寸"),
+        QStringLiteral("证件照尺寸"), QStringLiteral("我的裁剪预设"), QStringLiteral("AI智能裁剪"),
+        QStringLiteral("网格线"), QStringLiteral("分格数"), QStringLiteral("几何中心十字线"),
+        QStringLiteral("旋转"), QStringLiteral("逆时针"), QStringLiteral("顺时针"),
+        QStringLiteral("水平翻转"), QStringLiteral("垂直翻转"), QStringLiteral("角度滑杆"),
+        QStringLiteral("AI水平矫正")};
+    for (const auto& label : crop_names) {
+      auto* name = text(label);
+      name->setEnabled(false);
+      if (label == QStringLiteral("角度滑杆")) {
+        name->setAccessibleName(QStringLiteral("角度滑杆，范围 -45 到 45，默认和步进手册未写"));
+      }
+      crop_layout->addWidget(name);
+    }
+    modules_layout->addWidget(crop_labels);
     modules_layout->addStretch(); center->addWidget(modules); outer->addLayout(center, 1); outer->addWidget(thumbnail_strip(page)); set_body(page);
   }
   void render_library() {
@@ -533,5 +555,5 @@ class ShellWindow final : public QMainWindow {
 };
 }
 int main(int argc, char** argv) {
-  QApplication app(argc, argv); pixcake::shell::PixCakeTheme::apply(app); QCoreApplication::setApplicationName(QStringLiteral("PixCake")); QCoreApplication::setApplicationVersion(QStringLiteral("0.1")); QCommandLineParser parser; parser.setApplicationDescription(QStringLiteral("PixCake desktop shell")); parser.addHelpOption(); QString default_page = QStringLiteral("login"); const auto executable = QFileInfo(QString::fromLocal8Bit(argv[0])).baseName(); for (const auto& page : {QStringLiteral("home"), QStringLiteral("library"), QStringLiteral("refine"), QStringLiteral("creative")}) if (executable.endsWith(QStringLiteral("-") + page)) default_page = page; QCommandLineOption page_option(QStringList() << QStringLiteral("page"), QStringLiteral("Display a read-only shell page: login, home, library, refine, creative."), QStringLiteral("page"), default_page); QCommandLineOption smoke_option(QStringList() << QStringLiteral("smoke"), QStringLiteral("Construct the selected page and exit without showing a window.")); parser.addOption(page_option); parser.addOption(smoke_option); parser.process(app); ShellWindow window(parse_page(parser.value(page_option))); if (parser.isSet(smoke_option)) { const auto bundled = QCoreApplication::applicationDirPath() + QStringLiteral("/../Resources/assets/"); for (const auto& relative : pixcake::shell::uploadedShellAssets()) { if (!QFileInfo::exists(bundled + relative) || pixcake::shell::loadAssetPixmap(relative, 16).isNull()) { qCritical("missing shell asset: %s", qPrintable(relative)); return 2; } } return 0; } window.show(); return app.exec();
+  QApplication app(argc, argv); pixcake::shell::PixCakeTheme::apply(app); QCoreApplication::setApplicationName(QStringLiteral("PixCake")); QCoreApplication::setApplicationVersion(QStringLiteral("0.1")); QCommandLineParser parser; parser.setApplicationDescription(QStringLiteral("PixCake desktop shell")); parser.addHelpOption(); QString default_page = QStringLiteral("login"); const auto executable = QFileInfo(QString::fromLocal8Bit(argv[0])).baseName(); for (const auto& page : {QStringLiteral("home"), QStringLiteral("library"), QStringLiteral("refine"), QStringLiteral("creative")}) if (executable.endsWith(QStringLiteral("-") + page)) default_page = page; QCommandLineOption page_option(QStringList() << QStringLiteral("page"), QStringLiteral("Display a read-only shell page: login, home, library, refine, creative."), QStringLiteral("page"), default_page); QCommandLineOption smoke_option(QStringList() << QStringLiteral("smoke"), QStringLiteral("Construct the selected page and exit without showing a window.")); parser.addOption(page_option); parser.addOption(smoke_option); parser.process(app); ShellWindow window(parse_page(parser.value(page_option))); if (parser.isSet(smoke_option)) { const auto bundled = QCoreApplication::applicationDirPath() + QStringLiteral("/../Resources/assets/"); for (const auto& relative : pixcake::shell::uploadedShellAssets()) { if (!QFileInfo::exists(bundled + relative) || pixcake::shell::loadAssetPixmap(relative, 16).isNull()) { qCritical("missing shell asset: %s", qPrintable(relative)); return 2; } } if (parse_page(parser.value(page_option)) == Page::Refine) { auto* crop = window.findChild<QWidget*>(QStringLiteral("refine-crop-labels")); const QStringList expected = {QStringLiteral("裁剪"), QStringLiteral("原始尺寸"), QStringLiteral("原照设置"), QStringLiteral("固定比例"), QStringLiteral("长*宽*分辨率"), QStringLiteral("自由尺寸"), QStringLiteral("证件照尺寸"), QStringLiteral("我的裁剪预设"), QStringLiteral("AI智能裁剪"), QStringLiteral("网格线"), QStringLiteral("分格数"), QStringLiteral("几何中心十字线"), QStringLiteral("旋转"), QStringLiteral("逆时针"), QStringLiteral("顺时针"), QStringLiteral("水平翻转"), QStringLiteral("垂直翻转"), QStringLiteral("角度滑杆"), QStringLiteral("AI水平矫正")}; QStringList found; if (crop != nullptr) { for (auto* label : crop->findChildren<QLabel*>()) { found.append(label->text()); if (label->isEnabled()) { qCritical("refine crop label enabled"); return 3; } } } if (crop == nullptr || found != expected) { qCritical("missing refine crop labels"); return 3; } } return 0; } window.show(); return app.exec();
 }
