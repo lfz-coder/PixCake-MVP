@@ -239,10 +239,48 @@ class ShellWindow final : public QMainWindow {
         QStringLiteral("颜色分级"), QStringLiteral("可选颜色"), QStringLiteral("细节"),
         QStringLiteral("颗粒"), QStringLiteral("镜头调整"), QStringLiteral("透视矫正"),
         QStringLiteral("校准"), QStringLiteral("创意色彩")};
-    for (const auto& label : color_names) {
+    const QStringList ranged_sliders = {
+        QStringLiteral("程度"), QStringLiteral("色温"), QStringLiteral("色调"),
+        QStringLiteral("曝光"), QStringLiteral("对比度"), QStringLiteral("亮度"),
+        QStringLiteral("高光"), QStringLiteral("阴影"), QStringLiteral("白色"),
+        QStringLiteral("黑色"), QStringLiteral("纹理"), QStringLiteral("清晰度"),
+        QStringLiteral("祛雾"), QStringLiteral("鲜艳度"), QStringLiteral("饱和度")};
+    const auto add_disabled_slider = [&](QLayout* layout, const QString& label, const QString& accessible, int minimum, int maximum, int value, const QString& object_name) {
+      auto* row = new QWidget(modules);
+      auto* row_layout = new QHBoxLayout(row);
+      row_layout->setContentsMargins(0, 0, 0, 0);
+      row_layout->setSpacing(6);
       auto* name = text(label);
       name->setEnabled(false);
-      color_layout->addWidget(name);
+      auto* slider = new QSlider(Qt::Horizontal, row);
+      if (!object_name.isEmpty()) slider->setObjectName(object_name);
+      slider->setRange(minimum, maximum);
+      slider->setSingleStep(1);
+      slider->setValue(value);
+      slider->setEnabled(false);
+      slider->setAccessibleName(accessible);
+      auto* reading = text(QString::number(value));
+      reading->setEnabled(false);
+      row_layout->addWidget(name);
+      row_layout->addWidget(slider, 1);
+      row_layout->addWidget(reading);
+      layout->addWidget(row);
+    };
+    for (const auto& label : color_names) {
+      if (ranged_sliders.contains(label)) {
+        add_disabled_slider(color_layout, label,
+                            QStringLiteral("%1，范围 -100 到 100，步进 1，默认 0").arg(label),
+                            -100, 100, 0, QString());
+      } else {
+        auto* name = text(label);
+        name->setEnabled(false);
+        color_layout->addWidget(name);
+      }
+      if (label == QStringLiteral("创意色彩")) {
+        add_disabled_slider(color_layout, QStringLiteral("程度"),
+                            QStringLiteral("创意色彩程度，范围 0 到 100，步进 1，默认 0"),
+                            0, 100, 0, QStringLiteral("refine-creative-color-amount"));
+      }
     }
     modules_layout->addWidget(color_labels);
     auto* clothing_labels = new QFrame(modules);

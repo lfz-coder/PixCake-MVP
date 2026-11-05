@@ -7,8 +7,8 @@
 namespace pixcake::shell {
 
 // Visual tokens live in the shell. The official screenshots establish the
-// dark-workspace/yellow-accent relationship; exact icon and font assets remain
-// pending until the original resources are available.
+// dark-workspace/yellow-accent relationship. User-supplied SVG files in
+// assets/ are drawn as provided; missing files stay pending-icon.
 struct PixCakeTheme final {
   static constexpr int kWindowWidth = 1386;
   static constexpr int kWindowHeight = 832;
@@ -88,6 +88,7 @@ struct PixCakeTheme final {
       QFrame#pixcake-status-strip { background: #111111; border: 1px solid #303030; border-radius: 4px; }
       QFrame#pixcake-section { background: #171717; border: 1px solid #2d2d2d; border-radius: 8px; }
       QLabel#pending-icon { color: #777777; background: #303030; border: 1px solid #555555; border-radius: 8px; }
+      QLabel#shell-icon { background: transparent; border: none; }
       QFrame#empty-state { background: transparent; border: none; }
       QLabel#empty-state-title { color: #d8d8d8; font-size: 15px; font-weight: 500; }
       QLabel#empty-state-detail { color: #929292; }
@@ -96,6 +97,9 @@ struct PixCakeTheme final {
       QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; color: #eeeeee; }
       QFrame#login-divider-line { background: #454545; min-height: 1px; max-height: 1px; }
       QScrollArea { border: none; background: #141414; }
+      QSlider::groove:horizontal { height: 4px; background: #4a4a4a; border-radius: 2px; }
+      QSlider::sub-page:horizontal { background: #d0d0d0; border-radius: 2px; }
+      QSlider::handle:horizontal { width: 14px; height: 14px; margin: -5px 0; background: #d9d9d9; border-radius: 7px; }
     )QSS");
   }
 
