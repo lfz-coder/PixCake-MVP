@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <set>
+#include <string_view>
 
 namespace pixcake::gpu {
 namespace {
@@ -78,6 +80,21 @@ const RenderMask* mask_for(const RenderInputs& inputs, const std::string& id) {
 
 }  // namespace
 
+PassStatus PassRegistry::classify(const pixcake::render::RenderOperation& operation) {
+  if (!operation.enabled) return PassStatus::Disabled;
+  if (operation.program.find("filter") != std::string::npos || operation.program.find("profile") != std::string::npos) return PassStatus::MissingResource;
+  if (operation.program == "pixcake.color.global") return gpuSupported(operation) ? PassStatus::Implemented : PassStatus::ReferenceOnly;
+  if (operation.program == "pixcake.color.local" || operation.program == "pixcake.color.post" || operation.program == "pixcake.color.match" || operation.program == "pixcake.color.style") return PassStatus::ReferenceOnly;
+  return PassStatus::Unregistered;
+}
+
+bool PassRegistry::gpuSupported(const pixcake::render::RenderOperation& operation) {
+  if (operation.capability_id != "color.global" || operation.blend_mode != "normal" || !operation.mask_ids.empty()) return false;
+  static const std::set<std::string_view> channels = {"temperature", "tint", "exposure", "contrast"};
+  for (const auto& value : operation.values) if (channels.find(value.channel) == channels.end() && std::abs(value.numeric_value) > 1e-9) return false;
+  return true;
+}
+
 bool RenderExecutor::renderReference(const pixcake::render::RenderDescription& description,
                                      const RgbaImage& input, const RenderInputs& inputs,
                                      RenderResult& result) const {
@@ -88,6 +105,11 @@ bool RenderExecutor::renderReference(const pixcake::render::RenderDescription& d
     result.diagnostics.push_back({"", "输入 RGBA 帧为空或行距无效", true});
     return false;
   }
+  if (input.revision != 0 && input.revision != description.document_revision) {
+    result.diagnostics.push_back({"", "输入帧修订号与绘制描述不一致", true});
+    result.statuses.push_back({"", "frame", PassStatus::InvalidInput, "输入帧修订号与绘制描述不一致"});
+    return false;
+  }
   result.image = input;
   result.image.row_stride = stride;
   result.image.revision = description.document_revision;
@@ -95,8 +117,25 @@ bool RenderExecutor::renderReference(const pixcake::render::RenderDescription& d
     result.diagnostics.push_back({diagnostic.capability_id, diagnostic.reason, diagnostic.blocking});
   }
   for (const auto& operation : description.operations) {
+    const auto status = PassRegistry::classify(operation);
+    PassStatusRecord record{operation.capability_id, operation.program, status, {}};
+    if (status == PassStatus::Disabled) record.reason = operation.disabled_reason.empty() ? "操作已禁用" : operation.disabled_reason;
+    if (status == PassStatus::MissingResource) record.reason = "滤镜或配置文件资源未解析，跳过操作";
+    if (status == PassStatus::Unregistered) record.reason = "渲染程序未注册，跳过操作";
+    if (status == PassStatus::ReferenceOnly) record.reason = "仅有 reference 实现";
+    result.statuses.push_back(record);
+    if (status == PassStatus::Unregistered || status == PassStatus::MissingResource) {
+      result.diagnostics.push_back({operation.capability_id, record.reason, false});
+      continue;
+    }
     if (!operation.enabled) {
       result.diagnostics.push_back({operation.capability_id, operation.disabled_reason.empty() ? "操作已禁用" : operation.disabled_reason, false});
+      continue;
+    }
+    if (operation.blend_mode != "normal" && operation.blend_mode != "multiply" && operation.blend_mode != "screen") {
+      result.statuses.back().status = PassStatus::InvalidInput;
+      result.statuses.back().reason = "未知混合模式，跳过操作";
+      result.diagnostics.push_back({operation.capability_id, "未知混合模式，跳过操作", false});
       continue;
     }
     std::vector<const RenderMask*> masks;
@@ -106,25 +145,17 @@ bool RenderExecutor::renderReference(const pixcake::render::RenderDescription& d
       if (mask == nullptr || mask->width != input.width || mask->height != input.height || mask->alpha.size() < static_cast<std::size_t>(input.width) * input.height) { missing = true; break; }
       masks.push_back(mask);
     }
-    if (missing) { result.diagnostics.push_back({operation.capability_id, "蒙版缺失或尺寸不匹配，跳过操作", false}); continue; }
+    if (missing) { result.statuses.back().status = PassStatus::MissingResource; result.statuses.back().reason = "蒙版缺失或尺寸不匹配，跳过操作"; result.diagnostics.push_back({operation.capability_id, "蒙版缺失或尺寸不匹配，跳过操作", false}); continue; }
     std::map<std::string, float> values;
     for (const auto& value : operation.values) values[value.channel] = static_cast<float>(value.numeric_value);
     const bool is_color = operation.stage == "color" || operation.program.find("color") != std::string::npos;
     const bool is_tone = operation.stage == "tone" || operation.capability_id == "color.global" || operation.capability_id == "color.local" || operation.capability_id == "color.post";
-    const bool is_filter = operation.program.find("filter") != std::string::npos || operation.program.find("profile") != std::string::npos;
-    if (!is_color && !is_tone && !is_filter) {
-      result.diagnostics.push_back({operation.capability_id, "渲染程序没有 reference 实现，跳过操作", false});
-      continue;
-    }
+    if (!is_color && !is_tone) continue;
     for (std::uint32_t y = 0; y < input.height; ++y) for (std::uint32_t x = 0; x < input.width; ++x) {
       const Pixel before = read(result.image, x, y);
       Pixel after = before;
       if (is_color) after = color(after, values);
       if (is_tone) after = tone(after, values);
-      if (is_filter) {
-        const float amount = clamp01(get(values, "amount") / 100.0F);
-        after = mix(after, {after.r * 1.04F + 0.02F, after.g * 1.01F, after.b * 0.96F, after.a}, amount);
-      }
       float weight = 1.0F;
       for (const auto* mask : masks) weight *= mask->alpha[static_cast<std::size_t>(y) * input.width + x] / 255.0F;
       write(result.image, x, y, composite(before, after, weight, operation.blend_mode));
@@ -134,9 +165,21 @@ bool RenderExecutor::renderReference(const pixcake::render::RenderDescription& d
   std::sort(layers.begin(), layers.end(), [](const RenderLayer& a, const RenderLayer& b) { return a.order < b.order; });
   for (const auto& layer : layers) {
     const auto layer_stride = layer.image.row_stride == 0 ? layer.image.width * 4 : layer.image.row_stride;
-    if (!layer.visible || layer.image.width != input.width || layer.image.height != input.height || layer.image.pixels.size() < static_cast<std::size_t>(layer_stride) * layer.image.height) continue;
+    const std::string layer_id = "layer:" + std::to_string(layer.order);
+    if (!layer.visible) { result.statuses.push_back({layer_id, "layer", PassStatus::Disabled, "图层已隐藏"}); continue; }
+    if (layer.image.width != input.width || layer.image.height != input.height || layer_stride < input.width * 4 || layer.image.pixels.size() < static_cast<std::size_t>(layer_stride) * layer.image.height) {
+      result.statuses.push_back({layer_id, "layer", PassStatus::MissingResource, "图层尺寸或行距无效，跳过图层"});
+      result.diagnostics.push_back({layer_id, "图层尺寸或行距无效，跳过图层", false});
+      continue;
+    }
+    if (layer.blend_mode != "normal" && layer.blend_mode != "multiply" && layer.blend_mode != "screen") {
+      result.statuses.push_back({layer_id, "layer", PassStatus::InvalidInput, "未知图层混合模式，跳过图层"});
+      result.diagnostics.push_back({layer_id, "未知图层混合模式，跳过图层", false});
+      continue;
+    }
     const auto* mask = layer.mask_id.empty() ? nullptr : mask_for(inputs, layer.mask_id);
-    if (!layer.mask_id.empty() && mask == nullptr) { result.diagnostics.push_back({"", "图层蒙版缺失，跳过图层", false}); continue; }
+    if (!layer.mask_id.empty() && (mask == nullptr || mask->width != input.width || mask->height != input.height || mask->alpha.size() < static_cast<std::size_t>(input.width) * input.height)) { result.statuses.push_back({layer_id, "layer", PassStatus::MissingResource, "图层蒙版缺失或尺寸不匹配，跳过图层"}); result.diagnostics.push_back({layer_id, "图层蒙版缺失或尺寸不匹配，跳过图层", false}); continue; }
+    result.statuses.push_back({layer_id, "layer", PassStatus::Implemented, {}});
     for (std::uint32_t y = 0; y < input.height; ++y) for (std::uint32_t x = 0; x < input.width; ++x) {
       const float amount = layer.opacity * (mask == nullptr ? 1.0F : mask->alpha[static_cast<std::size_t>(y) * input.width + x] / 255.0F);
       write(result.image, x, y, composite(read(result.image, x, y), read(layer.image, x, y), amount, layer.blend_mode));

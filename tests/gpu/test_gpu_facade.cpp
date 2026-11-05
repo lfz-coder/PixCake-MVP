@@ -38,6 +38,15 @@ int main() {
   pixcake::gpu::RenderInputs inputs;
   pixcake::gpu::RenderResult result;
 
+  auto global_probe = operation("color.global", "color", "pixcake.color.global", {});
+  auto local_probe = operation("color.local", "color", "pixcake.color.local", {});
+  auto filter_probe = operation("color.global", "color", "pixcake.filter", {});
+  auto unknown_probe = operation("free", "free", "pixcake.curves", {});
+  assert(pixcake::gpu::PassRegistry::classify(global_probe.operations[0]) == pixcake::gpu::PassStatus::Implemented);
+  assert(pixcake::gpu::PassRegistry::classify(local_probe.operations[0]) == pixcake::gpu::PassStatus::ReferenceOnly);
+  assert(pixcake::gpu::PassRegistry::classify(filter_probe.operations[0]) == pixcake::gpu::PassStatus::MissingResource);
+  assert(pixcake::gpu::PassRegistry::classify(unknown_probe.operations[0]) == pixcake::gpu::PassStatus::Unregistered);
+
   auto white_balance = operation("color.global", "color", "pixcake.color.global",
                                  {value("temperature", 100.0), value("tint", 0.0)});
   assert(executor.renderReference(white_balance, image(128, 128, 128), inputs, result));
@@ -57,7 +66,13 @@ int main() {
   auto filter = operation("color.global", "color", "pixcake.filter",
                           {value("amount", 100.0)});
   assert(executor.renderReference(filter, image(128, 128, 128), inputs, result));
-  assert(result.image.pixels[0] > 128 && result.image.pixels[2] < 128);
+  assert(result.image.pixels[0] == 128 && result.image.pixels[2] == 128);
+  assert(!result.statuses.empty() && result.statuses.front().status == pixcake::gpu::PassStatus::MissingResource);
+
+  auto unknown = operation("color.global", "free", "pixcake.curves",
+                           {value("amount", 100.0)});
+  assert(executor.renderReference(unknown, image(128, 128, 128), inputs, result));
+  assert(!result.statuses.empty() && result.statuses.front().status == pixcake::gpu::PassStatus::Unregistered);
 
   auto masked = operation("color.local", "color", "pixcake.color.local",
                           {value("temperature", 100.0)});
@@ -66,6 +81,12 @@ int main() {
   assert(executor.renderReference(masked, image(128, 128, 128), inputs, result));
   assert(result.image.pixels[0] == 128 && result.image.pixels[2] == 128);
   inputs.masks.clear();
+
+  auto bad_blend = operation("color.global", "color", "pixcake.color.global",
+                             {value("temperature", 100.0)});
+  bad_blend.operations[0].blend_mode = "overlay";
+  assert(executor.renderReference(bad_blend, image(128, 128, 128), inputs, result));
+  assert(result.statuses.front().status == pixcake::gpu::PassStatus::InvalidInput);
 
   pixcake::gpu::RenderInputs layers;
   layers.layers.push_back({image(255, 0, 0), "", 0.5F, "normal", true, 1});

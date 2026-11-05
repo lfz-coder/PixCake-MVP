@@ -11,7 +11,15 @@ struct RenderMask { std::string id; std::uint32_t width = 0; std::uint32_t heigh
 struct RenderLayer { RgbaImage image; std::string mask_id; float opacity = 1.0F; std::string blend_mode = "normal"; bool visible = true; std::uint32_t order = 0; };
 struct RenderInputs { std::vector<RenderMask> masks; std::vector<RenderLayer> layers; std::uint32_t preview_max_dimension = 4000; bool preview = true; };
 struct ExecutionDiagnostic { std::string capability_id; std::string reason; bool blocking = false; };
-struct RenderResult { RgbaImage image; std::vector<ExecutionDiagnostic> diagnostics; bool success = false; };
+enum class PassStatus { Implemented, ReferenceOnly, MissingResource, Unregistered, Disabled, InvalidInput };
+struct PassStatusRecord { std::string capability_id; std::string program; PassStatus status = PassStatus::Unregistered; std::string reason; };
+struct RenderResult { RgbaImage image; std::vector<ExecutionDiagnostic> diagnostics; std::vector<PassStatusRecord> statuses; bool success = false; };
+
+class PassRegistry {
+ public:
+  static PassStatus classify(const pixcake::render::RenderOperation& operation);
+  static bool gpuSupported(const pixcake::render::RenderOperation& operation);
+};
 
 class RenderExecutor {
  public:
