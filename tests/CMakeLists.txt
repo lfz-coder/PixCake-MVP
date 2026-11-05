@@ -25,6 +25,10 @@ add_executable(test_shell_display ui/test_shell_display.cpp)
 target_link_libraries(test_shell_display PRIVATE pixcake_ui_shell pixcake_warnings)
 add_test(NAME test_shell_display COMMAND test_shell_display)
 
+add_executable(test_color_adjustment_panel ui/test_color_adjustment_panel.cpp)
+target_link_libraries(test_color_adjustment_panel PRIVATE pixcake_ui_shell pixcake_warnings)
+add_test(NAME test_color_adjustment_panel COMMAND test_color_adjustment_panel)
+
 add_executable(test_guide_copy kernel/workspace/test_guide_copy.cpp)
 target_link_libraries(test_guide_copy PRIVATE pixcake_workspace pixcake_warnings)
 add_test(NAME test_guide_copy COMMAND test_guide_copy)
