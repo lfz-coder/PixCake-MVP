@@ -16,7 +16,7 @@
 ```text
 cmake -S . -B build-gpu-native -DPIXCAKE_GL_BACKEND=native
 cmake --build build-gpu-native --target test_gpu_backend architecture_gate -j2
-ctest --test-dir build-gpu-native -R '^(test_gpu_backend|arch_dependencies|capability_ownership)$' --output-on-failure
+ctest --test-dir build-gpu-native -R '^(test_gpu_backend_C57_C60|arch_dependencies|capability_ownership)$' --output-on-failure
 ```
 
 结果：native backend 构建、macOS Core OpenGL runtime smoke、`arch_dependencies` 和 `capability_ownership` 均通过。Qt 配置使用同一合同测试和架构门禁通过；无可用 offscreen provider 时只跳过 Qt runtime smoke，并保留 API/error-path 断言。
