@@ -224,6 +224,22 @@ class ShellWindow final : public QMainWindow {
     color_labels->setAccessibleName(QStringLiteral("色彩调节"));
     auto* color_layout = new QVBoxLayout(color_labels);
     color_layout->setContentsMargins(0, 0, 0, 0);
+    auto* histogram = new pixcake::shell::PixCakeHistogram(color_labels);
+    histogram->setMinimumHeight(pixcake::shell::PixCakeTheme::kControlHeight * 2);
+    color_layout->addWidget(histogram);
+    auto* readings = new QHBoxLayout;
+    readings->setContentsMargins(0, 0, 0, 0);
+    readings->setSpacing(6);
+    auto* rgb = text(QStringLiteral("RGB"));
+    rgb->setEnabled(false);
+    rgb->setAccessibleName(QStringLiteral("RGB读数，暂无已加载照片"));
+    auto* lab = text(QStringLiteral("Lab"));
+    lab->setEnabled(false);
+    lab->setAccessibleName(QStringLiteral("Lab读数，暂无已加载照片"));
+    readings->addWidget(rgb);
+    readings->addWidget(lab);
+    readings->addStretch();
+    color_layout->addLayout(readings);
     const QStringList color_names = {
         QStringLiteral("开启 AI 色彩风格"), QStringLiteral("配置文件"),
         QStringLiteral("色彩调节"), QStringLiteral("预设"), QStringLiteral("滤镜"),
