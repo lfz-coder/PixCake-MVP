@@ -31,6 +31,23 @@ pixcake::render::RenderValue value(const char* channel, double numeric) {
   return {channel, channel, std::to_string(numeric), numeric};
 }
 
+class FakeResources final : public pixcake::gpu::ResourceProvider {
+ public:
+  explicit FakeResources(bool resolve, pixcake::gpu::ResourceKind kind = pixcake::gpu::ResourceKind::Lut)
+      : resolve_(resolve), kind_(kind) {}
+  bool resolve(std::string_view, pixcake::gpu::ResolvedResource& resource,
+               std::string& error) const override {
+    if (!resolve_) { error = "resource handle not found"; return false; }
+    resource = {"fixture-resource", kind_, bytes_, sizeof(bytes_)};
+    return true;
+  }
+
+ private:
+  bool resolve_;
+  pixcake::gpu::ResourceKind kind_;
+  inline static const std::byte bytes_[4]{};
+};
+
 }  // namespace
 
 int main() {
@@ -68,6 +85,24 @@ int main() {
   assert(executor.renderReference(filter, image(128, 128, 128), inputs, result));
   assert(result.image.pixels[0] == 128 && result.image.pixels[2] == 128);
   assert(!result.statuses.empty() && result.statuses.front().status == pixcake::gpu::PassStatus::MissingResource);
+
+  FakeResources resources(true);
+  inputs.resources = &resources;
+  assert(executor.renderReference(filter, image(128, 128, 128), inputs, result));
+  assert(!result.statuses.empty() && result.statuses.front().status == pixcake::gpu::PassStatus::ReferenceOnly);
+  assert(result.image.pixels[0] == 128 && result.image.pixels[2] == 128);
+  FakeResources missing_resources(false);
+  inputs.resources = &missing_resources;
+  assert(executor.renderReference(filter, image(128, 128, 128), inputs, result));
+  assert(!result.statuses.empty() && result.statuses.front().status == pixcake::gpu::PassStatus::MissingResource);
+  inputs.resources = nullptr;
+
+  auto profile = operation("color.global", "color", "pixcake.profile", {value("amount", 100.0)});
+  FakeResources wrong_kind(true, pixcake::gpu::ResourceKind::Lut);
+  inputs.resources = &wrong_kind;
+  assert(executor.renderReference(profile, image(128, 128, 128), inputs, result));
+  assert(!result.statuses.empty() && result.statuses.front().status == pixcake::gpu::PassStatus::MissingResource);
+  inputs.resources = nullptr;
 
   auto unknown = operation("color.global", "free", "pixcake.curves",
                            {value("amount", 100.0)});

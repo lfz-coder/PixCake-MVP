@@ -124,6 +124,19 @@ bool RenderExecutor::renderReference(const pixcake::render::RenderDescription& d
     if (status == PassStatus::Unregistered) record.reason = "渲染程序未注册，跳过操作";
     if (status == PassStatus::ReferenceOnly) record.reason = "仅有 reference 实现";
     result.statuses.push_back(record);
+    if (status == PassStatus::MissingResource && inputs.resources != nullptr) {
+      ResolvedResource resource;
+      std::string resource_error;
+      const ResourceKind expected_kind = operation.program.find("profile") != std::string::npos ? ResourceKind::Profile : ResourceKind::Lut;
+      if (inputs.resources->resolve(operation.program, resource, resource_error) && resource.kind == expected_kind && !resource.id.empty() && resource.data != nullptr && resource.bytes != 0) {
+        result.statuses.back().status = PassStatus::ReferenceOnly;
+        result.statuses.back().reason = "资源已解析，当前 reference 不执行 LUT/Profile 像素处理";
+        result.diagnostics.push_back({operation.capability_id, result.statuses.back().reason, false});
+      } else {
+        result.diagnostics.push_back({operation.capability_id, resource_error.empty() ? record.reason : resource_error, false});
+      }
+      continue;
+    }
     if (status == PassStatus::Unregistered || status == PassStatus::MissingResource) {
       result.diagnostics.push_back({operation.capability_id, record.reason, false});
       continue;
