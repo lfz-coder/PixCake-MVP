@@ -37,6 +37,8 @@ Pixel color(Pixel p, const std::map<std::string, float>& v) {
   const float t = get(v, "temperature") / 100.0F * 0.25F;
   const float m = get(v, "tint") / 100.0F * 0.18F;
   p.r += t + m; p.g -= m * 0.9F; p.b -= t - m;
+  const float style = clamp01(get(v, "amount") / 200.0F);
+  p.r += style * 0.04F; p.g += style * 0.01F; p.b -= style * 0.03F;
   return p;
 }
 Pixel tone(Pixel p, const std::map<std::string, float>& v) {
@@ -89,6 +91,9 @@ bool RenderExecutor::renderReference(const pixcake::render::RenderDescription& d
   result.image = input;
   result.image.row_stride = stride;
   result.image.revision = description.document_revision;
+  for (const auto& diagnostic : description.diagnostics) {
+    result.diagnostics.push_back({diagnostic.capability_id, diagnostic.reason, diagnostic.blocking});
+  }
   for (const auto& operation : description.operations) {
     if (!operation.enabled) {
       result.diagnostics.push_back({operation.capability_id, operation.disabled_reason.empty() ? "操作已禁用" : operation.disabled_reason, false});
@@ -104,12 +109,19 @@ bool RenderExecutor::renderReference(const pixcake::render::RenderDescription& d
     if (missing) { result.diagnostics.push_back({operation.capability_id, "蒙版缺失或尺寸不匹配，跳过操作", false}); continue; }
     std::map<std::string, float> values;
     for (const auto& value : operation.values) values[value.channel] = static_cast<float>(value.numeric_value);
+    const bool is_color = operation.stage == "color" || operation.program.find("color") != std::string::npos;
+    const bool is_tone = operation.stage == "tone" || operation.capability_id == "color.global" || operation.capability_id == "color.local" || operation.capability_id == "color.post";
+    const bool is_filter = operation.program.find("filter") != std::string::npos || operation.program.find("profile") != std::string::npos;
+    if (!is_color && !is_tone && !is_filter) {
+      result.diagnostics.push_back({operation.capability_id, "渲染程序没有 reference 实现，跳过操作", false});
+      continue;
+    }
     for (std::uint32_t y = 0; y < input.height; ++y) for (std::uint32_t x = 0; x < input.width; ++x) {
       const Pixel before = read(result.image, x, y);
       Pixel after = before;
-      if (operation.stage == "color" || operation.program.find("color") != std::string::npos) after = color(after, values);
-      if (operation.stage == "tone" || operation.capability_id == "color.global" || operation.capability_id == "color.local" || operation.capability_id == "color.post") after = tone(after, values);
-      if (operation.program.find("filter") != std::string::npos || operation.program.find("profile") != std::string::npos) {
+      if (is_color) after = color(after, values);
+      if (is_tone) after = tone(after, values);
+      if (is_filter) {
         const float amount = clamp01(get(values, "amount") / 100.0F);
         after = mix(after, {after.r * 1.04F + 0.02F, after.g * 1.01F, after.b * 0.96F, after.a}, amount);
       }
