@@ -2,7 +2,9 @@
 
 #include <QFrame>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPushButton>
+#include <QHBoxLayout>
 #include <QVBoxLayout>
 
 namespace pixcake::shell {
@@ -24,6 +26,41 @@ class PixCakePanel final : public QFrame {
   explicit PixCakePanel(const QString& object_name, QWidget* parent = nullptr)
       : QFrame(parent) {
     setObjectName(object_name);
+    setAccessibleName(object_name);
+  }
+};
+
+class PixCakeToolbar final : public QFrame {
+ public:
+  explicit PixCakeToolbar(const QString& object_name, QWidget* parent = nullptr)
+      : QFrame(parent) {
+    setObjectName(object_name);
+    setAccessibleName(object_name);
+    auto* layout = new QHBoxLayout(this);
+    layout->setContentsMargins(8, 5, 8, 5);
+    layout->setSpacing(6);
+  }
+  QHBoxLayout* row() { return static_cast<QHBoxLayout*>(layout()); }
+};
+
+class PixCakeStatusStrip final : public QFrame {
+ public:
+  explicit PixCakeStatusStrip(const QString& object_name, QWidget* parent = nullptr)
+      : QFrame(parent) {
+    setObjectName(object_name);
+    setAccessibleName(object_name);
+    auto* layout = new QHBoxLayout(this);
+    layout->setContentsMargins(8, 5, 8, 5);
+    layout->setSpacing(6);
+  }
+  QHBoxLayout* row() { return static_cast<QHBoxLayout*>(layout()); }
+};
+
+class PixCakeField final : public QLineEdit {
+ public:
+  explicit PixCakeField(const QString& accessible_name, QWidget* parent = nullptr)
+      : QLineEdit(parent) {
+    setAccessibleName(accessible_name);
   }
 };
 
@@ -58,6 +95,19 @@ inline QFrame* horizontalRule(QWidget* parent = nullptr) {
   line->setFrameShape(QFrame::HLine);
   line->setFixedHeight(1);
   return line;
+}
+
+inline QLabel* pendingIcon(QWidget* parent = nullptr) {
+  auto* icon = new QLabel(parent);
+  icon->setObjectName(QStringLiteral("pending-icon"));
+  icon->setAccessibleName(QStringLiteral("待补充官方图标"));
+  icon->setFixedSize(28, 28);
+  return icon;
+}
+
+inline PixCakeEmptyState* emptyState(const QString& title, const QString& detail,
+                                     QWidget* parent = nullptr) {
+  return new PixCakeEmptyState(title, detail, parent);
 }
 
 }  // namespace pixcake::shell

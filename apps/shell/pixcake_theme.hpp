@@ -10,6 +10,16 @@ namespace pixcake::shell {
 // dark-workspace/yellow-accent relationship; exact icon and font assets remain
 // pending until the original resources are available.
 struct PixCakeTheme final {
+  static constexpr int kWindowWidth = 1386;
+  static constexpr int kWindowHeight = 832;
+  static constexpr int kRadiusSmall = 4;
+  static constexpr int kRadiusPanel = 8;
+  static constexpr int kControlHeight = 32;
+  static constexpr int kFieldHeight = 40;
+  static constexpr int kToolbarHeight = 60;
+  static constexpr int kSidebarWidth = 220;
+  static constexpr int kWorkspaceSideWidth = 282;
+
   static QColor workspace() { return QColor("#0b0b0b"); }
   static QColor panel() { return QColor("#141414"); }
   static QColor panelRaised() { return QColor("#1d1d1d"); }
@@ -36,7 +46,7 @@ struct PixCakeTheme final {
       QFrame#workspace-tools { border-bottom: 1px solid #292929; }
       QFrame#workspace-thumbs { border-top: 1px solid #292929; }
       QFrame#workspace-side { border-left: 1px solid #292929; }
-      QFrame#workspace-canvas, QFrame#library-grid, QFrame#creative-canvas { background: #070707; border: 1px solid #353535; }
+      QFrame#workspace-canvas, QFrame#library-grid, QFrame#creative-canvas { background: #070707; border: 1px solid #353535; border-radius: 4px; }
       QFrame#library-grid { background: #252525; }
       QLabel#login-hero { background: #7e9caf; }
       QLabel#login-heading { color: #f4f4f4; font-size: 22px; font-weight: 500; }
@@ -45,11 +55,11 @@ struct PixCakeTheme final {
       QLabel#home-card-title { color: #f4f4f4; font-size: 15px; font-weight: 600; }
       QLabel#workspace-tool-label { color: #d5d5d5; font-size: 11px; }
       QLabel#muted, QLabel[muted="true"], QLabel#empty-state { color: #999999; }
-      QPushButton { background: #1a1a1a; border: 1px solid #383838; border-radius: 5px; color: #f4f4f4; padding: 6px 11px; min-height: 28px; }
+      QPushButton { background: #1a1a1a; border: 1px solid #383838; border-radius: 4px; color: #f4f4f4; padding: 6px 11px; min-height: 32px; }
       QPushButton:hover { border-color: #ffe000; }
       QPushButton:pressed { background: #303030; }
       QPushButton:disabled { color: #747474; border-color: #2b2b2b; }
-      QPushButton#primary { background: #ffe000; color: #121212; border-color: #ffe000; min-height: 38px; font-weight: 600; }
+      QPushButton#primary { background: #ffe000; color: #121212; border-color: #ffe000; min-height: 40px; font-weight: 600; }
       QPushButton#primary:disabled { background: #685a0c; color: #34300d; border-color: #685a0c; }
       QPushButton#icon-button { min-width: 34px; max-width: 34px; padding: 3px; }
       QPushButton#pill { border-radius: 14px; min-height: 26px; padding: 3px 12px; }
@@ -70,8 +80,12 @@ struct PixCakeTheme final {
       QFrame#home-feature, QFrame#home-card, QFrame#home-projects { background: #171717; border: 1px solid #2d2d2d; border-radius: 8px; }
       QFrame#home-import { background: #141414; border: 1px dashed #5b5b5b; border-radius: 8px; }
       QFrame#feature-icon { background: #303030; border: 1px solid #555555; border-radius: 8px; }
-      QFrame#workspace-tool-button { background: #1a1a1a; border: 1px solid #303030; border-radius: 4px; }
+      QFrame#workspace-tool-button { background: #1a1a1a; border: 1px solid #303030; border-radius: 4px; min-width: 66px; }
       QFrame#workspace-tool-button:hover { border-color: #ffe000; }
+      QFrame#workspace-tool-button[emphasis="true"] { background: #292929; border-color: #ffe000; }
+      QFrame#pixcake-status-strip { background: #111111; border: 1px solid #303030; border-radius: 4px; }
+      QFrame#pixcake-section { background: #171717; border: 1px solid #2d2d2d; border-radius: 8px; }
+      QLabel#pending-icon { color: #777777; background: #303030; border: 1px solid #555555; border-radius: 8px; }
       QFrame#empty-state { background: transparent; border: none; }
       QLabel#empty-state-title { color: #d8d8d8; font-size: 15px; font-weight: 500; }
       QLabel#empty-state-detail { color: #929292; }
