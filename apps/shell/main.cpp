@@ -245,7 +245,7 @@ class ShellWindow final : public QMainWindow {
         QStringLiteral("高光"), QStringLiteral("阴影"), QStringLiteral("白色"),
         QStringLiteral("黑色"), QStringLiteral("纹理"), QStringLiteral("清晰度"),
         QStringLiteral("祛雾"), QStringLiteral("鲜艳度"), QStringLiteral("饱和度")};
-    const auto add_disabled_slider = [&](QLayout* layout, const QString& label, const QString& accessible, int minimum, int maximum, int value, const QString& object_name) {
+    const auto add_disabled_slider = [&](QLayout* layout, const QString& label, const QString& accessible, int minimum, int maximum, int value, const QString& shown, const QString& object_name) {
       auto* row = new QWidget(modules);
       auto* row_layout = new QHBoxLayout(row);
       row_layout->setContentsMargins(0, 0, 0, 0);
@@ -259,30 +259,159 @@ class ShellWindow final : public QMainWindow {
       slider->setValue(value);
       slider->setEnabled(false);
       slider->setAccessibleName(accessible);
-      auto* reading = text(QString::number(value));
+      auto* reading = text(shown);
       reading->setEnabled(false);
       row_layout->addWidget(name);
       row_layout->addWidget(slider, 1);
       row_layout->addWidget(reading);
       layout->addWidget(row);
     };
+    const auto add_centered = [&](const QString& label) {
+      add_disabled_slider(color_layout, label,
+                          QStringLiteral("%1，范围 -100 到 100，步进 1，默认 0").arg(label),
+                          -100, 100, 0, QStringLiteral("0"), QString());
+    };
+    const auto add_title = [&](const QString& label) {
+      auto* name = text(label);
+      name->setEnabled(false);
+      color_layout->addWidget(name);
+    };
+    const QStringList hsl_colors = {
+        QStringLiteral("红色"), QStringLiteral("橙色"), QStringLiteral("黄色"),
+        QStringLiteral("绿色"), QStringLiteral("浅绿色"), QStringLiteral("蓝色"),
+        QStringLiteral("紫色"), QStringLiteral("洋红色")};
+    const QStringList selective_targets = {
+        QStringLiteral("红色"), QStringLiteral("黄色"), QStringLiteral("绿色"),
+        QStringLiteral("青色"), QStringLiteral("蓝色"), QStringLiteral("洋红色"),
+        QStringLiteral("白色"), QStringLiteral("中间色（灰色）"), QStringLiteral("黑色")};
+    const QStringList selective_channels = {
+        QStringLiteral("青色"), QStringLiteral("洋红"), QStringLiteral("黄色"), QStringLiteral("黑色")};
     for (const auto& label : color_names) {
       if (ranged_sliders.contains(label)) {
-        add_disabled_slider(color_layout, label,
-                            QStringLiteral("%1，范围 -100 到 100，步进 1，默认 0").arg(label),
-                            -100, 100, 0, QString());
-      } else {
-        auto* name = text(label);
-        name->setEnabled(false);
-        color_layout->addWidget(name);
+        add_centered(label);
+        continue;
       }
-      if (label == QStringLiteral("创意色彩")) {
+      add_title(label);
+      if (label == QStringLiteral("色阶")) {
+        add_disabled_slider(color_layout, QStringLiteral("黑场"),
+                            QStringLiteral("黑场，范围 0 到 255，步进 1，默认 0"),
+                            0, 255, 0, QStringLiteral("0"), QString());
+        add_disabled_slider(color_layout, QStringLiteral("灰场"),
+                            QStringLiteral("灰场，范围 -1.0 到 1.0，步进 0.01，默认 0"),
+                            -100, 100, 0, QStringLiteral("0.00"), QStringLiteral("refine-levels-gray"));
+        add_disabled_slider(color_layout, QStringLiteral("白场"),
+                            QStringLiteral("白场，范围 0 到 255，步进 1，默认 255"),
+                            0, 255, 255, QStringLiteral("255"), QString());
+        add_disabled_slider(color_layout, QStringLiteral("输出黑场"),
+                            QStringLiteral("输出黑场，范围 0 到 255，步进 1，默认 0"),
+                            0, 255, 0, QStringLiteral("0"), QString());
+        add_disabled_slider(color_layout, QStringLiteral("输出白场"),
+                            QStringLiteral("输出白场，范围 0 到 255，步进 1，默认 255"),
+                            0, 255, 255, QStringLiteral("255"), QString());
+      } else if (label == QStringLiteral("曲线")) {
+        for (const auto& item : {QStringLiteral("中间调域值"), QStringLiteral("亮调"), QStringLiteral("亮调域值"),
+                                 QStringLiteral("暗调"), QStringLiteral("暗调域值"), QStringLiteral("阴影"),
+                                 QStringLiteral("高光")}) {
+          add_centered(item);
+        }
+      } else if (label == QStringLiteral("HSL")) {
+        for (const auto& tab : {QStringLiteral("色相"), QStringLiteral("饱和度"), QStringLiteral("明亮度")}) {
+          for (const auto& color : hsl_colors) add_centered(tab + QStringLiteral("-") + color);
+        }
+      } else if (label == QStringLiteral("色彩编辑器")) {
+        for (const auto& item : {QStringLiteral("色相偏移"), QStringLiteral("饱和度偏移"), QStringLiteral("明亮度偏移")}) {
+          add_centered(item);
+        }
+      } else if (label == QStringLiteral("颜色分级")) {
+        for (const auto& item : {QStringLiteral("中间调亮度"), QStringLiteral("中间调色相"), QStringLiteral("中间调饱和度"),
+                                 QStringLiteral("全局亮度"), QStringLiteral("全局调色相"), QStringLiteral("全局调饱和度"),
+                                 QStringLiteral("平衡"), QStringLiteral("混合"), QStringLiteral("阴影色相"),
+                                 QStringLiteral("阴影饱和度"), QStringLiteral("高光亮度"), QStringLiteral("高光色相"),
+                                 QStringLiteral("高光饱和度"), QStringLiteral("阴影亮度")}) {
+          add_centered(item);
+        }
+      } else if (label == QStringLiteral("可选颜色")) {
+        for (const auto& target : selective_targets) {
+          for (const auto& channel : selective_channels) add_centered(target + QStringLiteral("-") + channel);
+        }
+      } else if (label == QStringLiteral("细节")) {
+        for (const auto& item : {QStringLiteral("减少杂色"), QStringLiteral("减少杂色-平滑度"), QStringLiteral("减少杂色-细节"),
+                                 QStringLiteral("噪点消除"), QStringLiteral("噪点消除-对比度"), QStringLiteral("噪点消除-细节"),
+                                 QStringLiteral("锐化"), QStringLiteral("锐化-半径"), QStringLiteral("锐化-细节"),
+                                 QStringLiteral("AI降噪-程度")}) {
+          add_centered(item);
+        }
+      } else if (label == QStringLiteral("颗粒")) {
+        for (const auto& item : {QStringLiteral("总滑杆"), QStringLiteral("阴影颗粒度透明度"), QStringLiteral("中间调颗粒度透明度"),
+                                 QStringLiteral("高光颗粒度透明度"), QStringLiteral("单个颗粒度大小"), QStringLiteral("颗粒边缘锐度")}) {
+          add_centered(item);
+        }
+      } else if (label == QStringLiteral("镜头调整")) {
+        for (const auto& item : {QStringLiteral("手动-中点"), QStringLiteral("手动-扭曲度"), QStringLiteral("手动-晕影"),
+                                 QStringLiteral("配置文件-扭曲度"), QStringLiteral("配置文件-晕影")}) {
+          add_centered(item);
+        }
+      } else if (label == QStringLiteral("透视矫正")) {
+        for (const auto& item : {QStringLiteral("垂直"), QStringLiteral("垂直偏移"), QStringLiteral("水平"),
+                                 QStringLiteral("水平偏移"), QStringLiteral("旋转"), QStringLiteral("缩放"),
+                                 QStringLiteral("长宽比")}) {
+          add_centered(item);
+        }
+      } else if (label == QStringLiteral("校准")) {
+        for (const auto& item : {QStringLiteral("红原色-色相"), QStringLiteral("红原色-饱和度"), QStringLiteral("绿原色-色相"),
+                                 QStringLiteral("绿原色-饱和度"), QStringLiteral("蓝原色-色相"), QStringLiteral("蓝原色-饱和度")}) {
+          add_centered(item);
+        }
+      } else if (label == QStringLiteral("创意色彩")) {
         add_disabled_slider(color_layout, QStringLiteral("程度"),
                             QStringLiteral("创意色彩程度，范围 0 到 100，步进 1，默认 0"),
-                            0, 100, 0, QStringLiteral("refine-creative-color-amount"));
+                            0, 100, 0, QStringLiteral("0"), QStringLiteral("refine-creative-color-amount"));
       }
     }
     modules_layout->addWidget(color_labels);
+    auto* local_labels = new QFrame(modules);
+    local_labels->setObjectName(QStringLiteral("refine-local-labels"));
+    local_labels->setAccessibleName(QStringLiteral("局部调色"));
+    auto* local_layout = new QVBoxLayout(local_labels);
+    local_layout->setContentsMargins(0, 0, 0, 0);
+    const QStringList local_names = {
+        QStringLiteral("所有人"), QStringLiteral("联动调整"), QStringLiteral("创建蒙版"), QStringLiteral("蒙版列表"),
+        QStringLiteral("全部人物/整个人"), QStringLiteral("全部皮肤"), QStringLiteral("面部"), QStringLiteral("面部皮肤"),
+        QStringLiteral("脖子"), QStringLiteral("身体皮肤"), QStringLiteral("眉毛"), QStringLiteral("眼白"),
+        QStringLiteral("眼瞳"), QStringLiteral("嘴唇"), QStringLiteral("牙齿"), QStringLiteral("口腔"),
+        QStringLiteral("耳朵"), QStringLiteral("头发"), QStringLiteral("全部衣服"), QStringLiteral("上衣"),
+        QStringLiteral("内搭"), QStringLiteral("连体衣（裙）"), QStringLiteral("下装"), QStringLiteral("头纱/帽子"),
+        QStringLiteral("手套"), QStringLiteral("鞋子"), QStringLiteral("背包"), QStringLiteral("首饰"),
+        QStringLiteral("其他物品"), QStringLiteral("所有宠物"), QStringLiteral("全部背景"), QStringLiteral("天空"),
+        QStringLiteral("草地"), QStringLiteral("地面"), QStringLiteral("礁石"), QStringLiteral("水面"),
+        QStringLiteral("沙滩"), QStringLiteral("山"), QStringLiteral("建筑物"), QStringLiteral("智能选区"),
+        QStringLiteral("自由选区"), QStringLiteral("快速选区"), QStringLiteral("画笔"), QStringLiteral("线性渐变"),
+        QStringLiteral("径向渐变"), QStringLiteral("颜色范围"), QStringLiteral("亮度范围")};
+    for (const auto& label : local_names) {
+      auto* name = text(label);
+      name->setEnabled(false);
+      local_layout->addWidget(name);
+    }
+    add_disabled_slider(local_layout, QStringLiteral("羽化"),
+                        QStringLiteral("羽化，范围 0 到 100，步进 1，默认 0"),
+                        0, 100, 0, QStringLiteral("0"), QString());
+    modules_layout->addWidget(local_labels);
+    auto* post_labels = new QFrame(modules);
+    post_labels->setObjectName(QStringLiteral("refine-post-color-labels"));
+    post_labels->setAccessibleName(QStringLiteral("后期调色"));
+    auto* post_layout = new QVBoxLayout(post_labels);
+    post_layout->setContentsMargins(0, 0, 0, 0);
+    for (const auto& label : {QStringLiteral("全图调整"), QStringLiteral("局部调整"), QStringLiteral("滤镜"),
+                              QStringLiteral("白平衡"), QStringLiteral("影调"), QStringLiteral("色阶"),
+                              QStringLiteral("曲线"), QStringLiteral("HSL"), QStringLiteral("色彩编辑器"),
+                              QStringLiteral("颜色分级"), QStringLiteral("可选颜色"), QStringLiteral("细节"),
+                              QStringLiteral("颗粒"), QStringLiteral("镜头调整"), QStringLiteral("透视矫正"),
+                              QStringLiteral("校准"), QStringLiteral("创意色彩")}) {
+      auto* name = text(label);
+      name->setEnabled(false);
+      post_layout->addWidget(name);
+    }
+    modules_layout->addWidget(post_labels);
     auto* clothing_labels = new QFrame(modules);
     clothing_labels->setObjectName(QStringLiteral("refine-clothing-labels"));
     clothing_labels->setAccessibleName(QStringLiteral("衣服调整"));
