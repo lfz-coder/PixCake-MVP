@@ -38,7 +38,7 @@
 
 精修 `--smoke` 时，若找不到 `refine-history-labels`，或两条文字顺序不对，或其中有启用项，返回 3。已有的裁剪检查保持不变。
 
-- [ ] **Step 3: 跑精修 smoke**
+- [x] **Step 3: 跑精修 smoke**
 
 Run: `cmake --build build-desktop -j2 --target pixcake_app_shell && QT_QPA_PLATFORM=offscreen build-desktop/apps/shell/pixcake_app_shell.app/Contents/MacOS/pixcake_app_shell --page refine --smoke`
 
