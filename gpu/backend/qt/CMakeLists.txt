@@ -1,0 +1,4 @@
+find_package(Qt6 REQUIRED COMPONENTS Gui)
+add_library(pixcake_gpu_backend_qt src/qt_backend.cpp)
+target_include_directories(pixcake_gpu_backend_qt PUBLIC include)
+target_link_libraries(pixcake_gpu_backend_qt PUBLIC pixcake_gpu_facade Qt6::Gui pixcake_warnings)

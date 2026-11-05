@@ -1,0 +1,3 @@
+add_library(pixcake_gpu_facade src/gl.cpp)
+target_include_directories(pixcake_gpu_facade PUBLIC include)
+target_link_libraries(pixcake_gpu_facade PUBLIC pixcake_warnings)

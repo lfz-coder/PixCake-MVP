@@ -98,6 +98,10 @@ target_include_directories(test_photo_marks PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 target_link_libraries(test_photo_marks PRIVATE pixcake_storage pixcake_warnings)
 add_test(NAME test_photo_marks COMMAND test_photo_marks)
 
+add_executable(test_gpu_facade gpu/test_gpu_facade.cpp)
+target_link_libraries(test_gpu_facade PRIVATE pixcake_gpu_render pixcake_gpu_facade pixcake_warnings)
+add_test(NAME test_gpu_facade COMMAND test_gpu_facade)
+
 add_test(
   NAME arch_dependencies
   COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P ${CMAKE_SOURCE_DIR}/tests/arch/check_dependencies.cmake

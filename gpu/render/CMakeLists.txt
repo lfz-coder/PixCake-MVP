@@ -1,0 +1,3 @@
+add_library(pixcake_gpu_render src/render_executor.cpp)
+target_include_directories(pixcake_gpu_render PUBLIC include)
+target_link_libraries(pixcake_gpu_render PUBLIC pixcake_gpu_facade pixcake_warnings)

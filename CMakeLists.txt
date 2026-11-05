@@ -28,6 +28,9 @@ add_subdirectory(kernel/exportq)
 add_subdirectory(kernel/command)
 add_subdirectory(kernel/project)
 add_subdirectory(storage/sqlite)
+add_subdirectory(gpu/facade)
+add_subdirectory(gpu/backend/qt)
+add_subdirectory(gpu/render)
 add_subdirectory(tests)
 
 # Architecture rules are a build gate as well as a test.  A forbidden kernel
