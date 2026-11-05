@@ -46,7 +46,15 @@ struct RenderInputs { std::vector<RenderMask> masks; std::vector<RenderLayer> la
 struct ExecutionDiagnostic { std::string capability_id; std::string reason; bool blocking = false; };
 enum class PassStatus { Implemented, ReferenceOnly, MissingResource, Unregistered, Disabled, InvalidInput };
 struct PassStatusRecord { std::string capability_id; std::string program; PassStatus status = PassStatus::Unregistered; std::string reason; };
-struct RenderResult { RgbaImage image; std::vector<ExecutionDiagnostic> diagnostics; std::vector<PassStatusRecord> statuses; bool success = false; };
+struct RenderResult {
+  RgbaImage image;
+  std::vector<ExecutionDiagnostic> diagnostics;
+  std::vector<PassStatusRecord> statuses;
+  // True when execute could not use the GPU path and deliberately ran the
+  // deterministic reference compositor instead.
+  bool reference_fallback = false;
+  bool success = false;
+};
 
 class PassRegistry {
  public:

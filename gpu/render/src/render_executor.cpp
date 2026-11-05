@@ -256,7 +256,11 @@ bool RenderExecutor::execute(gl::Context& context, const pixcake::render::Render
   }
   if (!gpu_supported) {
     const bool ok = renderReference(description, input, inputs, result);
-    result.diagnostics.push_back({"", "当前绘制描述包含 GPU 最小路径未覆盖的能力，已回退 reference", false});
+    result.reference_fallback = true;
+    const std::string reason = (!inputs.layers.empty() || !inputs.masks.empty())
+                                   ? "图层或蒙版的 GPU 合成路径尚未接入，已回退 reference"
+                                   : "当前绘制描述包含 GPU 最小路径未覆盖的能力，已回退 reference";
+    result.diagnostics.push_back({"", reason, false});
     context.doneCurrent();
     if (!ok) error = "reference render failed";
     return ok;
