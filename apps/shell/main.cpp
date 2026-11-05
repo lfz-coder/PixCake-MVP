@@ -330,6 +330,11 @@ class ShellWindow final : public QMainWindow {
                                  QStringLiteral("高光")}) {
           add_centered(item);
         }
+        for (const auto& item : {QStringLiteral("RGB通道曲线"), QStringLiteral("亮度通道曲线"),
+                                 QStringLiteral("红色通道曲线"), QStringLiteral("绿色通道曲线"),
+                                 QStringLiteral("蓝色通道曲线")}) {
+          add_title(item);
+        }
       } else if (label == QStringLiteral("HSL")) {
         for (const auto& tab : {QStringLiteral("色相"), QStringLiteral("饱和度"), QStringLiteral("明亮度")}) {
           for (const auto& color : hsl_colors) add_centered(tab + QStringLiteral("-") + color);
@@ -337,6 +342,10 @@ class ShellWindow final : public QMainWindow {
       } else if (label == QStringLiteral("色彩编辑器")) {
         for (const auto& item : {QStringLiteral("色相偏移"), QStringLiteral("饱和度偏移"), QStringLiteral("明亮度偏移")}) {
           add_centered(item);
+        }
+        for (const auto& item : {QStringLiteral("色彩平滑"), QStringLiteral("亮度平滑"),
+                                 QStringLiteral("显示所选色彩范围"), QStringLiteral("反转色彩范围")}) {
+          add_title(item);
         }
       } else if (label == QStringLiteral("颜色分级")) {
         for (const auto& item : {QStringLiteral("中间调亮度"), QStringLiteral("中间调色相"), QStringLiteral("中间调饱和度"),
@@ -350,6 +359,8 @@ class ShellWindow final : public QMainWindow {
         for (const auto& target : selective_targets) {
           for (const auto& channel : selective_channels) add_centered(target + QStringLiteral("-") + channel);
         }
+        add_title(QStringLiteral("相对"));
+        add_title(QStringLiteral("绝对"));
       } else if (label == QStringLiteral("细节")) {
         for (const auto& item : {QStringLiteral("减少杂色"), QStringLiteral("减少杂色-平滑度"), QStringLiteral("减少杂色-细节"),
                                  QStringLiteral("噪点消除"), QStringLiteral("噪点消除-对比度"), QStringLiteral("噪点消除-细节"),
@@ -362,16 +373,28 @@ class ShellWindow final : public QMainWindow {
                                  QStringLiteral("高光颗粒度透明度"), QStringLiteral("单个颗粒度大小"), QStringLiteral("颗粒边缘锐度")}) {
           add_centered(item);
         }
+        add_title(QStringLiteral("颗粒颜色"));
+        add_title(QStringLiteral("颗粒风格"));
       } else if (label == QStringLiteral("镜头调整")) {
         for (const auto& item : {QStringLiteral("手动-中点"), QStringLiteral("手动-扭曲度"), QStringLiteral("手动-晕影"),
                                  QStringLiteral("配置文件-扭曲度"), QStringLiteral("配置文件-晕影")}) {
           add_centered(item);
+        }
+        for (const auto& item : {QStringLiteral("自动约束裁剪开关"), QStringLiteral("配置文件-开关"),
+                                 QStringLiteral("配置文件-厂商"), QStringLiteral("配置文件-镜头机型名称"),
+                                 QStringLiteral("配置状态")}) {
+          add_title(item);
         }
       } else if (label == QStringLiteral("透视矫正")) {
         for (const auto& item : {QStringLiteral("垂直"), QStringLiteral("垂直偏移"), QStringLiteral("水平"),
                                  QStringLiteral("水平偏移"), QStringLiteral("旋转"), QStringLiteral("缩放"),
                                  QStringLiteral("长宽比")}) {
           add_centered(item);
+        }
+        for (const auto& item : {QStringLiteral("AI 透视矫正-开关"), QStringLiteral("引导线"),
+                                 QStringLiteral("引导线模式开关"), QStringLiteral("辅助线开关"),
+                                 QStringLiteral("锁定裁剪")}) {
+          add_title(item);
         }
       } else if (label == QStringLiteral("校准")) {
         for (const auto& item : {QStringLiteral("红原色-色相"), QStringLiteral("红原色-饱和度"), QStringLiteral("绿原色-色相"),
