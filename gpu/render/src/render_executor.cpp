@@ -150,9 +150,52 @@ bool RenderExecutor::execute(gl::Context& context, const pixcake::render::Render
                              const RgbaImage& input, const RenderInputs& inputs, RenderResult& result,
                              std::string& error) const {
   if (!context.valid() || !context.makeCurrent()) { error = context.lastError(); return false; }
-  const bool ok = renderReference(description, input, inputs, result);
+  bool gpu_supported = inputs.layers.empty() && inputs.masks.empty() && input.row_stride == input.width * 4;
+  std::map<std::string, float> values;
+  for (const auto& operation : description.operations) {
+    if (!operation.enabled || operation.capability_id != "color.global" ||
+        (!operation.mask_ids.empty()) || operation.blend_mode != "normal") { gpu_supported = false; continue; }
+    for (const auto& value : operation.values) {
+      if (value.channel != "temperature" && value.channel != "tint" && value.channel != "exposure" && value.channel != "contrast") {
+        if (std::abs(value.numeric_value) > 1e-9) gpu_supported = false;
+      } else values[value.channel] = static_cast<float>(value.numeric_value);
+    }
+  }
+  if (!gpu_supported) {
+    const bool ok = renderReference(description, input, inputs, result);
+    result.diagnostics.push_back({"", "当前绘制描述包含 GPU 最小路径未覆盖的能力，已回退 reference", false});
+    context.doneCurrent();
+    if (!ok) error = "reference render failed";
+    return ok;
+  }
+
+  bool ok = false;
+  {
+    auto shader = context.createShader();
+    auto fragment = context.createShader();
+    auto program = context.createProgram();
+    auto source = context.createTexture2D();
+    auto target = context.createTexture2D();
+    auto framebuffer = context.createFramebuffer();
+    const char* vertex_source = "#version 330 core\nout vec2 uv;\nvoid main(){vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);uv=p;gl_Position=vec4(p*2.0-1.0,0,1);}";
+    const char* fragment_source = "#version 330 core\nin vec2 uv;out vec4 color;uniform sampler2D source;uniform vec4 adjust;\nvoid main(){vec4 p=texture(source,uv);float t=adjust.x/100.0*0.25;float m=adjust.y/100.0*0.18;p.r+=t+m;p.g-=m*0.9;p.b-=t-m;p.rgb*=pow(2.0,adjust.z);p.rgb=(p.rgb-0.5)*(1.0+adjust.w/100.0)+0.5;color=clamp(p,0.0,1.0);} ";
+    if (shader.valid() && fragment.valid() && program.valid() && source.valid() && target.valid() && framebuffer.valid()) {
+      ok = shader.compile(gl::ShaderStage::Vertex, vertex_source, error) && fragment.compile(gl::ShaderStage::Fragment, fragment_source, error) && program.link(shader, fragment, error) && program.use(error);
+      const gl::ImageView view{input.width, input.height, input.row_stride, gl::PixelFormat::Rgba8, reinterpret_cast<const std::byte*>(input.pixels.data()), input.pixels.size()};
+      ok = ok && source.upload(view, error) && target.allocate(input.width, input.height, gl::PixelFormat::Rgba8, error) && framebuffer.attachColor(target, error) && framebuffer.complete(error) && framebuffer.bind(error) && context.setViewport(input.width, input.height, error) && source.bind(0, error);
+      ok = ok && program.setTextureUnit("source", 0, error) && program.setVec4("adjust", {values["temperature"], values["tint"], values["exposure"], values["contrast"]}, error) && context.drawTriangles(3, error);
+      std::vector<std::byte> pixels;
+      ok = ok && context.readPixels(input.width, input.height, pixels, error);
+      if (ok) {
+        result = {};
+        result.image = input; result.image.revision = description.document_revision; result.image.pixels.resize(pixels.size());
+        std::transform(pixels.begin(), pixels.end(), result.image.pixels.begin(), [](std::byte value) { return static_cast<std::uint8_t>(value); });
+        result.success = true;
+      }
+    } else error = "GPU resources unavailable";
+  }
   context.doneCurrent();
-  if (!ok) error = "reference render failed";
+  if (!ok && error.empty()) error = "GPU pass failed";
   return ok;
 }
 

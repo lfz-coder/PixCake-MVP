@@ -40,6 +40,10 @@ class ContextImpl final : public detail::ContextImpl {
     QOpenGLFunctions* gl = current(error); if (gl == nullptr) return false;
     gl->glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(count)); return true;
   }
+  bool set_viewport(std::uint32_t width, std::uint32_t height, std::string& error) override {
+    auto* gl = current(error); if (gl == nullptr) return false;
+    gl->glViewport(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height)); return true;
+  }
   bool read_pixels(std::uint32_t width, std::uint32_t height, std::vector<std::byte>& data, std::string& error) override {
     auto* gl = current(error); if (gl == nullptr) return false;
     data.resize(static_cast<std::size_t>(width) * height * 4);
