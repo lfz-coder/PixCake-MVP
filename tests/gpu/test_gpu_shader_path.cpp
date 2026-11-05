@@ -5,6 +5,7 @@
 
 #include <cassert>
 #include <cmath>
+#include <iostream>
 
 int main(int argc, char** argv) {
   QGuiApplication app(argc, argv);
@@ -26,8 +27,10 @@ int main(int argc, char** argv) {
   std::string error;
   if (!executor.execute(context, description, input, inputs, gpu_result, error)) {
     // Some CI machines have Qt but no usable offscreen OpenGL implementation.
+    std::cerr << "GPU shader path skipped: " << error << '\n';
     return 0;
   }
+  std::cout << "GPU shader path active\n";
   pixcake::gpu::RenderResult reference;
   assert(executor.renderReference(description, input, inputs, reference));
   assert(gpu_result.success);
