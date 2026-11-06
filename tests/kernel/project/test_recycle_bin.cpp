@@ -133,6 +133,16 @@ class FailingPresenceStore final : public pixcake::ProjectStore {
   pixcake::ResultCode load_photo(std::int64_t id, std::optional<pixcake::PhotoRow>& out) override {
     return inner_.load_photo(id, out);
   }
+  pixcake::ResultCode update_photo_edit_state(std::int64_t id, const std::string& status,
+                                              std::int64_t edited_at) override {
+    return inner_.update_photo_edit_state(id, status, edited_at);
+  }
+  pixcake::ResultCode update_photo_export_status(std::int64_t id, const std::string& status) override {
+    return inner_.update_photo_export_status(id, status);
+  }
+  pixcake::ResultCode query_photos(const pixcake::PhotoQuery& query, std::vector<pixcake::PhotoRow>& out) override {
+    return inner_.query_photos(query, out);
+  }
   pixcake::ResultCode list_photos(const std::optional<std::int64_t>& project_id,
                                   std::vector<pixcake::PhotoRow>& out) override {
     return inner_.list_photos(project_id, out);

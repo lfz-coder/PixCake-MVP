@@ -16,14 +16,17 @@ class AdmittedSource {
  public:
   const std::string& absolute_path() const { return absolute_path_; }
   const FileIdentity& identity() const { return identity_; }
+  // 准入时按文件内容识别的格式名（JPEG、PNG、TIFF、BMP），不看扩展名。
+  const std::string& format() const { return format_; }
 
  private:
   friend class image_import::SourceAdmission;
-  AdmittedSource(std::string absolute_path, FileIdentity identity)
-      : absolute_path_(std::move(absolute_path)), identity_(identity) {}
+  AdmittedSource(std::string absolute_path, FileIdentity identity, std::string format)
+      : absolute_path_(std::move(absolute_path)), identity_(identity), format_(std::move(format)) {}
 
   std::string absolute_path_;
   FileIdentity identity_;
+  std::string format_;
 };
 
 }  // namespace pixcake

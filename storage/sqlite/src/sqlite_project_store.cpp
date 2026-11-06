@@ -2,6 +2,7 @@
 
 #include <sqlite3.h>
 
+#include <cctype>
 #include <cstring>
 #include <utility>
 
@@ -30,6 +31,11 @@ constexpr const char* kSchema =
     "rating INTEGER NOT NULL DEFAULT 0,"
     "flag TEXT NOT NULL DEFAULT '',"
     "color_label TEXT NOT NULL DEFAULT '',"
+    "format TEXT NOT NULL DEFAULT '',"
+    "capture_time INTEGER NOT NULL DEFAULT 0,"
+    "edit_status TEXT NOT NULL DEFAULT '',"
+    "edited_at INTEGER NOT NULL DEFAULT 0,"
+    "export_status TEXT NOT NULL DEFAULT '',"
     "FOREIGN KEY(project_id) REFERENCES project(id));"
     "CREATE TABLE IF NOT EXISTS trash ("
     "id INTEGER PRIMARY KEY,"
@@ -41,6 +47,23 @@ constexpr const char* kSchema =
     "CREATE INDEX IF NOT EXISTS idx_photo_flag ON photo(flag);"
     "CREATE INDEX IF NOT EXISTS idx_photo_color ON photo(color_label);"
     "CREATE INDEX IF NOT EXISTS idx_trash_subject ON trash(subject, subject_id);";
+
+// 图库筛选和排序（需求 §6.2、§6.3，性能清单 P-12）：按项目取数据，再按排序列走索引，
+// 同值按编号，避免临时排序。
+constexpr const char* kPhotoQueryIndexes =
+    "CREATE INDEX IF NOT EXISTS idx_photo_project_file_name ON photo(project_id, file_name, id);"
+    "CREATE INDEX IF NOT EXISTS idx_photo_project_capture_time ON photo(project_id, capture_time, id);"
+    "CREATE INDEX IF NOT EXISTS idx_photo_project_edited_at ON photo(project_id, edited_at, id);"
+    "CREATE INDEX IF NOT EXISTS idx_photo_project_rating ON photo(project_id, rating, id);"
+    "CREATE INDEX IF NOT EXISTS idx_photo_project_format ON photo(project_id, format, id);"
+    "CREATE INDEX IF NOT EXISTS idx_photo_project_size ON photo(project_id, source_size, id);"
+    "CREATE INDEX IF NOT EXISTS idx_photo_project_edit_status ON photo(project_id, edit_status, id);"
+    "CREATE INDEX IF NOT EXISTS idx_photo_project_export_status ON photo(project_id, export_status, id);";
+
+constexpr const char* kPhotoColumns =
+    "id, project_id, absolute_path, file_name, access_credential, presence, source_identity_valid, source_device, "
+    "source_inode, source_size, rating, flag, color_label, format, capture_time, edit_status, edited_at, "
+    "export_status";
 
 constexpr const char* kVirtualCopySchema =
     "CREATE TABLE IF NOT EXISTS virtual_copy ("
@@ -156,6 +179,45 @@ bool has_column(sqlite3* db, const char* table, const char* column) {
   return false;
 }
 
+// 旧库没有准入时的内容格式，只能按扩展名回填；认不出的扩展名留空。
+std::string format_from_extension(const std::string& file_name) {
+  const auto dot = file_name.find_last_of('.');
+  if (dot == std::string::npos) return "";
+  std::string ext = file_name.substr(dot + 1);
+  for (char& ch : ext) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+  if (ext == "jpg" || ext == "jpeg") return "JPEG";
+  if (ext == "png") return "PNG";
+  if (ext == "tif" || ext == "tiff") return "TIFF";
+  if (ext == "bmp") return "BMP";
+  return "";
+}
+
+ResultCode backfill_formats(sqlite3* db) {
+  std::vector<std::pair<std::int64_t, std::string>> rows;
+  {
+    Statement select;
+    const ResultCode prepared = select.prepare(db, "SELECT id, file_name FROM photo WHERE format = '';");
+    if (prepared != ResultCode::Ok) return prepared;
+    int rc = SQLITE_ROW;
+    while ((rc = sqlite3_step(select.get())) == SQLITE_ROW) {
+      rows.emplace_back(sqlite3_column_int64(select.get(), 0), column_text(select.get(), 1));
+    }
+    if (rc != SQLITE_DONE) return map_sqlite(rc);
+  }
+  for (const auto& row : rows) {
+    const std::string format = format_from_extension(row.second);
+    if (format.empty()) continue;
+    Statement update;
+    const ResultCode prepared = update.prepare(db, "UPDATE photo SET format = ? WHERE id = ?;");
+    if (prepared != ResultCode::Ok) return prepared;
+    if (const ResultCode code = bind_text(update.get(), 1, format); code != ResultCode::Ok) return code;
+    if (const ResultCode code = bind_int64(update.get(), 2, row.first); code != ResultCode::Ok) return code;
+    const int rc = sqlite3_step(update.get());
+    if (rc != SQLITE_DONE) return map_sqlite(rc);
+  }
+  return ResultCode::Ok;
+}
+
 ResultCode ensure_photo_columns(sqlite3* db) {
   struct Column { const char* name; const char* ddl; };
   const Column columns[] = {
@@ -166,16 +228,29 @@ ResultCode ensure_photo_columns(sqlite3* db) {
       {"source_device", "ALTER TABLE photo ADD COLUMN source_device INTEGER NOT NULL DEFAULT 0;"},
       {"source_inode", "ALTER TABLE photo ADD COLUMN source_inode INTEGER NOT NULL DEFAULT 0;"},
       {"source_size", "ALTER TABLE photo ADD COLUMN source_size INTEGER NOT NULL DEFAULT 0;"},
+      {"format", "ALTER TABLE photo ADD COLUMN format TEXT NOT NULL DEFAULT '';"},
+      {"capture_time", "ALTER TABLE photo ADD COLUMN capture_time INTEGER NOT NULL DEFAULT 0;"},
+      {"edit_status", "ALTER TABLE photo ADD COLUMN edit_status TEXT NOT NULL DEFAULT '';"},
+      {"edited_at", "ALTER TABLE photo ADD COLUMN edited_at INTEGER NOT NULL DEFAULT 0;"},
+      {"export_status", "ALTER TABLE photo ADD COLUMN export_status TEXT NOT NULL DEFAULT '';"},
   };
+  bool format_added = false;
   for (const Column& column : columns) {
     if (!has_column(db, "photo", column.name)) {
       const ResultCode added = exec_sql(db, column.ddl);
       if (added != ResultCode::Ok) return added;
+      format_added = format_added || std::string(column.name) == "format";
     }
   }
-  return exec_sql(db, "CREATE INDEX IF NOT EXISTS idx_photo_rating ON photo(rating);"
-                       "CREATE INDEX IF NOT EXISTS idx_photo_flag ON photo(flag);"
-                       "CREATE INDEX IF NOT EXISTS idx_photo_color ON photo(color_label);");
+  if (format_added) {
+    const ResultCode filled = backfill_formats(db);
+    if (filled != ResultCode::Ok) return filled;
+  }
+  const ResultCode marks = exec_sql(db, "CREATE INDEX IF NOT EXISTS idx_photo_rating ON photo(rating);"
+                                        "CREATE INDEX IF NOT EXISTS idx_photo_flag ON photo(flag);"
+                                        "CREATE INDEX IF NOT EXISTS idx_photo_color ON photo(color_label);");
+  if (marks != ResultCode::Ok) return marks;
+  return exec_sql(db, kPhotoQueryIndexes);
 }
 
 std::vector<std::uint8_t> column_blob(sqlite3_stmt* stmt, int index) {
@@ -214,6 +289,11 @@ PhotoRow read_photo(sqlite3_stmt* stmt) {
   row.rating = sqlite3_column_int(stmt, 10);
   row.flag = column_text(stmt, 11);
   row.color_label = column_text(stmt, 12);
+  row.format = column_text(stmt, 13);
+  row.capture_time = sqlite3_column_int64(stmt, 14);
+  row.edit_status = column_text(stmt, 15);
+  row.edited_at = sqlite3_column_int64(stmt, 16);
+  row.export_status = column_text(stmt, 17);
   return row;
 }
 
@@ -314,6 +394,11 @@ ResultCode SqliteProjectStore::open(const std::string& path, std::unique_ptr<Sql
     if (copies != ResultCode::Ok) {
       sqlite3_close(db);
       return copies;
+    }
+    const ResultCode indexes = exec_sql(db, kPhotoQueryIndexes);
+    if (indexes != ResultCode::Ok) {
+      sqlite3_close(db);
+      return indexes;
     }
     const ResultCode stamp = exec_sql(db, "PRAGMA user_version=3;");
     if (stamp != ResultCode::Ok) {
@@ -568,7 +653,7 @@ ResultCode SqliteProjectStore::insert_photo(const PhotoDraft& draft, std::int64_
   Statement stmt;
   const ResultCode prepared = stmt.prepare(
       impl_->db,
-      "INSERT INTO photo(project_id, absolute_path, file_name, access_credential, presence, source_identity_valid, source_device, source_inode, source_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);");
+      "INSERT INTO photo(project_id, absolute_path, file_name, access_credential, presence, source_identity_valid, source_device, source_inode, source_size, format, capture_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);");
   if (prepared != ResultCode::Ok) {
     return prepared;
   }
@@ -591,6 +676,8 @@ ResultCode SqliteProjectStore::insert_photo(const PhotoDraft& draft, std::int64_
   if (const ResultCode code = bind_int64(stmt.get(), 7, static_cast<std::int64_t>(draft.source_identity.device)); code != ResultCode::Ok) return code;
   if (const ResultCode code = bind_int64(stmt.get(), 8, static_cast<std::int64_t>(draft.source_identity.inode)); code != ResultCode::Ok) return code;
   if (const ResultCode code = bind_int64(stmt.get(), 9, static_cast<std::int64_t>(draft.source_identity.size)); code != ResultCode::Ok) return code;
+  if (const ResultCode code = bind_text(stmt.get(), 10, draft.format); code != ResultCode::Ok) return code;
+  if (const ResultCode code = bind_int64(stmt.get(), 11, draft.capture_time); code != ResultCode::Ok) return code;
   const int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
     return map_sqlite(rc);
@@ -711,10 +798,8 @@ ResultCode SqliteProjectStore::update_photo_presence(std::int64_t id, const std:
 ResultCode SqliteProjectStore::load_photo(std::int64_t id, std::optional<PhotoRow>& out) {
   out.reset();
   Statement stmt;
-  const ResultCode prepared = stmt.prepare(
-      impl_->db,
-      "SELECT id, project_id, absolute_path, file_name, access_credential, presence, source_identity_valid, source_device, source_inode, source_size, rating, flag, color_label "
-      "FROM photo WHERE id = ?;");
+  const std::string sql = std::string("SELECT ") + kPhotoColumns + " FROM photo WHERE id = ?;";
+  const ResultCode prepared = stmt.prepare(impl_->db, sql.c_str());
   if (prepared != ResultCode::Ok) {
     return prepared;
   }
@@ -736,12 +821,9 @@ ResultCode SqliteProjectStore::list_photos(const std::optional<std::int64_t>& pr
                                            std::vector<PhotoRow>& out) {
   out.clear();
   Statement stmt;
-  const char* sql = project_id.has_value()
-                        ? "SELECT id, project_id, absolute_path, file_name, access_credential, presence, "
-                          "source_identity_valid, source_device, source_inode, source_size, rating, flag, color_label FROM photo WHERE project_id = ? ORDER BY id;"
-                        : "SELECT id, project_id, absolute_path, file_name, access_credential, presence, "
-                          "source_identity_valid, source_device, source_inode, source_size, rating, flag, color_label FROM photo ORDER BY id;";
-  const ResultCode prepared = stmt.prepare(impl_->db, sql);
+  const std::string sql = std::string("SELECT ") + kPhotoColumns + " FROM photo" +
+                          (project_id.has_value() ? " WHERE project_id = ?" : "") + " ORDER BY id;";
+  const ResultCode prepared = stmt.prepare(impl_->db, sql.c_str());
   if (prepared != ResultCode::Ok) {
     return prepared;
   }
@@ -760,6 +842,138 @@ ResultCode SqliteProjectStore::list_photos(const std::optional<std::int64_t>& pr
     }
     out.push_back(read_photo(stmt.get()));
   }
+}
+
+namespace {
+
+// 排序列只从这张源码常量表里取，不拼接调用方给的文字。
+const char* sort_column(PhotoSortKey key) {
+  switch (key) {
+    case PhotoSortKey::ImportOrder: return nullptr;
+    case PhotoSortKey::CaptureTime: return "capture_time";
+    case PhotoSortKey::EditTime: return "edited_at";
+    case PhotoSortKey::Rating: return "rating";
+    case PhotoSortKey::FileType: return "format";
+    case PhotoSortKey::FileSize: return "source_size";
+    case PhotoSortKey::FileName: return "file_name";
+  }
+  return nullptr;
+}
+
+struct PhotoQuerySql {
+  std::string text;
+  std::vector<std::int64_t> numbers;  // 先绑定数值，再绑定文字
+  std::vector<std::string> texts;
+  std::vector<bool> order;            // true 为数值
+};
+
+void add_in(PhotoQuerySql& sql, const char* column, const std::vector<std::string>& values) {
+  if (values.empty()) return;
+  sql.text += std::string(" AND ") + column + " IN (";
+  for (std::size_t index = 0; index < values.size(); ++index) {
+    sql.text += index == 0 ? "?" : ", ?";
+    sql.texts.push_back(values[index]);
+    sql.order.push_back(false);
+  }
+  sql.text += ")";
+}
+
+PhotoQuerySql photo_query_sql(const PhotoQuery& query) {
+  PhotoQuerySql sql;
+  sql.text = std::string("SELECT ") + kPhotoColumns + " FROM photo WHERE 1 = 1";
+  if (query.project_id.has_value()) {
+    sql.text += " AND project_id = ?";
+    sql.numbers.push_back(*query.project_id);
+    sql.order.push_back(true);
+  }
+  if (query.rating_min != kRatingMin || query.rating_max != kRatingMax) {
+    sql.text += " AND rating BETWEEN ? AND ?";
+    sql.numbers.push_back(query.rating_min);
+    sql.order.push_back(true);
+    sql.numbers.push_back(query.rating_max);
+    sql.order.push_back(true);
+  }
+  add_in(sql, "flag", query.flags);
+  add_in(sql, "color_label", query.colors);
+  add_in(sql, "format", query.formats);
+  add_in(sql, "edit_status", query.edit_statuses);
+  add_in(sql, "export_status", query.export_statuses);
+  const char* direction = query.descending ? " DESC" : " ASC";
+  sql.text += " ORDER BY ";
+  if (const char* column = sort_column(query.sort)) {
+    sql.text += std::string(column) + direction + ", ";
+  }
+  sql.text += std::string("id") + direction + ";";
+  return sql;
+}
+
+ResultCode bind_photo_query(sqlite3_stmt* stmt, const PhotoQuerySql& sql) {
+  std::size_t number = 0;
+  std::size_t text = 0;
+  for (std::size_t index = 0; index < sql.order.size(); ++index) {
+    const int slot = static_cast<int>(index) + 1;
+    const ResultCode code =
+        sql.order[index] ? bind_int64(stmt, slot, sql.numbers[number++]) : bind_text(stmt, slot, sql.texts[text++]);
+    if (code != ResultCode::Ok) return code;
+  }
+  return ResultCode::Ok;
+}
+
+}  // namespace
+
+ResultCode SqliteProjectStore::query_photos(const PhotoQuery& query, std::vector<PhotoRow>& out) {
+  out.clear();
+  const PhotoQuerySql sql = photo_query_sql(query);
+  Statement stmt;
+  if (const ResultCode prepared = stmt.prepare(impl_->db, sql.text.c_str()); prepared != ResultCode::Ok) {
+    return prepared;
+  }
+  if (const ResultCode bound = bind_photo_query(stmt.get(), sql); bound != ResultCode::Ok) return bound;
+  while (true) {
+    const int rc = sqlite3_step(stmt.get());
+    if (rc == SQLITE_DONE) return ResultCode::Ok;
+    if (rc != SQLITE_ROW) return map_sqlite(rc);
+    out.push_back(read_photo(stmt.get()));
+  }
+}
+
+ResultCode SqliteProjectStore::explain_photo_query(const PhotoQuery& query, std::vector<std::string>& plan) {
+  plan.clear();
+  const PhotoQuerySql sql = photo_query_sql(query);
+  Statement stmt;
+  const std::string text = "EXPLAIN QUERY PLAN " + sql.text;
+  if (const ResultCode prepared = stmt.prepare(impl_->db, text.c_str()); prepared != ResultCode::Ok) {
+    return prepared;
+  }
+  if (const ResultCode bound = bind_photo_query(stmt.get(), sql); bound != ResultCode::Ok) return bound;
+  while (true) {
+    const int rc = sqlite3_step(stmt.get());
+    if (rc == SQLITE_DONE) return ResultCode::Ok;
+    if (rc != SQLITE_ROW) return map_sqlite(rc);
+    plan.push_back(column_text(stmt.get(), 3));
+  }
+}
+
+ResultCode SqliteProjectStore::update_photo_edit_state(std::int64_t id, const std::string& edit_status,
+                                                       std::int64_t edited_at) {
+  Statement stmt;
+  const ResultCode prepared = stmt.prepare(impl_->db, "UPDATE photo SET edit_status = ?, edited_at = ? WHERE id = ?;");
+  if (prepared != ResultCode::Ok) return prepared;
+  if (const ResultCode code = bind_text(stmt.get(), 1, edit_status); code != ResultCode::Ok) return code;
+  if (const ResultCode code = bind_int64(stmt.get(), 2, edited_at); code != ResultCode::Ok) return code;
+  if (const ResultCode code = bind_int64(stmt.get(), 3, id); code != ResultCode::Ok) return code;
+  const int rc = sqlite3_step(stmt.get());
+  return rc == SQLITE_DONE ? ResultCode::Ok : map_sqlite(rc);
+}
+
+ResultCode SqliteProjectStore::update_photo_export_status(std::int64_t id, const std::string& export_status) {
+  Statement stmt;
+  const ResultCode prepared = stmt.prepare(impl_->db, "UPDATE photo SET export_status = ? WHERE id = ?;");
+  if (prepared != ResultCode::Ok) return prepared;
+  if (const ResultCode code = bind_text(stmt.get(), 1, export_status); code != ResultCode::Ok) return code;
+  if (const ResultCode code = bind_int64(stmt.get(), 2, id); code != ResultCode::Ok) return code;
+  const int rc = sqlite3_step(stmt.get());
+  return rc == SQLITE_DONE ? ResultCode::Ok : map_sqlite(rc);
 }
 
 ResultCode SqliteProjectStore::erase_photo(std::int64_t id) {

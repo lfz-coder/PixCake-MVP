@@ -31,6 +31,11 @@ class ProjectStore {
   virtual ResultCode list_photos(const std::optional<std::int64_t>& project_id,
                                  std::vector<PhotoRow>& out) = 0;
   virtual ResultCode erase_photo(std::int64_t id) = 0;
+  virtual ResultCode update_photo_edit_state(std::int64_t id, const std::string& edit_status,
+                                             std::int64_t edited_at) = 0;
+  virtual ResultCode update_photo_export_status(std::int64_t id, const std::string& export_status) = 0;
+  // 条件已由项目库校验。实现只用绑定参数，排序列取自源码常量。
+  virtual ResultCode query_photos(const PhotoQuery& query, std::vector<PhotoRow>& out) = 0;
 
   virtual ResultCode insert_virtual_copy(const VirtualCopyDraft& draft, std::int64_t& id) = 0;
   virtual ResultCode load_virtual_copy(std::int64_t id, std::optional<VirtualCopyRow>& out) = 0;

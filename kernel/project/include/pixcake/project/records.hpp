@@ -30,6 +30,9 @@ inline constexpr char kColorGreen[] = "绿";
 inline constexpr char kColorBlue[] = "蓝";
 inline constexpr char kColorPurple[] = "紫";
 inline constexpr std::int64_t kTrashRetentionSeconds = 2592000;
+// 修图状态与导出状态（需求 §6.2 筛选、§6.4 标识）。空串表示未编辑、未导出。
+inline constexpr char kEditStatusEdited[] = "已编辑";
+inline constexpr char kExportStatusExported[] = "已导出";
 
 struct ProjectRow {
   std::int64_t id = 0;
@@ -50,6 +53,13 @@ struct PhotoRow {
   std::string flag;
   std::string color_label;
   FileIdentity source_identity;
+  // 准入时按内容识别的格式（JPEG、PNG、TIFF、BMP）；旧库按扩展名回填，认不出为空。
+  std::string format;
+  // 拍摄时间（Unix 秒）。内核不读 EXIF，0 表示未知，等解码适配器回填。
+  std::int64_t capture_time = 0;
+  std::string edit_status;
+  std::int64_t edited_at = 0;
+  std::string export_status;
 };
 
 struct TrashRow {
@@ -87,6 +97,26 @@ struct PhotoDraft {
   std::vector<std::uint8_t> access_credential;
   std::string presence;
   FileIdentity source_identity;
+  std::string format;
+  std::int64_t capture_time = 0;
+};
+
+// 需求 §6.3 的排序键。ImportOrder 是导入顺序（照片编号）。同值按编号，与排序方向一致。
+enum class PhotoSortKey { ImportOrder, CaptureTime, EditTime, Rating, FileType, FileSize, FileName };
+
+// 需求 §6.2 的筛选条件，多个条件取交集；列表为空表示不限，非空时取其中任一值。
+// 只返回图库元数据行，不读精修参数正文（性能清单 P-12）。
+struct PhotoQuery {
+  std::optional<std::int64_t> project_id;
+  int rating_min = kRatingMin;
+  int rating_max = kRatingMax;
+  std::vector<std::string> flags;
+  std::vector<std::string> colors;
+  std::vector<std::string> formats;
+  std::vector<std::string> edit_statuses;
+  std::vector<std::string> export_statuses;
+  PhotoSortKey sort = PhotoSortKey::ImportOrder;
+  bool descending = false;
 };
 
 struct ProjectResult {

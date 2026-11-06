@@ -32,6 +32,9 @@ class ProjectLibrary {
   ProjectResult set_photo_ratings(std::vector<std::int64_t> photo_ids, int rating);
   ProjectResult set_photo_flags(std::vector<std::int64_t> photo_ids, std::string flag);
   ProjectResult set_photo_colors(std::vector<std::int64_t> photo_ids, std::string color);
+  // 修图状态记为已编辑并记下编辑时间（Unix 秒）；导出状态记为已导出。图片不存在返回状态冲突。
+  ProjectResult mark_photo_edited(std::int64_t photo_id, std::int64_t edited_at);
+  ProjectResult mark_photo_exported(std::int64_t photo_id);
 
   ResultCode startup();
   ResultCode refresh_source_presence();
@@ -54,6 +57,8 @@ class ProjectLibrary {
   ResultCode list_projects(std::vector<ProjectRow>& out) const;
   ResultCode list_photos(const std::optional<std::int64_t>& project_id, std::vector<PhotoRow>& out) const;
   ResultCode load_photo(std::int64_t id, std::optional<PhotoRow>& out) const;
+  // 筛选和排序（需求 §6.2、§6.3）。星级区间越界或倒置、状态值不在定义内返回状态冲突。
+  ResultCode query_photos(const PhotoQuery& query, std::vector<PhotoRow>& out) const;
   ResultCode load_virtual_copy(std::int64_t id, std::optional<VirtualCopyRow>& out) const;
   ResultCode list_virtual_copies(std::int64_t photo_id, std::vector<VirtualCopyRow>& out) const;
   ResultCode shares_original(const std::string& left_kind, std::int64_t left_id, const std::string& right_kind,

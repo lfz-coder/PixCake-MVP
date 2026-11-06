@@ -626,6 +626,7 @@ ProjectResult ProjectLibrary::add_photo(std::int64_t project_id, const AdmittedS
   draft.file_name = std::move(file_name);
   draft.access_credential = std::move(access_credential);
   draft.presence = kPresenceEditable;
+  draft.format = source.format();
   const IoResult identity = files_.identify(draft.absolute_path, draft.source_identity);
   if (identity.not_found) {
     return failed(ResultCode::SourceMissing);
@@ -706,6 +707,46 @@ ResultCode ProjectLibrary::list_photos(const std::optional<std::int64_t>& projec
 
 ResultCode ProjectLibrary::load_photo(std::int64_t id, std::optional<PhotoRow>& out) const {
   return store_.load_photo(id, out);
+}
+
+ResultCode ProjectLibrary::query_photos(const PhotoQuery& query, std::vector<PhotoRow>& out) const {
+  out.clear();
+  if (query.rating_min < kRatingMin || query.rating_max > kRatingMax || query.rating_min > query.rating_max) {
+    return ResultCode::StateConflict;
+  }
+  for (const auto& flag : query.flags) {
+    if (!allowed_flag(flag)) return ResultCode::StateConflict;
+  }
+  for (const auto& color : query.colors) {
+    if (!allowed_color(color)) return ResultCode::StateConflict;
+  }
+  for (const auto& status : query.edit_statuses) {
+    if (!status.empty() && status != kEditStatusEdited) return ResultCode::StateConflict;
+  }
+  for (const auto& status : query.export_statuses) {
+    if (!status.empty() && status != kExportStatusExported) return ResultCode::StateConflict;
+  }
+  return store_.query_photos(query, out);
+}
+
+ProjectResult ProjectLibrary::mark_photo_edited(std::int64_t photo_id, std::int64_t edited_at) {
+  ProjectResult result;
+  std::optional<PhotoRow> photo;
+  result.code = store_.load_photo(photo_id, photo);
+  if (result.code == ResultCode::Ok && (!photo.has_value() || edited_at < 0)) result.code = ResultCode::StateConflict;
+  if (result.code == ResultCode::Ok) result.code = store_.update_photo_edit_state(photo_id, kEditStatusEdited, edited_at);
+  result.id = photo_id;
+  return result;
+}
+
+ProjectResult ProjectLibrary::mark_photo_exported(std::int64_t photo_id) {
+  ProjectResult result;
+  std::optional<PhotoRow> photo;
+  result.code = store_.load_photo(photo_id, photo);
+  if (result.code == ResultCode::Ok && !photo.has_value()) result.code = ResultCode::StateConflict;
+  if (result.code == ResultCode::Ok) result.code = store_.update_photo_export_status(photo_id, kExportStatusExported);
+  result.id = photo_id;
+  return result;
 }
 
 ResultCode ProjectLibrary::load_virtual_copy(std::int64_t id, std::optional<VirtualCopyRow>& out) const {

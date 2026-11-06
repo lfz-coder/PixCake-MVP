@@ -31,6 +31,12 @@ class SqliteProjectStore : public ProjectStore {
   ResultCode load_photo(std::int64_t id, std::optional<PhotoRow>& out) override;
   ResultCode list_photos(const std::optional<std::int64_t>& project_id, std::vector<PhotoRow>& out) override;
   ResultCode erase_photo(std::int64_t id) override;
+  ResultCode update_photo_edit_state(std::int64_t id, const std::string& edit_status,
+                                     std::int64_t edited_at) override;
+  ResultCode update_photo_export_status(std::int64_t id, const std::string& export_status) override;
+  ResultCode query_photos(const PhotoQuery& query, std::vector<PhotoRow>& out) override;
+  // 诊断用：返回 query_photos 那条语句的 EXPLAIN QUERY PLAN 明细（性能清单 P-12 的索引证据）。
+  ResultCode explain_photo_query(const PhotoQuery& query, std::vector<std::string>& plan);
 
   ResultCode insert_virtual_copy(const VirtualCopyDraft& draft, std::int64_t& id) override;
   ResultCode load_virtual_copy(std::int64_t id, std::optional<VirtualCopyRow>& out) override;
