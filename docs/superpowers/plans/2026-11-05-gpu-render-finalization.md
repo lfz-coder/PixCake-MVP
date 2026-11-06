@@ -7,7 +7,7 @@
 
 当前不是完整实现。已经有 CPU reference 管线、Qt GPU 资源基础和 `color.global` 的最小 shader 路径；完整滤镜/LUT、局部调色、蒙版/图层 GPU 合成以及 renderd/exportd 端到端链路仍缺失。
 
-截至当前 checkpoint，阶段 1 的资源诊断已提交（`7f57722`、`beca2f4`），结构化 3D LUT 的 reference 三线性采样已提交（`3cfe271`），图层/蒙版的 reference 合成和 GPU fallback 标记已提交（`d518c0e`）。这些提交没有把 LUT、图层或蒙版宣称为 GPU 已实现；当前 GPU 仍只覆盖最小的 `color.global` shader 路径。 
+截至当前 checkpoint，阶段 1 的资源诊断已提交（`7f57722`、`beca2f4`），结构化 3D LUT 的 reference 三线性采样已提交（`3cfe271`），图层/蒙版的 reference 合成和 GPU fallback 标记已提交（`d518c0e`）。这些提交没有把 LUT、图层或蒙版宣称为 GPU 已实现；当前 GPU 仍只覆盖最小的 `color.global` shader 路径。
 
 官方手册只说明滤镜、配置文件、白平衡和影调的用户行为，没有提供内部 shader、色彩矩阵、LUT 内容或各滑杆的精确传递函数。因此没有来源的视觉公式不能自行猜测。CPU reference 中的公式只作为当前测试 oracle，不能直接宣称与官方产品视觉一致。
 

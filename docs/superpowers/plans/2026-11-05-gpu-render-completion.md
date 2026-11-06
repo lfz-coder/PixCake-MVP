@@ -99,4 +99,6 @@
 
 注意：当前机器的 Qt offscreen 插件不支持创建 OpenGL context，shader 测试会输出明确的 skip 原因；因此本机 CTest 通过不等于已经获得真实 GPU 像素读回证据。
 
+更新（2026-11-05）：在 macOS 原生 QPA（cocoa，OpenGL 4.1 core）下运行 shader 测试时发现 GPU 读回全为 0：core profile 下未绑定 VAO 的 `glDrawArrays` 产生 `GL_INVALID_OPERATION`，而 Qt backend 不检查 GL 错误，失败被静默吞掉；offscreen 下测试一直 skip，因此 CTest 从未暴露该问题。已修复：draw 前绑定空 VAO，draw/readback 后检查 `glGetError` 并返回明确错误；Apple 平台的 `test_gpu_shader_path` 不再强制 offscreen。修复后本机真实 GPU 读回与 reference 逐字节一致（`color.global` temperature/exposure 用例）。非 Apple 平台和无 GPU 环境仍按明确 skip 处理。
+
 因此本计划尚未全部完成；当前已完成的是可验收的 CPU reference 管线、Qt GPU 资源基础和最小 shader 代码闭环。

@@ -93,4 +93,3 @@
 - renderd/exportd 实际调用 executor 的像素路径。
 - 真实 GPU LUT、局部调色、蒙版/图层 shader 合成。
 - 真实图像解码、缩放、编码和跨进程字节传输。
-

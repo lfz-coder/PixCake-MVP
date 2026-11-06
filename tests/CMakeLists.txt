@@ -185,7 +185,12 @@ add_test(NAME test_exportd_image_io COMMAND test_exportd_image_io)
 add_executable(test_gpu_shader_path gpu/test_gpu_shader_path.cpp)
 target_link_libraries(test_gpu_shader_path PRIVATE pixcake_gpu_render pixcake_gpu_backend_qt pixcake_warnings)
 add_test(NAME test_gpu_shader_path COMMAND test_gpu_shader_path)
-set_tests_properties(test_gpu_shader_path PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# macOS offscreen QPA cannot create an OpenGL context, so it would always skip
+# the readback assertion.  The native platform gives real GPU evidence there;
+# the test still skips explicitly when no context can be created.
+if(NOT APPLE)
+  set_tests_properties(test_gpu_shader_path PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
 
 add_executable(test_gpu_backend_native gpu/test_gpu_backend_native.cpp)
 target_link_libraries(test_gpu_backend_native PRIVATE pixcake_gpu_render pixcake_gpu_backend_native pixcake_warnings)

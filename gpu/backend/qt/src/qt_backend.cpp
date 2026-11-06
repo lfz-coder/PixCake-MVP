@@ -2,11 +2,13 @@
 
 #include <QOffscreenSurface>
 #include <QOpenGLContext>
+#include <QOpenGLExtraFunctions>
 #include <QOpenGLFunctions>
 #include <QSurfaceFormat>
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <memory>
 #include <string>
 #include <vector>
@@ -20,6 +22,19 @@ QOpenGLFunctions* current(std::string& error) {
   return context->functions();
 }
 
+// Drains the GL error queue so a failed call cannot be reported as rendered output.
+bool check_gl(QOpenGLFunctions* gl, const char* operation, std::string& error) {
+  GLenum first = GL_NO_ERROR;
+  for (GLenum code = gl->glGetError(); code != GL_NO_ERROR; code = gl->glGetError()) {
+    if (first == GL_NO_ERROR) first = code;
+  }
+  if (first == GL_NO_ERROR) return true;
+  char code[16];
+  std::snprintf(code, sizeof(code), "0x%04X", static_cast<unsigned>(first));
+  error = std::string("OpenGL error ") + code + " after " + operation;
+  return false;
+}
+
 class ContextImpl final : public detail::ContextImpl {
  public:
   ContextImpl() {
@@ -30,6 +45,12 @@ class ContextImpl final : public detail::ContextImpl {
     surface_.setFormat(format); surface_.create(); context_.setFormat(format);
     if (!context_.create()) error_ = "failed to create OpenGL context";
   }
+  ~ContextImpl() override {
+    if (vao_ != 0 && context_.makeCurrent(&surface_)) {
+      context_.extraFunctions()->glDeleteVertexArrays(1, &vao_);
+      context_.doneCurrent();
+    }
+  }
   bool make_current(std::string& error) override {
     if (!error_.empty()) { error = error_; return false; }
     if (!context_.makeCurrent(&surface_)) { error_ = "failed to make OpenGL context current"; error = error_; return false; }
@@ -38,7 +59,13 @@ class ContextImpl final : public detail::ContextImpl {
   void done_current() override { context_.doneCurrent(); }
   bool draw_triangles(std::uint32_t count, std::string& error) override {
     QOpenGLFunctions* gl = current(error); if (gl == nullptr) return false;
-    gl->glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(count)); return true;
+    // A core profile rejects draws without a bound vertex array object, even
+    // when the vertex shader derives positions from gl_VertexID.
+    QOpenGLExtraFunctions* extra = QOpenGLContext::currentContext()->extraFunctions();
+    if (vao_ == 0) extra->glGenVertexArrays(1, &vao_);
+    extra->glBindVertexArray(vao_);
+    gl->glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(count));
+    return check_gl(gl, "draw", error);
   }
   bool set_viewport(std::uint32_t width, std::uint32_t height, std::string& error) override {
     auto* gl = current(error); if (gl == nullptr) return false;
@@ -47,8 +74,9 @@ class ContextImpl final : public detail::ContextImpl {
   bool read_pixels(std::uint32_t width, std::uint32_t height, std::vector<std::byte>& data, std::string& error) override {
     auto* gl = current(error); if (gl == nullptr) return false;
     data.resize(static_cast<std::size_t>(width) * height * 4);
+    gl->glPixelStorei(GL_PACK_ALIGNMENT, 1);
     gl->glReadPixels(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height), GL_RGBA, GL_UNSIGNED_BYTE, data.data());
-    return true;
+    return check_gl(gl, "readback", error);
   }
   std::shared_ptr<detail::ShaderImpl> create_shader() override;
   std::shared_ptr<detail::ProgramImpl> create_program() override;
@@ -56,7 +84,7 @@ class ContextImpl final : public detail::ContextImpl {
   std::shared_ptr<detail::FramebufferImpl> create_framebuffer() override;
   std::string last_error() const override { return error_; }
  private:
-  QOpenGLContext context_; QOffscreenSurface surface_; std::string error_;
+  QOpenGLContext context_; QOffscreenSurface surface_; std::string error_; GLuint vao_ = 0;
 };
 
 class ShaderImpl final : public detail::ShaderImpl {
