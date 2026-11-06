@@ -79,30 +79,11 @@ void test_confirm_and_cancel_have_explicit_lifecycles() {
   EXPECT(session->cancel() == ResultCode::StateConflict);
 }
 
-void test_replay_failure_marks_data_without_deleting_it() {
-  using pixcake::ResultCode;
-  using pixcake::manual::StrokeKind;
-  auto session = pixcake::manual::StrokeSession::open("image-1", 4);
-  EXPECT(session->append(stroke("clone-1", StrokeKind::CloneStamp)) == ResultCode::Ok);
-  pixcake::manual::ManualCommit commit;
-  EXPECT(session->confirm(commit) == ResultCode::Ok);
-  EXPECT(session->mark_replay_invalid("clone-1") == ResultCode::Ok);
-  EXPECT(session->mark_replay_invalid("clone-1") == ResultCode::Ok);
-  const auto retained = session->strokes();
-  EXPECT(retained.size() == 1);
-  EXPECT(retained.front().stroke_id == "clone-1");
-  EXPECT(retained.front().replay_invalid);
-  EXPECT(retained.front().points.size() == 2);
-  EXPECT(retained.front().source_point->x == 5.0);
-  EXPECT(session->mark_replay_invalid("missing") == ResultCode::StateConflict);
-  EXPECT(session->mark_replay_invalid("") == ResultCode::StateConflict);
-}
 
 }  // namespace
 
 int main() {
   test_identity_and_append_validation();
   test_confirm_and_cancel_have_explicit_lifecycles();
-  test_replay_failure_marks_data_without_deleting_it();
   return g_failures == 0 ? 0 : 1;
 }

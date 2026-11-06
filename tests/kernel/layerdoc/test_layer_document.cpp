@@ -251,23 +251,6 @@ void test_apply_bakes_the_original_and_a_new_document_has_no_pixels() {
   EXPECT(pixcake::tsq_sibling_path("creative", "img-new", tsq) == pixcake::ResultCode::StateConflict);
 }
 
-void test_recovered_empty_save_round_trips() {
-  pixcake::test::FakeFileSystem files;
-  files.files["/creative/bad.pxlayer"] = {1, 2, 3, 4};
-  pixcake::LayerDocument destination;
-  const pixcake::LoadResult corrupt = pixcake::LayerDocument::load(destination, files, "/creative/bad.pxlayer");
-  EXPECT(corrupt.recovered_empty);
-  EXPECT(corrupt.code == pixcake::ResultCode::DocumentCorrupt);
-  EXPECT(destination.recovered_empty());
-  EXPECT(destination.source_image_id().empty());
-  EXPECT(destination.save(files, "/creative/bad.pxlayer") == pixcake::ResultCode::Ok);
-  pixcake::LayerDocument second;
-  const pixcake::LoadResult ok = pixcake::LayerDocument::load(second, files, "/creative/bad.pxlayer");
-  EXPECT(ok.code == pixcake::ResultCode::Ok);
-  EXPECT(second.recovered_empty());
-  EXPECT(second.source_image_id().empty());
-  EXPECT(second.layers().empty());
-}
 
 void test_layer_save_observes_explicit_write_latch() {
   auto document = opened();
@@ -378,7 +361,6 @@ int main() {
   test_place_result_replace_locked_generation_layer();
   test_remove_clears_generation_cursor_for_deleted_children();
   test_round_trip_keeps_unknown_records_and_rejects_the_retouch_magic();
-  test_recovered_empty_save_round_trips();
   test_layer_save_observes_explicit_write_latch();
   test_apply_bakes_the_original_and_a_new_document_has_no_pixels();
   if (g_failures != 0) {

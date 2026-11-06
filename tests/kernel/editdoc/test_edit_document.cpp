@@ -4,6 +4,8 @@
 #include "support/fake_file_system.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <thread>
 #include <cstdint>
 #include <cstdio>
 #include <optional>
@@ -394,7 +396,32 @@ void test_o07_commit_logs_revision_and_code() {
   EXPECT(log.count("editdoc.commit", pixcake::ResultCode::StateConflict) == 1);
 }
 
+// B-52 / C-25：提交后超过 2 秒仍没写完，不返回成功；修订号不前进，磁盘保留上一份。
+void test_b52_commit_slower_than_two_seconds_is_not_success() {
+  struct SlowFiles : pixcake::test::FakeFileSystem {
+    bool slow = false;
+    pixcake::IoResult write_new(const std::string& path, const std::vector<std::uint8_t>& data) override {
+      if (slow) std::this_thread::sleep_for(std::chrono::milliseconds(2150));
+      return pixcake::test::FakeFileSystem::write_new(path, data);
+    }
+  } files;
+  auto document = *pixcake::EditDocument::create("img-1");
+  EXPECT(document.write_snapshot(files, kPath) == pixcake::ResultCode::Ok);
+  const auto before = files.files[kPath];
+  document.set_preview("color.global", "exposure", "1.00");
+  files.slow = true;
+  EXPECT(document.commit_preview(0, "color.global", "exposure", color_limits(), files, kPath) !=
+         pixcake::ResultCode::Ok);
+  EXPECT(document.revision() == 0);
+  EXPECT(files.files[kPath] == before);
+  files.slow = false;
+  EXPECT(document.commit_preview(0, "color.global", "exposure", color_limits(), files, kPath) ==
+         pixcake::ResultCode::Ok);
+  EXPECT(document.revision() == 1);
+}
+
 int main() {
+  test_b52_commit_slower_than_two_seconds_is_not_success();
   test_o07_commit_logs_revision_and_code();
   test_c05_monochrome_profile_blocks_vibrance_edits();
   test_q02_mask_scope_is_not_a_document_fragment();

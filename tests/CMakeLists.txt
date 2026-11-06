@@ -47,6 +47,40 @@ target_include_directories(test_document_recovery PRIVATE ${CMAKE_SOURCE_DIR}/te
 target_link_libraries(test_document_recovery PRIVATE pixcake_editdoc pixcake_warnings)
 add_test(NAME test_document_recovery COMMAND test_document_recovery)
 
+add_executable(test_persist_recovery recovery/test_persist_recovery.cpp)
+target_include_directories(test_persist_recovery PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+target_link_libraries(test_persist_recovery PRIVATE pixcake_persist pixcake_warnings)
+add_test(NAME test_persist_recovery COMMAND test_persist_recovery)
+
+add_executable(test_export_recovery recovery/test_export_recovery.cpp)
+target_include_directories(test_export_recovery PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+target_link_libraries(test_export_recovery PRIVATE pixcake_exportq pixcake_storage pixcake_command pixcake_ledger pixcake_warnings)
+add_test(NAME test_export_recovery COMMAND test_export_recovery)
+
+add_executable(test_ledger_replay recovery/test_ledger_replay.cpp)
+target_include_directories(test_ledger_replay PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+target_link_libraries(test_ledger_replay PRIVATE pixcake_ledger pixcake_storage pixcake_warnings)
+add_test(NAME test_ledger_replay COMMAND test_ledger_replay)
+
+add_executable(test_layer_recovery recovery/test_layer_recovery.cpp)
+target_include_directories(test_layer_recovery PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+target_link_libraries(test_layer_recovery PRIVATE pixcake_layerdoc pixcake_editdoc pixcake_warnings)
+add_test(NAME test_layer_recovery COMMAND test_layer_recovery)
+
+add_executable(test_manual_replay recovery/test_manual_replay.cpp)
+target_link_libraries(test_manual_replay PRIVATE pixcake_manual pixcake_warnings)
+add_test(NAME test_manual_replay COMMAND test_manual_replay)
+
+add_executable(test_source_delete_recovery recovery/test_source_delete_recovery.cpp)
+target_include_directories(test_source_delete_recovery PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+target_link_libraries(test_source_delete_recovery PRIVATE pixcake_image_import pixcake_storage pixcake_warnings)
+add_test(NAME test_source_delete_recovery COMMAND test_source_delete_recovery)
+
+add_executable(test_history_restart recovery/test_history_restart.cpp)
+target_include_directories(test_history_restart PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+target_link_libraries(test_history_restart PRIVATE pixcake_history pixcake_warnings)
+add_test(NAME test_history_restart COMMAND test_history_restart)
+
 add_executable(test_sync kernel/sync/test_sync.cpp)
 target_include_directories(test_sync PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 target_link_libraries(test_sync PRIVATE pixcake_sync pixcake_warnings)

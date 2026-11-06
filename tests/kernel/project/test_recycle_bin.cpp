@@ -387,33 +387,6 @@ void test_delete_source_file() {
   EXPECT(row->presence == pixcake::kPresenceEditable);
 }
 
-void test_delete_source_file_recovers_when_final_presence_write_fails() {
-  pixcake::test::TempDir dir;
-  std::unique_ptr<pixcake::SqliteProjectStore> sqlite;
-  EXPECT(pixcake::SqliteProjectStore::open(dir.path() + "/library.db", sqlite) == pixcake::ResultCode::Ok);
-  FailingPresenceStore store(*sqlite);
-  FixedClock clock;
-  pixcake::test::FakeFileSystem files;
-  files.files["/pictures/recover.png"] = pixcake::test::png_with({1, 2, 3});
-  FakeDeleter deleter;
-  deleter.files = &files;
-  MemoryLog log;
-  pixcake::ProjectLibrary library(store, files, clock, deleter, &log);
-  const pixcake::ProjectResult project = library.create_project("恢复删除", pixcake::kOriginLocal, false);
-  const pixcake::ProjectResult photo = library.add_photo(project.id, pixcake::test::admitted_png(files, "/pictures/recover.png"), "recover.png", {});
-  store.fail_on_presence_call = 2;  // intent succeeds; post-delete state write fails.
-  EXPECT(library.delete_source_file(photo.id).code == pixcake::ResultCode::DiskFull);
-  std::optional<pixcake::PhotoRow> pending;
-  EXPECT(library.load_photo(photo.id, pending) == pixcake::ResultCode::Ok);
-  EXPECT(pending.has_value());
-  EXPECT(pending->presence == pixcake::kPresenceDeletePending);
-  EXPECT(!files.files.count("/pictures/recover.png"));
-  store.fail_on_presence_call = 0;
-  EXPECT(library.startup() == pixcake::ResultCode::Ok);
-  EXPECT(library.load_photo(photo.id, pending) == pixcake::ResultCode::Ok);
-  EXPECT(pending.has_value());
-  EXPECT(pending->presence == pixcake::kPresenceMissing);
-}
 
 void test_file_source_deleter_rejects_relative_paths() {
   pixcake::test::FakeFileSystem files;
@@ -451,7 +424,6 @@ int main() {
   test_trashing_twice_keeps_the_original_time();
   test_erase_trashed_project_removes_index_only();
   test_delete_source_file();
-  test_delete_source_file_recovers_when_final_presence_write_fails();
   test_file_source_deleter_rejects_relative_paths();
   test_delete_uses_enrolled_file_identity();
   return g_failures == 0 ? 0 : 1;

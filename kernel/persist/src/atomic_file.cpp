@@ -101,7 +101,8 @@ bool restore_backup(FileSystem& files, const std::string& formal, const std::str
 }
 
 ResultCode replace_in_five_steps(FileSystem& files, const std::string& formal_path,
-                                 const std::vector<std::uint8_t>& bytes) {
+                                 const std::vector<std::uint8_t>& bytes,
+                                 std::chrono::steady_clock::time_point give_up_at, bool& missed_deadline) {
   WriteScope scope(files, formal_path);
   if (!scope) {
     return scope.code();
@@ -124,6 +125,11 @@ ResultCode replace_in_five_steps(FileSystem& files, const std::string& formal_pa
   if (!synced.ok) {
     files.remove_file(temp);
     return synced.code;
+  }
+  if (std::chrono::steady_clock::now() > give_up_at) {
+    files.remove_file(temp);
+    missed_deadline = true;
+    return ResultCode::IoFailed;
   }
 
   const bool had_formal = files.exists(formal_path);
@@ -245,11 +251,15 @@ DurableLoad open_durable_steps(FileSystem& files, const std::string& formal_path
 }  // namespace
 
 ResultCode atomic_replace(FileSystem& files, const std::string& formal_path,
-                          const std::vector<std::uint8_t>& bytes, LogSink* log) {
+                          const std::vector<std::uint8_t>& bytes, LogSink* log, std::chrono::milliseconds deadline) {
   note(log, "persist.write.start", ResultCode::Ok, formal_path);
   const auto began = std::chrono::steady_clock::now();
-  const ResultCode code = replace_in_five_steps(files, formal_path, bytes);
+  bool missed_deadline = false;
+  const ResultCode code = replace_in_five_steps(files, formal_path, bytes, began + deadline, missed_deadline);
   const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - began);
+  if (missed_deadline) {
+    note(log, "persist.write.deadline", code, formal_path, static_cast<std::uint64_t>(elapsed.count()));
+  }
   note(log, code == ResultCode::Ok ? "persist.write.finish" : "persist.write.failed", code, formal_path,
        static_cast<std::uint64_t>(elapsed.count()));
   return code;
