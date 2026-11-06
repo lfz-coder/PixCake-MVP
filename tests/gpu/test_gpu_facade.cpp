@@ -1,14 +1,255 @@
-#include <pixcake/gl/gl.hpp>
 #include <pixcake/gpu/render_executor.hpp>
+
 #include <cassert>
+#include <cstdint>
+#include <initializer_list>
+#include <array>
 #include <string>
+#include <utility>
+
+namespace {
+
+pixcake::gpu::RgbaImage image(std::uint8_t r, std::uint8_t g, std::uint8_t b) {
+  pixcake::gpu::RgbaImage result;
+  result.width = 1; result.height = 1; result.row_stride = 4;
+  result.pixels = {r, g, b, 255};
+  return result;
+}
+
+pixcake::render::RenderDescription operation(
+    const char* capability, const char* stage, const char* program,
+    std::initializer_list<pixcake::render::RenderValue> values) {
+  pixcake::render::RenderDescription description;
+  description.document_revision = 77;
+  pixcake::render::RenderOperation item;
+  item.capability_id = capability; item.stage = stage; item.program = program;
+  item.values.assign(values.begin(), values.end());
+  description.operations.push_back(std::move(item));
+  return description;
+}
+
+pixcake::render::RenderValue value(const char* channel, double numeric) {
+  return {channel, channel, std::to_string(numeric), numeric};
+}
+
+class FakeResources final : public pixcake::gpu::ResourceProvider {
+ public:
+  explicit FakeResources(bool resolve, pixcake::gpu::ResourceKind kind = pixcake::gpu::ResourceKind::Lut)
+      : resolve_(resolve), kind_(kind) {}
+  bool resolve(std::string_view, pixcake::gpu::ResolvedResource& resource,
+               std::string& error) const override {
+    if (!resolve_) { error = "resource handle not found"; return false; }
+    resource = {"fixture-resource", kind_, bytes_, sizeof(bytes_)};
+    return true;
+  }
+
+ private:
+  bool resolve_;
+  pixcake::gpu::ResourceKind kind_;
+  inline static const std::byte bytes_[4]{};
+};
+
+class StructuredLut final : public pixcake::gpu::ResourceProvider {
+ public:
+  explicit StructuredLut(std::uint64_t revision, bool identity = false) : revision_(revision), identity_(identity) {}
+  bool resolve(std::string_view, pixcake::gpu::ResolvedResource&, std::string& error) const override {
+    error = "opaque resource intentionally unavailable";
+    return false;
+  }
+  bool resolveLut(std::string_view, pixcake::gpu::Lut3DView& view, std::string&) const override {
+    const auto& samples = identity_ ? identity_samples_ : samples_;
+    view = {"lut-2", 2, samples.data(), samples.size(), revision_};
+    return true;
+  }
+
+ private:
+  std::uint64_t revision_;
+  bool identity_;
+  inline static constexpr std::array<float, 24> samples_ = {
+      1.0F, 0.0F, 1.0F, 0.0F, 0.0F, 1.0F,
+      1.0F, 1.0F, 1.0F, 0.0F, 1.0F, 1.0F,
+      1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F,
+      1.0F, 1.0F, 0.0F, 0.0F, 1.0F, 0.0F};
+  inline static constexpr std::array<float, 24> identity_samples_ = {
+      0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F,
+      0.0F, 1.0F, 0.0F, 1.0F, 1.0F, 0.0F,
+      0.0F, 0.0F, 1.0F, 1.0F, 0.0F, 1.0F,
+      0.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F};
+};
+
+class ReferenceContext final : public pixcake::gl::detail::ContextImpl {
+ public:
+  bool make_current(std::string&) override { return true; }
+  void done_current() override {}
+  bool set_viewport(std::uint32_t, std::uint32_t, std::string&) override { return true; }
+  bool draw_triangles(std::uint32_t, std::string&) override { return true; }
+  bool read_pixels(std::uint32_t, std::uint32_t, std::vector<std::byte>&, std::string&) override { return false; }
+  std::shared_ptr<pixcake::gl::detail::ShaderImpl> create_shader() override { return {}; }
+  std::shared_ptr<pixcake::gl::detail::ProgramImpl> create_program() override { return {}; }
+  std::shared_ptr<pixcake::gl::detail::Texture2DImpl> create_texture() override { return {}; }
+  std::shared_ptr<pixcake::gl::detail::FramebufferImpl> create_framebuffer() override { return {}; }
+  std::string last_error() const override { return {}; }
+};
+
+}  // namespace
+
 int main() {
-  auto context = pixcake::gl::Context::create();
-  assert(context.valid());
-  assert(!context.makeCurrent());
-  assert(context.lastError() == "no GPU backend is registered");
   pixcake::gpu::RenderExecutor executor;
-  std::string error;
-  assert(executor.execute(context, {}, error));
+  pixcake::gpu::RenderInputs inputs;
+  pixcake::gpu::RenderResult result;
+
+  auto global_probe = operation("color.global", "color", "pixcake.color.global", {});
+  auto local_probe = operation("color.local", "color", "pixcake.color.local", {});
+  auto filter_probe = operation("color.global", "color", "pixcake.filter", {});
+  auto unknown_probe = operation("free", "free", "pixcake.curves", {});
+  assert(pixcake::gpu::PassRegistry::classify(global_probe.operations[0]) == pixcake::gpu::PassStatus::Implemented);
+  assert(pixcake::gpu::PassRegistry::classify(local_probe.operations[0]) == pixcake::gpu::PassStatus::ReferenceOnly);
+  assert(pixcake::gpu::PassRegistry::classify(filter_probe.operations[0]) == pixcake::gpu::PassStatus::MissingResource);
+  assert(pixcake::gpu::PassRegistry::classify(unknown_probe.operations[0]) == pixcake::gpu::PassStatus::Unregistered);
+
+  auto white_balance = operation("color.global", "color", "pixcake.color.global",
+                                 {value("temperature", 100.0), value("tint", 0.0)});
+  assert(executor.renderReference(white_balance, image(128, 128, 128), inputs, result));
+  assert(result.success && result.image.revision == 77);
+  assert(result.image.pixels[0] > result.image.pixels[2]);
+
+  auto exposure = operation("color.global", "tone", "pixcake.color.global",
+                            {value("exposure", 1.0)});
+  assert(executor.renderReference(exposure, image(64, 64, 64), inputs, result));
+  assert(result.image.pixels[0] >= 126 && result.image.pixels[0] <= 130);
+
+  auto contrast = operation("color.global", "tone", "pixcake.color.global",
+                            {value("contrast", 100.0)});
+  assert(executor.renderReference(contrast, image(64, 64, 64), inputs, result));
+  assert(result.image.pixels[0] <= 2);
+
+  auto filter = operation("color.global", "color", "pixcake.filter",
+                          {value("amount", 100.0)});
+  assert(executor.renderReference(filter, image(128, 128, 128), inputs, result));
+  assert(result.image.pixels[0] == 128 && result.image.pixels[2] == 128);
+  assert(!result.statuses.empty() && result.statuses.front().status == pixcake::gpu::PassStatus::MissingResource);
+
+  FakeResources resources(true);
+  inputs.resources = &resources;
+  assert(executor.renderReference(filter, image(128, 128, 128), inputs, result));
+  assert(!result.statuses.empty() && result.statuses.front().status == pixcake::gpu::PassStatus::MissingResource);
+  assert(result.image.pixels[0] == 128 && result.image.pixels[2] == 128);
+  FakeResources missing_resources(false);
+  inputs.resources = &missing_resources;
+  assert(executor.renderReference(filter, image(128, 128, 128), inputs, result));
+  assert(!result.statuses.empty() && result.statuses.front().status == pixcake::gpu::PassStatus::MissingResource);
+  inputs.resources = nullptr;
+
+  StructuredLut lut(77);
+  inputs.resources = &lut;
+  auto lut_filter = operation("color.global", "color", "pixcake.filter", {value("amount", 100.0)});
+  assert(executor.renderReference(lut_filter, image(64, 128, 192), inputs, result));
+  assert(result.statuses.front().status == pixcake::gpu::PassStatus::ReferenceOnly);
+  assert(result.image.pixels[0] >= 190 && result.image.pixels[0] <= 192);
+  assert(result.image.pixels[1] >= 127 && result.image.pixels[1] <= 129);
+  assert(result.image.pixels[2] >= 62 && result.image.pixels[2] <= 64);
+  StructuredLut identity_lut(77, true);
+  inputs.resources = &identity_lut;
+  assert(executor.renderReference(lut_filter, image(64, 128, 192), inputs, result));
+  assert(result.image.pixels[0] == 64 && result.image.pixels[1] == 128 && result.image.pixels[2] == 192);
+
+  auto half_lut = operation("color.global", "color", "pixcake.filter", {value("amount", 50.0)});
+  inputs.resources = &lut;
+  assert(executor.renderReference(half_lut, image(64, 128, 192), inputs, result));
+  assert(result.image.pixels[0] >= 126 && result.image.pixels[0] <= 129);
+  auto masked_lut = half_lut;
+  masked_lut.operations[0].mask_ids = {"half"};
+  inputs.masks.push_back({"half", 1, 1, {128}});
+  assert(executor.renderReference(masked_lut, image(64, 128, 192), inputs, result));
+  assert(result.image.pixels[0] >= 94 && result.image.pixels[0] <= 98);
+  inputs.masks.clear();
+  StructuredLut stale_lut(78);
+  inputs.resources = &stale_lut;
+  assert(executor.renderReference(lut_filter, image(64, 128, 192), inputs, result));
+  assert(result.statuses.front().status == pixcake::gpu::PassStatus::MissingResource);
+  assert(result.image.pixels[0] == 64);
+  inputs.resources = nullptr;
+
+  auto profile = operation("color.global", "color", "pixcake.profile", {value("amount", 100.0)});
+  FakeResources wrong_kind(true, pixcake::gpu::ResourceKind::Lut);
+  inputs.resources = &wrong_kind;
+  assert(executor.renderReference(profile, image(128, 128, 128), inputs, result));
+  assert(!result.statuses.empty() && result.statuses.front().status == pixcake::gpu::PassStatus::MissingResource);
+  inputs.resources = nullptr;
+
+  auto unknown = operation("color.global", "free", "pixcake.curves",
+                           {value("amount", 100.0)});
+  assert(executor.renderReference(unknown, image(128, 128, 128), inputs, result));
+  assert(!result.statuses.empty() && result.statuses.front().status == pixcake::gpu::PassStatus::Unregistered);
+
+  auto masked = operation("color.local", "color", "pixcake.color.local",
+                          {value("temperature", 100.0)});
+  masked.operations[0].mask_ids = {"zero"};
+  inputs.masks.push_back({"zero", 1, 1, {0}});
+  assert(executor.renderReference(masked, image(128, 128, 128), inputs, result));
+  assert(result.image.pixels[0] == 128 && result.image.pixels[2] == 128);
+  inputs.masks.clear();
+
+  auto bad_blend = operation("color.global", "color", "pixcake.color.global",
+                             {value("temperature", 100.0)});
+  bad_blend.operations[0].blend_mode = "overlay";
+  assert(executor.renderReference(bad_blend, image(128, 128, 128), inputs, result));
+  assert(result.statuses.front().status == pixcake::gpu::PassStatus::InvalidInput);
+
+  pixcake::gpu::RenderInputs layers;
+  layers.layers.push_back({image(255, 0, 0), "", 0.5F, "normal", true, 1});
+  layers.layers.push_back({image(0, 0, 255), "", 0.5F, "normal", true, 2});
+  pixcake::render::RenderDescription empty;
+  empty.document_revision = 88;
+  assert(executor.renderReference(empty, image(0, 0, 0), layers, result));
+  assert(result.image.revision == 88);
+  assert(result.image.pixels[0] >= 63 && result.image.pixels[0] <= 65);
+  assert(result.image.pixels[2] >= 126 && result.image.pixels[2] <= 129);
+
+  pixcake::gpu::RenderInputs blend_layers;
+  blend_layers.layers.push_back({image(255, 0, 0), "", 1.0F, "multiply", true, 2});
+  blend_layers.layers.push_back({image(0, 0, 255), "", 0.5F, "screen", true, 1});
+  assert(executor.renderReference(empty, image(128, 128, 128), blend_layers, result));
+  // Order 1 (screen blue at 50%) is applied before order 2 (multiply red).
+  assert(result.image.pixels[0] >= 127 && result.image.pixels[0] <= 129);
+  assert(result.image.pixels[1] == 0);
+  assert(result.image.pixels[2] == 0);
+
+  pixcake::gpu::RenderInputs hidden_layer;
+  hidden_layer.layers.push_back({image(255, 0, 0), "", 1.0F, "normal", false, 1});
+  assert(executor.renderReference(empty, image(0, 0, 0), hidden_layer, result));
+  assert(result.image.pixels[0] == 0 && result.image.pixels[1] == 0 && result.image.pixels[2] == 0);
+  assert(result.statuses.size() == 1 && result.statuses.front().status == pixcake::gpu::PassStatus::Disabled);
+
+  pixcake::gpu::RenderInputs masked_layer;
+  masked_layer.layers.push_back({image(255, 0, 0), "half", 1.0F, "normal", true, 1});
+  masked_layer.masks.push_back({"half", 1, 1, {128}});
+  assert(executor.renderReference(empty, image(0, 0, 0), masked_layer, result));
+  assert(result.image.pixels[0] >= 127 && result.image.pixels[0] <= 129);
+  assert(result.statuses.size() == 1 && result.statuses.front().status == pixcake::gpu::PassStatus::Implemented);
+
+  pixcake::gpu::RenderInputs bad_layer;
+  auto wrong_size = image(255, 0, 0);
+  wrong_size.width = 2;
+  bad_layer.layers.push_back({wrong_size, "", 1.0F, "normal", true, 1});
+  assert(executor.renderReference(empty, image(0, 0, 0), bad_layer, result));
+  assert(result.image.pixels[0] == 0);
+  assert(result.statuses.size() == 1 && result.statuses.front().status == pixcake::gpu::PassStatus::MissingResource);
+
+  pixcake::gpu::RenderInputs bad_mask;
+  bad_mask.layers.push_back({image(255, 0, 0), "missing", 1.0F, "normal", true, 1});
+  assert(executor.renderReference(empty, image(0, 0, 0), bad_mask, result));
+  assert(result.image.pixels[0] == 0);
+  assert(result.statuses.size() == 1 && result.statuses.front().status == pixcake::gpu::PassStatus::MissingResource);
+
+  auto reference_context_impl = std::make_shared<ReferenceContext>();
+  pixcake::gl::Context reference_context(reference_context_impl);
+  pixcake::gpu::RenderResult execute_result;
+  std::string execute_error;
+  assert(executor.execute(reference_context, empty, image(0, 0, 0), masked_layer,
+                          execute_result, execute_error));
+  assert(execute_result.reference_fallback);
+  assert(execute_result.image.pixels[0] >= 127 && execute_result.image.pixels[0] <= 129);
+  assert(!execute_result.diagnostics.empty());
   return 0;
 }
