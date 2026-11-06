@@ -284,7 +284,24 @@ void test_c48_creative_amount_follows_official() {
   }
 }
 
+// 来源：官方《基础调色功能说明》（wiki.pixcakeai.com/guide/9398.html）：色彩编辑器色相、饱和度、明亮度偏移
+// 均为 -100 到 100，默认 0；手册没写步进，标待确认。参数标识由本项目选定（契约只冻结能力标识）。
+void test_c49_color_editor_offsets() {
+  for (const char* id : {"color_editor_hue_shift", "color_editor_saturation_shift", "color_editor_luminance_shift"}) {
+    const auto* mode = pixcake::find_parameter_mode("color.global", id);
+    EXPECT(mode != nullptr);
+    if (mode == nullptr) continue;
+    EXPECT(mode->minimum == -100.0 && mode->maximum == 100.0 && mode->default_value == 0.0);
+    EXPECT(!mode->step_confirmed && mode->default_confirmed);
+    EXPECT(pixcake::validate_parameter_display_value("color.global", id, "-100"));
+    EXPECT(!pixcake::validate_parameter_display_value("color.global", id, "100.5"));
+  }
+  // 色彩平滑、亮度平滑、色彩均匀度没有官方数字也没有实测，不注册。
+  EXPECT(pixcake::find_parameter_mode("color.global", "color_editor_color_smoothing") == nullptr);
+}
+
 int main() {
+  test_c49_color_editor_offsets();
   test_c47_grain_is_its_own_capability();
   test_c48_creative_amount_follows_official();
   test_c42_levels_rgb_modes();

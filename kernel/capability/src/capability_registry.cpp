@@ -130,6 +130,11 @@ std::vector<ParameterMode> make_parameter_modes() {
     add_global(std::string("grading_") + zone + "_hue", 0.0, 359.0, 1.0, 0.0).step_confirmed = false;
   }
   add_global("grading_blending", 0.0, 100.0, 1.0, 50.0).step_confirmed = false;
+  // 色彩编辑器：色相、饱和度、明亮度偏移 -100 到 100，默认 0（官方《基础调色功能说明》）。
+  // 手册没写步进，标待确认。色彩平滑、亮度平滑、色彩均匀度没有官方数字也没有实测，不注册。
+  for (const char* item : {"hue", "saturation", "luminance"}) {
+    add_global(std::string("color_editor_") + item + "_shift", -100.0, 100.0, 1.0, 0.0).step_confirmed = false;
+  }
   // 颗粒：独立能力（用户 2026-11-05 裁定），各项 0..100 步长 1，默认值取自 test 版画面。
   const char* grain_ids[] = {"amount", "shadows", "midtones", "highlights", "size", "roughness", "color"};
   const double grain_defaults[] = {0, 30, 50, 15, 10, 15, 10};

@@ -53,8 +53,8 @@ constexpr std::array<LabelBinding, 5> kLevels = {{
     {"输出白场", "levels_rgb_output_white"},
 }};
 
-// 颜色分级：“平衡”只用滑杆读到过范围，没有用数值框核对，不在表里。
-constexpr std::array<LabelBinding, 13> kGrading = {{
+// 颜色分级和色彩编辑器偏移。颜色分级的“平衡”只用滑杆读到过范围，没有用数值框核对，不在表里。
+constexpr std::array<LabelBinding, 16> kGrading = {{
     {"阴影亮度", "grading_shadows_luminance"},
     {"阴影饱和度", "grading_shadows_saturation"},
     {"阴影色相", "grading_shadows_hue"},
@@ -68,6 +68,10 @@ constexpr std::array<LabelBinding, 13> kGrading = {{
     {"全局调饱和度", "grading_global_saturation"},
     {"全局调色相", "grading_global_hue"},
     {"混合", "grading_blending"},
+    // 色彩编辑器的三项偏移（官方手册给出范围）。
+    {"色相偏移", "color_editor_hue_shift"},
+    {"饱和度偏移", "color_editor_saturation_shift"},
+    {"明亮度偏移", "color_editor_luminance_shift"},
 }};
 
 constexpr std::array<LabelBinding, 3> kHslChannels = {{{"色相", "hue"}, {"饱和度", "saturation"}, {"明亮度", "luminance"}}};

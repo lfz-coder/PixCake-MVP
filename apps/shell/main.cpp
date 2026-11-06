@@ -598,8 +598,8 @@ int check_refine_sliders(const QWidget& window) {
     ++bound;
     if (label == QStringLiteral("曝光")) exposure_ok = true;
   }
-  // 顶层影调 14 + 色阶 5 + HSL 24 + 可选颜色 36 + 颜色分级 13（“平衡”未注册）。
-  if (bound != 92 || !exposure_ok) { qCritical("expected 92 parameter-mode sliders, found %d", bound); return 4; }
+  // 顶层影调 14 + 色阶 5 + HSL 24 + 可选颜色 36 + 颜色分级 13（“平衡”未注册）+ 色彩编辑器偏移 3。
+  if (bound != 95 || !exposure_ok) { qCritical("expected 95 parameter-mode sliders, found %d", bound); return 4; }
   return 0;
 }
 

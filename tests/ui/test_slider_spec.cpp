@@ -124,7 +124,9 @@ void test_c46_subgroup_labels_bind_to_kernel_modes() {
                         {"红色-青色", "selective_red_cyan"},     {"中间色（灰色）-黑色", "selective_neutral_black"},
                         {"黑色-洋红", "selective_black_magenta"}, {"阴影亮度", "grading_shadows_luminance"},
                         {"中间调色相", "grading_midtones_hue"},  {"全局调饱和度", "grading_global_saturation"},
-                        {"混合", "grading_blending"}};
+                        {"混合", "grading_blending"},           {"色相偏移", "color_editor_hue_shift"},
+                        {"饱和度偏移", "color_editor_saturation_shift"},
+                        {"明亮度偏移", "color_editor_luminance_shift"}};
   for (const Case& item : cases) {
     const auto binding = refine_subgroup_binding(item.label);
     EXPECT(binding.has_value());
