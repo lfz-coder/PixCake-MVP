@@ -93,6 +93,12 @@ scan("${SOURCE_DIR}/gpu/backend/native" "rule 4" "#include <Q" "#include <Qt" "Q
 
 # 5. 生成进程不包含 Qt 或 OpenGL。
 scan("${SOURCE_DIR}/apps/generated" "rule 5" "#include <Q" "#include <Qt" "QOpenGL" "OpenGL" "GL/gl.h")
+# 5c. 生成进程不链接 Qt、GPU、渲染或图层文档目标（架构第 507、552 行）；它也必须存在（契约 C-30）。
+if(NOT EXISTS "${SOURCE_DIR}/apps/generated/CMakeLists.txt")
+  message(FATAL_ERROR "rule 5c: apps/generated is missing")
+endif()
+reject_if_contains("${SOURCE_DIR}/apps/generated/CMakeLists.txt" "rule 5c" "Qt6::" "Qt5::" "pixcake_gpu"
+                   "pixcake_render" "pixcake_layerdoc")
 
 # 5b. Preview and export process services stay independent from Qt Widgets and
 # raw OpenGL.  A backend can be added behind gpu/render later without leaking

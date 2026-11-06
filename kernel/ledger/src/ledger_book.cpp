@@ -137,6 +137,21 @@ ResultCode LedgerBook::crash(const std::string& task_id) {
   return persist(std::move(copy));
 }
 
+ResultCode LedgerBook::crash_generating(std::vector<std::string>& crashed) {
+  crashed.clear();
+  CreditLedger copy = ledger_;
+  for (const auto& [task_id, status] : ledger_.task_statuses()) {
+    if (status != "生成中") continue;
+    if (const ResultCode code = copy.crash(task_id); code != ResultCode::Ok) {
+      crashed.clear();
+      return code;
+    }
+    crashed.push_back(task_id);
+  }
+  if (crashed.empty()) return ResultCode::Ok;
+  return persist(std::move(copy));
+}
+
 ResultCode LedgerBook::succeed(const std::string& task_id) {
   CreditLedger copy = ledger_;
   if (const ResultCode code = copy.succeed(task_id); code != ResultCode::Ok) {

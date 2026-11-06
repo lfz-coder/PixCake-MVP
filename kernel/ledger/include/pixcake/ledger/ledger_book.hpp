@@ -41,6 +41,8 @@ class LedgerBook {
   ResultCode accelerate(const std::string& task_id);
   ResultCode cancel(const std::string& task_id);
   ResultCode crash(const std::string& task_id);
+  // 生成进程退出后由主进程调用（架构第 307 行）：所有“生成中”的任务按崩溃折叠成失败，点不退。
+  ResultCode crash_generating(std::vector<std::string>& crashed);
   ResultCode succeed(const std::string& task_id);
   ResultCode fail(const std::string& task_id);
   ResultCode stroke(const std::string& task_id, const std::string& stroke_id);

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "pixcake/ipc/process_messages.hpp"
 #include "pixcake/preview/preview_coordinator.hpp"
 #include "pixcake/support/result_code.hpp"
 
@@ -9,6 +10,8 @@
 #include <vector>
 
 namespace pixcake::ipc {
+
+// 预览消息与 process_messages.hpp 的消息共用同一套记录编码（契约 C-30）。
 
 inline constexpr std::uint32_t kPreviewProtocolVersion = 1;
 inline constexpr std::size_t kMaxPreviewMessageBytes = 16 * 1024;
@@ -24,6 +27,7 @@ struct PreviewCancelMessage {
   std::uint64_t client_sequence = 0;
   std::string image_id;
   std::string editing_instance_id;
+  std::uint64_t base_revision = 0;
 };
 
 enum class PixelFormat : std::uint32_t {

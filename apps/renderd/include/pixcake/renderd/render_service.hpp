@@ -38,9 +38,8 @@ class RenderService {
   // Cancel only the pending request that matches the client sequence and
   // document identity. A newer request or another editing instance is never
   // removed by an older cancellation message.
-  ResultCode cancel(std::uint64_t client_sequence, const std::string& image_id,
-                    const std::string& editing_instance_id, std::uint64_t document_revision,
-                    std::string& diagnostic);
+  // 取消消息的字段只在 kernel/ipc 定义一次（质量清单 Q-25）。
+  ResultCode cancel(const ipc::PreviewCancelMessage& message, std::string& diagnostic);
   PreviewResult render_latest();
   bool has_pending() const;
 

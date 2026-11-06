@@ -1,68 +1,21 @@
 #include "pixcake/ipc/preview_protocol.hpp"
 
-#include <limits>
+#include "message_codec.hpp"
+
 #include <string>
 
 namespace pixcake::ipc {
 namespace {
 
-constexpr std::uint32_t kRequestMagic = 0x52585050;  // PPXR
-constexpr std::uint32_t kCancelMagic = 0x43585050;   // PPXC
-constexpr std::uint32_t kFrameMagic = 0x46585050;    // PPXF
+using detail::MessageReader;
+using detail::MessageWriter;
+
+// 消息种类（信封里的第一个数）。与 process_messages.cpp 的 4–7 共用一个编号空间。
+constexpr std::uint32_t kRequestKind = 1;
+constexpr std::uint32_t kCancelKind = 2;
+constexpr std::uint32_t kFrameKind = 3;
 constexpr std::size_t kMaxIdBytes = 1024;
 constexpr std::size_t kMaxDisplayBytes = 256;
-
-void append_u32(std::vector<std::uint8_t>& out, std::uint32_t value) {
-  for (int shift = 0; shift < 32; shift += 8) {
-    out.push_back(static_cast<std::uint8_t>((value >> shift) & 0xffu));
-  }
-}
-
-void append_u64(std::vector<std::uint8_t>& out, std::uint64_t value) {
-  for (int shift = 0; shift < 64; shift += 8) {
-    out.push_back(static_cast<std::uint8_t>((value >> shift) & 0xffu));
-  }
-}
-
-bool read_u32(const std::vector<std::uint8_t>& bytes, std::size_t& offset, std::uint32_t& value) {
-  if (offset > bytes.size() || bytes.size() - offset < 4) return false;
-  value = 0;
-  for (int shift = 0; shift < 32; shift += 8) {
-    value |= static_cast<std::uint32_t>(bytes[offset++]) << shift;
-  }
-  return true;
-}
-
-bool read_u64(const std::vector<std::uint8_t>& bytes, std::size_t& offset, std::uint64_t& value) {
-  if (offset > bytes.size() || bytes.size() - offset < 8) return false;
-  value = 0;
-  for (int shift = 0; shift < 64; shift += 8) {
-    value |= static_cast<std::uint64_t>(bytes[offset++]) << shift;
-  }
-  return true;
-}
-
-bool append_string(std::vector<std::uint8_t>& out, const std::string& value, std::size_t limit) {
-  if (value.empty() || value.size() > limit || value.size() > std::numeric_limits<std::uint32_t>::max()) {
-    return false;
-  }
-  append_u32(out, static_cast<std::uint32_t>(value.size()));
-  out.insert(out.end(), value.begin(), value.end());
-  return true;
-}
-
-bool read_string(const std::vector<std::uint8_t>& bytes, std::size_t& offset, std::string& value,
-                 std::size_t limit) {
-  std::uint32_t size = 0;
-  if (!read_u32(bytes, offset, size) || size == 0 || size > limit ||
-      static_cast<std::size_t>(size) > bytes.size() - offset) {
-    return false;
-  }
-  value.assign(bytes.begin() + static_cast<std::ptrdiff_t>(offset),
-               bytes.begin() + static_cast<std::ptrdiff_t>(offset + size));
-  offset += size;
-  return value.find('\0') == std::string::npos;
-}
 
 bool valid_mode(preview::PreviewMode mode) {
   return mode == preview::PreviewMode::FullEffect || mode == preview::PreviewMode::ColorOnly;
@@ -89,7 +42,8 @@ bool valid_header(const PreviewFrameHeader& header) {
   return header.stride >= minimum_stride && total <= 4000ull * 4000ull * 4ull;
 }
 
-ResultCode finish(const std::vector<std::uint8_t>& out) {
+ResultCode finish(const MessageWriter& writer, std::vector<std::uint8_t>& out) {
+  out = writer.bytes();
   return out.size() <= kMaxPreviewMessageBytes ? ResultCode::Ok : ResultCode::StateConflict;
 }
 
@@ -98,97 +52,103 @@ ResultCode finish(const std::vector<std::uint8_t>& out) {
 ResultCode encode_preview_request(const PreviewRequestMessage& message, std::vector<std::uint8_t>& out) {
   out.clear();
   if (!valid_request(message)) return ResultCode::StateConflict;
-  append_u32(out, kRequestMagic);
-  append_u32(out, message.protocol_version);
-  append_u64(out, message.client_sequence);
   const auto& request = message.request;
-  if (!append_string(out, request.image_id, kMaxIdBytes) ||
-      !append_string(out, request.editing_instance_id, kMaxIdBytes)) return ResultCode::StateConflict;
-  append_u64(out, request.base_revision);
-  if (!append_string(out, request.capability_id, kMaxIdBytes) ||
-      !append_string(out, request.parameter_id, kMaxIdBytes) ||
-      !append_string(out, request.display_value, kMaxDisplayBytes)) return ResultCode::StateConflict;
-  append_u32(out, static_cast<std::uint32_t>(request.mode));
-  append_u32(out, request.max_edge);
-  return finish(out);
+  MessageWriter writer(kRequestKind, message.protocol_version);
+  writer.u64(1, message.client_sequence);
+  if (!writer.text(2, request.image_id, kMaxIdBytes) || !writer.text(3, request.editing_instance_id, kMaxIdBytes) ||
+      !writer.text(5, request.capability_id, kMaxIdBytes) || !writer.text(6, request.parameter_id, kMaxIdBytes) ||
+      !writer.text(7, request.display_value, kMaxDisplayBytes)) {
+    return ResultCode::StateConflict;
+  }
+  writer.u64(4, request.base_revision);
+  writer.u32(8, static_cast<std::uint32_t>(request.mode));
+  writer.u32(9, request.max_edge);
+  return finish(writer, out);
 }
 
 ResultCode decode_preview_request(const std::vector<std::uint8_t>& bytes, PreviewRequestMessage& out) {
-  if (bytes.size() > kMaxPreviewMessageBytes) return ResultCode::StateConflict;
-  std::size_t offset = 0;
-  std::uint32_t magic = 0;
+  MessageReader reader;
+  if (const ResultCode opened = reader.open(bytes, kRequestKind, kPreviewProtocolVersion, kMaxPreviewMessageBytes);
+      opened != ResultCode::Ok) {
+    return opened;
+  }
+  PreviewRequestMessage message;
   std::uint32_t mode = 0;
-  if (!read_u32(bytes, offset, magic) || magic != kRequestMagic ||
-      !read_u32(bytes, offset, out.protocol_version) || !read_u64(bytes, offset, out.client_sequence) ||
-      !read_string(bytes, offset, out.request.image_id, kMaxIdBytes) ||
-      !read_string(bytes, offset, out.request.editing_instance_id, kMaxIdBytes) ||
-      !read_u64(bytes, offset, out.request.base_revision) ||
-      !read_string(bytes, offset, out.request.capability_id, kMaxIdBytes) ||
-      !read_string(bytes, offset, out.request.parameter_id, kMaxIdBytes) ||
-      !read_string(bytes, offset, out.request.display_value, kMaxDisplayBytes) ||
-      !read_u32(bytes, offset, mode) || !read_u32(bytes, offset, out.request.max_edge) || offset != bytes.size()) {
+  auto& request = message.request;
+  if (!reader.u64(1, message.client_sequence) || !reader.text(2, request.image_id, kMaxIdBytes) ||
+      !reader.text(3, request.editing_instance_id, kMaxIdBytes) || !reader.u64(4, request.base_revision) ||
+      !reader.text(5, request.capability_id, kMaxIdBytes) || !reader.text(6, request.parameter_id, kMaxIdBytes) ||
+      !reader.text(7, request.display_value, kMaxDisplayBytes) || !reader.u32(8, mode) ||
+      !reader.u32(9, request.max_edge)) {
     return ResultCode::StateConflict;
   }
   if (mode > static_cast<std::uint32_t>(preview::PreviewMode::ColorOnly)) return ResultCode::UnsupportedFormat;
-  out.request.mode = static_cast<preview::PreviewMode>(mode);
-  return valid_request(out) ? ResultCode::Ok : ResultCode::StateConflict;
+  request.mode = static_cast<preview::PreviewMode>(mode);
+  if (!valid_request(message)) return ResultCode::StateConflict;
+  out = std::move(message);
+  return ResultCode::Ok;
 }
 
 ResultCode encode_preview_cancel(const PreviewCancelMessage& message, std::vector<std::uint8_t>& out) {
   out.clear();
-  if (message.protocol_version != kPreviewProtocolVersion || message.client_sequence == 0 ||
-      message.image_id.empty() || message.editing_instance_id.empty()) return ResultCode::StateConflict;
-  append_u32(out, kCancelMagic);
-  append_u32(out, message.protocol_version);
-  append_u64(out, message.client_sequence);
-  if (!append_string(out, message.image_id, kMaxIdBytes) ||
-      !append_string(out, message.editing_instance_id, kMaxIdBytes)) return ResultCode::StateConflict;
-  return finish(out);
+  if (message.protocol_version != kPreviewProtocolVersion || message.client_sequence == 0) {
+    return ResultCode::StateConflict;
+  }
+  MessageWriter writer(kCancelKind, message.protocol_version);
+  writer.u64(1, message.client_sequence);
+  if (!writer.text(2, message.image_id, kMaxIdBytes) || !writer.text(3, message.editing_instance_id, kMaxIdBytes)) {
+    return ResultCode::StateConflict;
+  }
+  writer.u64(4, message.base_revision);
+  return finish(writer, out);
 }
 
 ResultCode decode_preview_cancel(const std::vector<std::uint8_t>& bytes, PreviewCancelMessage& out) {
-  if (bytes.size() > kMaxPreviewMessageBytes) return ResultCode::StateConflict;
-  std::size_t offset = 0;
-  std::uint32_t magic = 0;
-  if (!read_u32(bytes, offset, magic) || magic != kCancelMagic ||
-      !read_u32(bytes, offset, out.protocol_version) || !read_u64(bytes, offset, out.client_sequence) ||
-      !read_string(bytes, offset, out.image_id, kMaxIdBytes) ||
-      !read_string(bytes, offset, out.editing_instance_id, kMaxIdBytes) || offset != bytes.size()) {
+  MessageReader reader;
+  if (const ResultCode opened = reader.open(bytes, kCancelKind, kPreviewProtocolVersion, kMaxPreviewMessageBytes);
+      opened != ResultCode::Ok) {
+    return opened;
+  }
+  PreviewCancelMessage message;
+  if (!reader.u64(1, message.client_sequence) || message.client_sequence == 0 ||
+      !reader.text(2, message.image_id, kMaxIdBytes) || !reader.text(3, message.editing_instance_id, kMaxIdBytes) ||
+      !reader.u64(4, message.base_revision)) {
     return ResultCode::StateConflict;
   }
-  return out.protocol_version == kPreviewProtocolVersion && out.client_sequence != 0 ? ResultCode::Ok
-                                                                                         : ResultCode::StateConflict;
+  out = std::move(message);
+  return ResultCode::Ok;
 }
 
 ResultCode encode_preview_frame_header(const PreviewFrameHeader& header, std::vector<std::uint8_t>& out) {
   out.clear();
   if (!valid_header(header)) return ResultCode::StateConflict;
-  append_u32(out, kFrameMagic);
-  append_u32(out, header.protocol_version);
-  append_u64(out, header.sequence);
-  append_u64(out, header.document_revision);
-  append_u32(out, header.width);
-  append_u32(out, header.height);
-  append_u32(out, header.stride);
-  append_u32(out, static_cast<std::uint32_t>(header.format));
-  return finish(out);
+  MessageWriter writer(kFrameKind, header.protocol_version);
+  writer.u64(1, header.sequence);
+  writer.u64(2, header.document_revision);
+  writer.u32(3, header.width);
+  writer.u32(4, header.height);
+  writer.u32(5, header.stride);
+  writer.u32(6, static_cast<std::uint32_t>(header.format));
+  return finish(writer, out);
 }
 
 ResultCode decode_preview_frame_header(const std::vector<std::uint8_t>& bytes, PreviewFrameHeader& out) {
-  if (bytes.size() > kMaxPreviewMessageBytes) return ResultCode::StateConflict;
-  std::size_t offset = 0;
-  std::uint32_t magic = 0;
+  MessageReader reader;
+  if (const ResultCode opened = reader.open(bytes, kFrameKind, kPreviewProtocolVersion, kMaxPreviewMessageBytes);
+      opened != ResultCode::Ok) {
+    return opened;
+  }
+  PreviewFrameHeader header;
   std::uint32_t format = 0;
-  if (!read_u32(bytes, offset, magic) || magic != kFrameMagic ||
-      !read_u32(bytes, offset, out.protocol_version) || !read_u64(bytes, offset, out.sequence) ||
-      !read_u64(bytes, offset, out.document_revision) || !read_u32(bytes, offset, out.width) ||
-      !read_u32(bytes, offset, out.height) || !read_u32(bytes, offset, out.stride) ||
-      !read_u32(bytes, offset, format) || offset != bytes.size()) {
+  if (!reader.u64(1, header.sequence) || !reader.u64(2, header.document_revision) || !reader.u32(3, header.width) ||
+      !reader.u32(4, header.height) || !reader.u32(5, header.stride) || !reader.u32(6, format)) {
     return ResultCode::StateConflict;
   }
   if (format != static_cast<std::uint32_t>(PixelFormat::Rgba8)) return ResultCode::UnsupportedFormat;
-  out.format = static_cast<PixelFormat>(format);
-  return valid_header(out) ? ResultCode::Ok : ResultCode::StateConflict;
+  header.format = static_cast<PixelFormat>(format);
+  if (!valid_header(header)) return ResultCode::StateConflict;
+  out = header;
+  return ResultCode::Ok;
 }
 
 }  // namespace pixcake::ipc

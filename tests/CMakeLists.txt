@@ -229,6 +229,11 @@ add_executable(test_exportd apps/test_exportd.cpp)
 target_link_libraries(test_exportd PRIVATE pixcake_exportd_service pixcake_warnings)
 add_test(NAME test_exportd COMMAND test_exportd)
 
+add_executable(test_generated apps/test_generated.cpp)
+target_include_directories(test_generated PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+target_link_libraries(test_generated PRIVATE pixcake_generated_service pixcake_storage pixcake_warnings)
+add_test(NAME test_generated COMMAND test_generated)
+
 add_executable(test_exportd_image_io apps/test_exportd_image_io.cpp)
 target_link_libraries(test_exportd_image_io PRIVATE pixcake_exportd_service pixcake_warnings)
 add_test(NAME test_exportd_image_io COMMAND test_exportd_image_io)

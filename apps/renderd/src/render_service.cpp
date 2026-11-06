@@ -74,10 +74,8 @@ ResultCode RenderService::submit(PreviewWork work, std::string& diagnostic) {
   return ResultCode::Ok;
 }
 
-ResultCode RenderService::cancel(std::uint64_t client_sequence, const std::string& image_id,
-                                 const std::string& editing_instance_id,
-                                 std::uint64_t document_revision, std::string& diagnostic) {
-  if (client_sequence == 0 || image_id.empty() || editing_instance_id.empty()) {
+ResultCode RenderService::cancel(const ipc::PreviewCancelMessage& message, std::string& diagnostic) {
+  if (message.client_sequence == 0 || message.image_id.empty() || message.editing_instance_id.empty()) {
     diagnostic = "preview cancellation is missing its sequence or identity";
     return ResultCode::StateConflict;
   }
@@ -88,9 +86,9 @@ ResultCode RenderService::cancel(std::uint64_t client_sequence, const std::strin
     return ResultCode::StateConflict;
   }
   const PreviewWork& work = *pending_;
-  if (work.client_sequence != client_sequence || work.request.image_id != image_id ||
-      work.request.editing_instance_id != editing_instance_id ||
-      work.request.base_revision != document_revision) {
+  if (work.client_sequence != message.client_sequence || work.request.image_id != message.image_id ||
+      work.request.editing_instance_id != message.editing_instance_id ||
+      work.request.base_revision != message.base_revision) {
     diagnostic = "preview cancellation does not match the pending request";
     return ResultCode::StateConflict;
   }

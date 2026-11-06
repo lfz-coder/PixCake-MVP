@@ -62,11 +62,19 @@ int main() {
   assert(service.submit(std::move(mismatch), diagnostic) == pixcake::ResultCode::StateConflict);
 
   assert(service.submit(work(6, 1), diagnostic) == pixcake::ResultCode::Ok);
-  assert(service.cancel(5, "image-1", "edit-1", 7, diagnostic) == pixcake::ResultCode::StateConflict);
+  // Q-25：取消直接用 kernel/ipc 的取消消息，服务不再另列一套字段。
+  pixcake::ipc::PreviewCancelMessage stale;
+  stale.client_sequence = 5;
+  stale.image_id = "image-1";
+  stale.editing_instance_id = "edit-1";
+  stale.base_revision = 7;
+  assert(service.cancel(stale, diagnostic) == pixcake::ResultCode::StateConflict);
   assert(service.has_pending());
-  assert(service.cancel(6, "image-1", "edit-1", 7, diagnostic) == pixcake::ResultCode::Ok);
+  auto current = stale;
+  current.client_sequence = 6;
+  assert(service.cancel(current, diagnostic) == pixcake::ResultCode::Ok);
   assert(!service.has_pending());
-  assert(service.cancel(6, "image-1", "edit-1", 7, diagnostic) == pixcake::ResultCode::StateConflict);
+  assert(service.cancel(current, diagnostic) == pixcake::ResultCode::StateConflict);
   assert(service.render_latest().code == pixcake::ResultCode::StateConflict);
   return 0;
 }
