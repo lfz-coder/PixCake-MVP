@@ -350,7 +350,20 @@ void test_b93_failed_layer_save_keeps_revision() {
 
 }  // namespace
 
+// Q-06 / B-33：选区羽化在上限 1000（参数模式 mask/selection_feather）时能存能读。
+void test_q06_selection_feather_at_mode_maximum_round_trips() {
+  auto document = *pixcake::LayerDocument::create("img-1", 4);
+  EXPECT(document.set_selection(true, 1000) == pixcake::ResultCode::Ok);
+  pixcake::test::FakeFileSystem files;
+  EXPECT(document.save(files, "/creative/sel.pxlayer") == pixcake::ResultCode::Ok);
+  pixcake::LayerDocument loaded;
+  const pixcake::LoadResult opened = pixcake::LayerDocument::load(loaded, files, "/creative/sel.pxlayer");
+  EXPECT(!opened.code.has_value() || *opened.code == pixcake::ResultCode::Ok);
+  EXPECT(loaded.selection().present && loaded.selection().inverted && loaded.selection().feather == 1000);
+}
+
 int main() {
+  test_q06_selection_feather_at_mode_maximum_round_trips();
   test_c23_b73_stale_layer_save_is_rejected();
   test_b116_layer_file_without_revision_record_loads_as_zero();
   test_b93_failed_layer_save_keeps_revision();

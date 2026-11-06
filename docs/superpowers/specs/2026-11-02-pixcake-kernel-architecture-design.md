@@ -397,6 +397,17 @@ tests/
 
 生成式入口在编译结果里是跳转：工具编号、当前图片、当前修订、建议选区。人像或背景能力不实现生成，也不扣点。
 
+各能力的禁用条件（2026-11-06 按已有规则整理，没有来源的不写）：
+
+| 条件 | 能力 | 效果 | 来源 |
+| --- | --- | --- | --- |
+| 坏片 | `portrait.body` | 整个能力不可用，不绘制 | 本文第 369、623 行；需求第 1045 行 |
+| 检测未完成 | `portrait.blemish`、`portrait.skin`、`portrait.reshape`、`portrait.feature`、`portrait.body` | 整个能力不可用，不编造几何 | 本文第 6.7 节 |
+| 缺少素材 | `image.sky` | 整个能力不可用 | 需求第 12.3 节“可用内置素材或上传” |
+| 非纯色 | `image.background` 的纯色参数（目前登记的是 `light_uniform_brightness`） | 该参数无效果、不报错，其余参数照常 | 需求第 590、905 行；本文第 622 行 |
+
+色彩各能力、`image.idphoto`、`clothes`、`pet`、`crop` 和三个手动能力目前没有写明依赖检测或素材，不加条件。
+
 未知字段留在片段里。写回时原样带上。
 
 ### 7.3 内置能力清单
@@ -457,6 +468,20 @@ AI 点修不是能力。它是壳层的一种选区会话：选区写入 `mask`�
 ### 7.5 从精修跳到创意
 
 下列入口在能力上声明跳转，不在能力里实现生成：AI 面部重绘、AI 瘦肚子、AI 加腹肌、AI 祛路人、AI 补草地、AI 布景、证件照换衣服、AI 背景扩图、冬日雪景，以及上位文档中同样「从精修进入创意」的工具。
+
+入口挂在哪个能力上、生成工具编号（2026-11-06 项目选定，写入后不再改含义）：
+
+| 生成工具编号 | 入口 | 声明在 | 需求来源 |
+| --- | --- | --- | --- |
+| `creative.face_redraw` | AI 面部重绘 | `portrait.skin` | 第 525、746 行 |
+| `creative.slim_belly` | AI 瘦肚子 | `portrait.body` | 第 584 行 |
+| `creative.add_abs` | AI 加腹肌 | `portrait.body` | 第 584 行 |
+| `creative.remove_passerby` | AI 祛路人 | `image.background` | 第 594 行 |
+| `creative.fill_grass` | AI 补草地 | `image.background` | 第 594 行 |
+| `creative.backdrop` | AI 布景 | `image.background` | 第 594 行 |
+| `creative.winter_snow` | 冬日雪景 | `image.background` | 第 767 行 |
+| `creative.idphoto_clothes` | 证件照换衣服 | `image.idphoto` | 第 610 行 |
+| `creative.outpaint` | AI 背景扩图 | `crop` | 第 640 行 |
 
 跳转命令创建或打开图层文档，把当前预览像素的来源修订记下来，再把对应生成工具编号交给生成进程。精修参数文档保持不动，直到用户选择「应用至精修」。
 

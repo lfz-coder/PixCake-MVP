@@ -708,7 +708,8 @@ std::optional<LayerDocument> LayerDocument::decode(const std::vector<std::uint8_
       std::uint32_t inverted = 0;
       std::uint32_t feather = 0;
       if (size != 12 || !read_u32(payload, 0, present) || !read_u32(payload, 4, inverted) ||
-          !read_u32(payload, 8, feather) || present > 1 || inverted > 1 || feather > 1000) {
+          !read_u32(payload, 8, feather) || present > 1 || inverted > 1 ||
+          !within_mode("mask", "selection_feather", feather)) {
         return std::nullopt;
       }
       document.selection_.present = present == 1;

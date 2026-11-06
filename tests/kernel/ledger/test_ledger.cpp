@@ -350,7 +350,21 @@ void test_p23_balance_queries_do_not_refold() {
   EXPECT(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() < 1000);
 }
 
+// P-23：被移走的账本对象仍可安全查询（快照为空，不是空指针）。
+void test_p23_moved_from_ledger_is_empty() {
+  auto ledger = charged(version_930(), 100, 3);
+  pixcake::CreditLedger moved = std::move(ledger);
+  EXPECT(moved.creative_points() == 100 && moved.export_sheets() == 3);
+  EXPECT(ledger.creative_points() == 0 && ledger.export_sheets() == 0);  // NOLINT(bugprone-use-after-move)
+  EXPECT(ledger.task_statuses().empty() && ledger.events().empty());
+  EXPECT(ledger.credit_points(5) == pixcake::ResultCode::Ok && ledger.creative_points() == 5);
+  pixcake::CreditLedger assigned = charged(version_930(), 1, 0);
+  assigned = std::move(moved);
+  EXPECT(assigned.creative_points() == 100 && moved.creative_points() == 0);  // NOLINT(bugprone-use-after-move)
+}
+
 int main() {
+  test_p23_moved_from_ledger_is_empty();
   test_p23_cached_snapshot_matches_full_fold();
   test_p23_balance_queries_do_not_refold();
   test_o09_cancel_position_and_charge_are_logged();

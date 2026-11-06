@@ -127,8 +127,24 @@ CreditLedger& CreditLedger::operator=(const CreditLedger& other) {
   }
   return *this;
 }
-CreditLedger::CreditLedger(CreditLedger&& other) noexcept = default;
-CreditLedger& CreditLedger::operator=(CreditLedger&& other) noexcept = default;
+// 被移走的对象留下空事件和空快照，仍可安全查询（不留空指针）。
+CreditLedger::CreditLedger(CreditLedger&& other) noexcept
+    : policy_(std::move(other.policy_)), events_(std::move(other.events_)), snapshot_(std::move(other.snapshot_)),
+      log_(other.log_) {
+  other.events_.clear();
+  other.snapshot_ = std::make_unique<Snapshot>();
+}
+CreditLedger& CreditLedger::operator=(CreditLedger&& other) noexcept {
+  if (this != &other) {
+    policy_ = std::move(other.policy_);
+    events_ = std::move(other.events_);
+    snapshot_ = std::move(other.snapshot_);
+    log_ = other.log_;
+    other.events_.clear();
+    other.snapshot_ = std::make_unique<Snapshot>();
+  }
+  return *this;
+}
 
 CreditLedger CreditLedger::open(FreeQueuePolicy policy, std::vector<LedgerEvent> events) {
   return CreditLedger(std::move(policy), std::move(events));
