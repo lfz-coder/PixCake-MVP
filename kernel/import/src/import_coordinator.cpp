@@ -1,5 +1,7 @@
 #include "pixcake/image_import/import_coordinator.hpp"
 
+#include "pixcake/support/user_notice.hpp"
+
 namespace pixcake::image_import {
 
 ImportCoordinator::ImportCoordinator(ProjectLibrary& project, FileSystem& files)
@@ -41,6 +43,17 @@ ImportBatchResult ImportCoordinator::import_into(std::int64_t project_id,
     result.items.push_back(std::move(item));
   }
   return result;
+}
+
+std::vector<std::string> import_notices(const ImportBatchResult& batch) {
+  std::vector<std::string> notices;
+  for (const auto& item : batch.items) {
+    if (item.code == ResultCode::Ok) continue;
+    const auto slash = item.absolute_path.find_last_of('/');
+    const std::string name = slash == std::string::npos ? item.absolute_path : item.absolute_path.substr(slash + 1);
+    notices.push_back(name + "：" + notice_for(NoticeScene::Import, item.code).text);
+  }
+  return notices;
 }
 
 }  // namespace pixcake::image_import

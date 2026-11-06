@@ -29,6 +29,10 @@ struct ImportBatchResult {
   std::vector<ImportItemResult> items;
 };
 
+// 导入结果按文件说明原因（运维清单 O-14、契约第 2 节末“导入结果按文件列出原因”）：
+// 每个失败项一条“文件名：原因”，格式不支持、损坏、没有权限、不存在各不相同。
+std::vector<std::string> import_notices(const ImportBatchResult& batch);
+
 class ImportCoordinator {
  public:
   ImportCoordinator(ProjectLibrary& project, FileSystem& files);

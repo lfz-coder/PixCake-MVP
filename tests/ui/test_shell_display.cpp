@@ -105,7 +105,26 @@ void test_contract() {
 }
 }  // namespace
 
+// O-13：登录失败的说明留在登录页上；登录成功后提示清空。
+void test_o13_notice_stays_on_the_page() {
+  using namespace pixcake::ui::shell;
+  SignedIn session;
+  session.on = false;
+  auto display = ShellDisplay::for_session(session);
+  pixcake::UserNotice notice;
+  notice.text = "验证码已过期，请重新获取";
+  display.post_notice(notice);
+  EXPECT(display.page() == Page::Login);
+  EXPECT(display.notices() == std::vector<std::string>({"验证码已过期，请重新获取"}));
+  display.post_notice(pixcake::UserNotice{});
+  EXPECT(display.notices().size() == 1);
+  session.on = true;
+  EXPECT(display.signed_in(session) == pixcake::ResultCode::Ok);
+  EXPECT(display.notices().empty());
+}
+
 int main() {
+  test_o13_notice_stays_on_the_page();
   test_s25_session_decides_the_page();
   EXPECT(std::string(pixcake::ui::shell::page_label(pixcake::ui::shell::Page::Login)) == "登录页面");
   EXPECT(std::string(pixcake::ui::shell::page_label(pixcake::ui::shell::Page::Home)) == "主页面");

@@ -39,7 +39,7 @@
 - [x] **Task 3（C-30、Q-25）**：`kernel/ipc` 统一消息：预览请求/取消/帧头改用文档记录编码（`fragment_codec` 的记录格式）；新增导出进度、生成进度、取消、心跳；渲染、导出服务只用这些结构。新增 `apps/generated`（无 Qt、无 GL）：读取任务、写结果、追加账本事件；崩溃按不退点失败。门禁：`pixcake_app_generated` 不链接 Qt、GL、`pixcake_layerdoc`。测试 `test_c30_messages_round_trip_through_record_codec`、`test_c30_truncated_or_newer_message_rejected`、`test_q25_services_use_ipc_structs`（门禁）、`test_c30_generated_crash_fails_without_refund`。
 - [x] **Task 4（S-25）**：命令入口与项目、导出、生成、账本的写操作要求已登录会话（接口 `SessionGuard`，由 `services/account` 实现）；未登录返回 `NotSignedIn`。壳层：`--page` 只在 `PIXCAKE_DEV_PAGES` 构建可用；发布构建由会话决定首页（需求 79、103）。测试 `test_s25_signed_out_commands_rejected`、`test_s25_restored_session_enters_home`、门禁检查发布构建没有 `--page`。
 - [x] **Task 5（S-10）**：原图访问凭据。`kernel/project` 只接受带书签的绝对路径；`SourceAccess` 接口解析书签（失效、过期、路径变化），`platform/macos` 用安全范围书签实现，内核测试用替身。书签失效标“原文件缺失”，参数文档保留（需求 118）。测试 `test_s10_admission_requires_bookmark`、`test_s10_stale_bookmark_marks_missing_and_keeps_document`、`test_s10_resolved_path_change_updates_record`。
-- [ ] **Task 6（O-13–O-15）**：结果呈现链路。内核 `kernel/support` 增加 `UserNotice`（结果码 + 场景 → 文案 + 停留页面）；登录流程 `services/account/LoginFlow`（替身远端）区分验证码错误、过期、未收到（可重发）、断网，停留登录页（需求 897、223）；导入逐张结果（O-14）；原图缺失、文档恢复为空、能力需要更新三态分开（O-15）。壳层显示提示。测试 `test_o13_*`、`test_o14_import_reports_each_file`、`test_o15_three_states_distinct`。
+- [x] **Task 6（O-13–O-15）**：结果呈现链路。内核 `kernel/support` 增加 `UserNotice`（结果码 + 场景 → 文案 + 停留页面）；登录流程 `services/account/LoginFlow`（替身远端）区分验证码错误、过期、未收到（可重发）、断网，停留登录页（需求 897、223）；导入逐张结果（O-14）；原图缺失、文档恢复为空、能力需要更新三态分开（O-15）。壳层显示提示。测试 `test_o13_*`、`test_o14_import_reports_each_file`、`test_o15_three_states_distinct`。
 - [ ] **Task 7（Q-11、Q-12）**：拆 `apps/shell/main.cpp`：每页一个文件（登录、主页、图库、精修、创意），控件构建与文档修改分开（页面类只画，动作经控制器调用命令入口）；页面文字单一来源（`ui/shell` 的文案表，壳层与 `kernel/workspace` 不再各写一份）；没有超过 160 字符的行。测试：门禁统计 `apps/shell` 行宽；`test_q11_page_copy_single_source`（同一文案只在文案表出现）。
 - [ ] **Task 8（T-03）**：替身场景：第三方坏返回、超时、生成进程崩溃（与 Task 3、6 共用替身）。测试 `test_t03_*`。
 - [ ] **Task 9（T-02、T-09）**：第 2 关审查范围内每条 B 行至少一条用例，测试名带编号；已有用例改名补编号。
@@ -66,3 +66,7 @@
 - Task 5：系统不再授予读取（解析失败且不是“文件不在”）时，状态不变、返回权限不足，与已有的 `refresh_source_presence` 对无权读取的处理一致。
 - Task 5：非沙盒构建拿不到安全范围书签，`MacSourceAccess` 退回普通书签（首字节 `B`）；沙盒构建用安全范围书签（首字节 `S`）并在读取期间用 `SourceScope` 打开。代价：普通书签不限制进程对其他路径的读取；限制来自沙盒本身。
 - Task 5：空访问凭证在 `add_photo` 处拒绝（权限不足）。20 处测试调用原来传空凭证，改为非空测试凭证；`test_project_paths` 里“空凭证可以入库”的断言按 S-10 改为拒绝。
+- Task 6：“未收到验证码”是用户动作（`report_not_received`），说明原因并允许重新获取，不自动重发。理由：需求第 223 行只要求可重发；自动重发会多扣短信额度。代价：如果产品要求倒计时后自动重发，需加计时。
+- Task 6：`UserNotice` 文案按“场景 + 结果码”取，表在 `kernel/support/src/user_notice.cpp`。文案没有官方原文来源，按需求与运维清单的“用户必须能区分的原因”写；接 test 版实测后可替换，测试只断言互不相同与不空。顺带覆盖 O-16（四种结果文案不混用，`test_o16_notices_do_not_share_text`）。
+- Task 6：O-15 的“能力需要更新”以片段版本高于本程序 `phase_one_parameter_modes` 中该能力的最高 schema 版本判断；三种状态可以同时出现，各出一条提示。
+- Task 6：壳层这一步只到显示模型（`ShellDisplay::post_notice`/`notices`，换页与登录成功清空）；Qt 控件显示提示随 Task 7 的页面拆分接入。代价：在 Task 7 前界面上还看不见提示。

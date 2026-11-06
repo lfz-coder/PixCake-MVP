@@ -119,6 +119,24 @@ void test_s07_replaced_file_after_admission_is_rejected() {
   EXPECT(fixture.photo_count() == 0);
 }
 
+// O-14：格式不支持、损坏、没有权限三种原因的说明互不相同，每条带文件名；成功项不出说明。
+void test_o14_import_reports_each_file() {
+  pixcake::image_import::ImportBatchResult mixed;
+  for (const auto code : {pixcake::ResultCode::UnsupportedFormat, pixcake::ResultCode::ImageCorrupt,
+                          pixcake::ResultCode::Ok, pixcake::ResultCode::PermissionDenied}) {
+    pixcake::image_import::ImportItemResult item;
+    item.absolute_path = "/photos/same.png";
+    item.code = code;
+    mixed.items.push_back(item);
+  }
+  const auto reasons = pixcake::image_import::import_notices(mixed);
+  EXPECT(reasons.size() == 3);
+  if (reasons.size() == 3) {
+    EXPECT(reasons[0] != reasons[1] && reasons[1] != reasons[2] && reasons[0] != reasons[2]);
+    for (const auto& reason : reasons) EXPECT(reason.rfind("same.png：", 0) == 0);
+  }
+}
+
 void test_c15_missing_file_after_admission_is_not_added() {
   AdmissionFixture fixture;
   fixture.files.files["/photos/gone.png"] = png_header(8, 6);
@@ -134,6 +152,7 @@ void test_c15_missing_file_after_admission_is_not_added() {
 }  // namespace
 
 int main() {
+  test_o14_import_reports_each_file();
   test_s07_admitted_source_is_required_to_add_photo();
   test_s07_replaced_file_after_admission_is_rejected();
   test_c15_missing_file_after_admission_is_not_added();
@@ -177,6 +196,14 @@ int main() {
   EXPECT(photos.size() == 2);
   EXPECT(photos[0].source_identity.valid && photos[1].source_identity.valid);
   EXPECT(files.writes.empty());
+
+  // O-14：导入结果按文件说明原因，名字和原因一起给出。
+  const auto notices = pixcake::image_import::import_notices(batch);
+  EXPECT(notices.size() == 2);
+  if (notices.size() == 2) {
+    EXPECT(notices[0].find("broken.png") != std::string::npos && notices[1].find("missing.png") != std::string::npos);
+    EXPECT(notices[0] != notices[1]);
+  }
 
   const auto bad_project = coordinator.import_into(999, {{"/photos/ok.png", "again.png", {1}}});
   EXPECT(bad_project.overall_code == pixcake::ResultCode::StateConflict);

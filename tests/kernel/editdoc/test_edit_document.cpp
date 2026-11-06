@@ -468,7 +468,33 @@ void test_c33_edit_under_precise_updates_written_back_value() {
   EXPECT(document.committed_parameter("color.global", "exposure") == std::optional<std::string>("0.50"));
 }
 
+// O-15：原图缺失、文档恢复为空、能力需要更新三种状态分得开；恢复为空不显示成原效果。
+void test_o15_open_states_are_distinct() {
+  auto document = *pixcake::EditDocument::create("img-1");
+  pixcake::LoadResult loaded;
+  loaded.code = pixcake::ResultCode::Ok;
+  const auto plain = pixcake::describe_open(loaded, document, pixcake::ResultCode::Ok);
+  EXPECT(!plain.source_missing && !plain.recovered_empty && plain.needs_update.empty() && plain.notices.empty());
+
+  const auto missing = pixcake::describe_open(loaded, document, pixcake::ResultCode::SourceMissing);
+  pixcake::LoadResult corrupt;
+  corrupt.code = pixcake::ResultCode::DocumentCorrupt;
+  corrupt.recovered_empty = true;
+  const auto empty = pixcake::describe_open(corrupt, document, pixcake::ResultCode::Ok);
+  document.store_fragment("color.global", 9, {});
+  const auto newer = pixcake::describe_open(loaded, document, pixcake::ResultCode::Ok);
+  EXPECT(missing.source_missing && !missing.recovered_empty && missing.needs_update.empty());
+  EXPECT(empty.recovered_empty && !empty.source_missing && empty.needs_update.empty());
+  EXPECT(newer.needs_update == std::vector<std::string>({"color.global"}) && !newer.recovered_empty);
+  EXPECT(missing.notices.size() == 1 && empty.notices.size() == 1 && newer.notices.size() == 1);
+  if (missing.notices.size() == 1 && empty.notices.size() == 1 && newer.notices.size() == 1) {
+    EXPECT(missing.notices[0] != empty.notices[0] && empty.notices[0] != newer.notices[0]);
+    EXPECT(empty.notices[0].find("原图") != std::string::npos);
+  }
+}
+
 int main() {
+  test_o15_open_states_are_distinct();
   test_c33_toggle_keeps_both_sides();
   test_c33_edit_under_precise_updates_written_back_value();
   test_q02_grain_sub_parameter_preview_needs_nonzero_amount();

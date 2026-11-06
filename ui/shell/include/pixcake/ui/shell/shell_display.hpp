@@ -2,6 +2,7 @@
 
 #include "pixcake/support/result_code.hpp"
 #include "pixcake/support/session_state.hpp"
+#include "pixcake/support/user_notice.hpp"
 
 #include <string>
 #include <vector>
@@ -55,11 +56,15 @@ class ShellDisplay {
   // 登录成功后换成主页；会话没有登录时拒绝。退出登录回到登录页，不保留项目（需求第 226 行）。
   ResultCode signed_in(const SessionState& session);
   ResultCode signed_out();
+  // 用户能看见的失败（运维清单第 3 节）：提示留在当前页面上，换页或登录成功后清空。空提示不记。
+  void post_notice(const UserNotice& notice);
+  const std::vector<std::string>& notices() const;
 
  private:
   Page page_ = Page::Login;
   bool in_project_ = false;
   std::vector<Region> regions_;
+  std::vector<std::string> notices_;
 
   void rebuild_regions();
 };

@@ -58,13 +58,21 @@ ShellDisplay ShellDisplay::dev_preview(Page page) {
 
 ResultCode ShellDisplay::signed_in(const SessionState& session) {
   if (page_ != Page::Login || !session.signed_in()) return ResultCode::StateConflict;
+  notices_.clear();
   page_ = Page::Home;
   in_project_ = false;
   rebuild_regions();
   return ResultCode::Ok;
 }
 
+void ShellDisplay::post_notice(const UserNotice& notice) {
+  if (!notice.text.empty()) notices_.push_back(notice.text);
+}
+
+const std::vector<std::string>& ShellDisplay::notices() const { return notices_; }
+
 ResultCode ShellDisplay::signed_out() {
+  notices_.clear();
   page_ = Page::Login;
   in_project_ = false;
   rebuild_regions();
@@ -106,6 +114,7 @@ ResultCode ShellDisplay::navigate(Page target) {
     return ResultCode::StateConflict;
   }
   page_ = target;
+  notices_.clear();
   rebuild_regions();
   return ResultCode::Ok;
 }

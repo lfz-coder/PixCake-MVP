@@ -1,4 +1,5 @@
 #include "pixcake/editdoc/edit_document.hpp"
+#include "pixcake/support/user_notice.hpp"
 
 #include <chrono>
 
@@ -930,6 +931,32 @@ ResultCode EditDocument::commit_baked_reset(std::uint64_t expected_revision, Fil
   const ResultCode code = commit_baked_reset_steps(expected_revision, files, path);
   note_commit(path, code, elapsed_ms(began));
   return code;
+}
+
+OpenState describe_open(const LoadResult& loaded, const EditDocument& document, ResultCode source_status) {
+  OpenState state;
+  state.source_missing = source_status == ResultCode::SourceMissing;
+  state.recovered_empty = loaded.recovered_empty;
+  for (const auto& fragment : document.fragments()) {
+    std::uint32_t current = 1;
+    for (const auto& mode : phase_one_parameter_modes()) {
+      if (mode.capability_id == fragment.capability_id) current = std::max(current, mode.schema_version);
+    }
+    if (fragment.version > current) state.needs_update.push_back(fragment.capability_id);
+  }
+  if (state.source_missing) state.notices.push_back(notice_for(NoticeScene::OpenDocument, ResultCode::SourceMissing).text);
+  if (state.recovered_empty) {
+    state.notices.push_back(notice_for(NoticeScene::OpenDocument, ResultCode::DocumentCorrupt).text);
+  }
+  if (!state.needs_update.empty()) {
+    std::string text = notice_for(NoticeScene::OpenDocument, ResultCode::CapabilityTooNew).text + "：";
+    for (std::size_t index = 0; index < state.needs_update.size(); ++index) {
+      if (index > 0) text += "、";
+      text += state.needs_update[index];
+    }
+    state.notices.push_back(text);
+  }
+  return state;
 }
 
 }  // namespace pixcake

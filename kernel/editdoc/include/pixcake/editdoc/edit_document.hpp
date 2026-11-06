@@ -33,6 +33,18 @@ struct LoadResult {
   bool recovered_empty = false;
 };
 
+class EditDocument;
+
+// 打开一张图时的三种状态（运维清单 O-15）：原图缺失、文档恢复为空、能力需要更新。三者互相独立，
+// 可以同时出现；恢复为空时提示画面是原图，不把空文档当成原来的精修效果。
+struct OpenState {
+  bool source_missing = false;
+  bool recovered_empty = false;
+  std::vector<std::string> needs_update;  // 片段版本比本程序新的能力
+  std::vector<std::string> notices;
+};
+OpenState describe_open(const LoadResult& loaded, const EditDocument& document, ResultCode source_status);
+
 // 修订号只增。预览副本不写盘，也不能被导出取走。
 class EditDocument {
  public:
