@@ -16,6 +16,7 @@ struct DurableLoad {
   bool absent = false;
   bool used_backup = false;
   bool recovered_empty = false;
+  bool recovery_marker = false;
   std::vector<std::uint8_t> bytes;
 };
 

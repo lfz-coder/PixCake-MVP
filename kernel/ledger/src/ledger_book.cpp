@@ -26,25 +26,22 @@ LedgerBook::LedgerBook(LedgerEventLog& log, CreditLedger ledger) : log_(log), le
 
 ResultCode LedgerBook::open(FreeQueuePolicy policy, LedgerEventLog& log, std::unique_ptr<LedgerBook>& out) {
   out.reset();
-  std::vector<LedgerEvent> events;
-  const ResultCode loaded = log.load(events);
-  if (loaded != ResultCode::Ok) {
-    return loaded;
-  }
-  CreditLedger ledger = CreditLedger::open(std::move(policy), std::move(events));
-  std::optional<LedgerCache> cache;
-  const ResultCode read = log.read_cache(cache);
-  if (read != ResultCode::Ok) {
-    return read;
-  }
-  if (!cache.has_value() || !same_cache(*cache, ledger)) {
-    const LedgerCache folded = cache_from(ledger);
-    const ResultCode written = log.in_transaction([&] { return log.write_cache(folded); });
-    if (written != ResultCode::Ok) {
-      return written;
+  std::optional<CreditLedger> ledger;
+  const ResultCode opened = log.in_transaction([&] {
+    std::vector<LedgerEvent> events;
+    const ResultCode loaded = log.load(events);
+    if (loaded != ResultCode::Ok) return loaded;
+    ledger.emplace(CreditLedger::open(std::move(policy), std::move(events)));
+    std::optional<LedgerCache> cache;
+    const ResultCode read = log.read_cache(cache);
+    if (read != ResultCode::Ok) return read;
+    if (!cache.has_value() || !same_cache(*cache, *ledger)) {
+      return log.write_cache(cache_from(*ledger));
     }
-  }
-  out = std::unique_ptr<LedgerBook>(new LedgerBook(log, std::move(ledger)));
+    return ResultCode::Ok;
+  });
+  if (opened != ResultCode::Ok || !ledger.has_value()) return opened;
+  out = std::unique_ptr<LedgerBook>(new LedgerBook(log, std::move(*ledger)));
   return ResultCode::Ok;
 }
 
@@ -57,12 +54,10 @@ ResultCode LedgerBook::persist(CreditLedger updated) {
                                       updated.events().end());
   const LedgerCache folded = cache_from(updated);
   const ResultCode code = log_.in_transaction([&] {
-    std::vector<LedgerEvent> current;
-    const ResultCode loaded = log_.load(current);
-    if (loaded != ResultCode::Ok) {
-      return loaded;
-    }
-    if (current.size() != kept) {
+    std::size_t current_count = 0;
+    const ResultCode counted = log_.event_count(current_count);
+    if (counted != ResultCode::Ok) return counted;
+    if (current_count != kept) {
       return ResultCode::StateConflict;
     }
     const ResultCode appended = log_.append(tail);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "pixcake/persist/file_system.hpp"
+#include "pixcake/support/fast_export_latch.hpp"
 #include "pixcake/support/result_code.hpp"
 
 #include <cstdint>
@@ -42,15 +43,19 @@ class EditDocument {
   // 路径为空或两条路径相同：返回状态冲突，不写文件。
   static LoadResult copy_committed(FileSystem& files, const std::string& source_path,
                                    const std::string& destination_path,
-                                   const std::vector<VersionLimit>& limits, EditDocument& copy);
+                                   const std::vector<VersionLimit>& limits, EditDocument& copy,
+                                   const FastExportLatch* latch = nullptr);
 
   std::vector<std::uint8_t> encode() const;
   static std::optional<EditDocument> decode(const std::vector<std::uint8_t>& bytes);
 
   // 不增加修订号。预览副本不会被这次写入带走。
-  ResultCode write_snapshot(FileSystem& files, const std::string& path) const;
+  ResultCode write_snapshot(FileSystem& files, const std::string& path,
+                            const FastExportLatch* latch = nullptr) const;
 
   std::string image_id() const;
+  // 计费原图编号与编辑实例编号分开。原图创建时两者相同；复制已提交文档时只生成新的编辑实例编号。
+  std::string editing_instance_id() const;
   std::uint64_t revision() const;
   std::uint32_t document_version() const;
   bool recovered_empty() const;
@@ -93,6 +98,7 @@ class EditDocument {
   ResultCode commit_baked_reset(std::uint64_t expected_revision, FileSystem& files, const std::string& path);
 
  private:
+  friend class HistoryLog;
   struct Record {
     std::uint32_t type = 0;
     std::vector<std::uint8_t> payload;
@@ -102,8 +108,10 @@ class EditDocument {
   std::vector<std::uint8_t> encode_body() const;
   void set_revision(std::uint64_t value);
   void clear_recovered_flag();
+  void set_editing_instance_id(std::string value);
 
   std::vector<Record> records_;
+  std::string editing_instance_id_;
   std::map<std::pair<std::string, std::string>, std::string> preview_;
   std::vector<VersionLimit> limits_;
 };

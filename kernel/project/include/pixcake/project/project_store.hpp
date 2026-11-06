@@ -24,6 +24,9 @@ class ProjectStore {
   virtual ResultCode update_photo_rating(std::int64_t id, int rating) = 0;
   virtual ResultCode update_photo_flag(std::int64_t id, const std::string& flag) = 0;
   virtual ResultCode update_photo_color(std::int64_t id, const std::string& color) = 0;
+  virtual ResultCode update_photo_ratings(const std::vector<std::int64_t>& ids, int rating) = 0;
+  virtual ResultCode update_photo_flags(const std::vector<std::int64_t>& ids, const std::string& flag) = 0;
+  virtual ResultCode update_photo_colors(const std::vector<std::int64_t>& ids, const std::string& color) = 0;
   virtual ResultCode load_photo(std::int64_t id, std::optional<PhotoRow>& out) = 0;
   virtual ResultCode list_photos(const std::optional<std::int64_t>& project_id,
                                  std::vector<PhotoRow>& out) = 0;

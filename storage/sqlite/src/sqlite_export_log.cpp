@@ -5,9 +5,11 @@
 #include <climits>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <utility>
 #include <vector>
+#include <set>
 
 namespace pixcake {
 namespace {
@@ -21,10 +23,19 @@ constexpr const char* kSchema =
     "document_revision INTEGER NOT NULL,"
     "document_snapshot TEXT NOT NULL,"
     "destination_path TEXT NOT NULL,"
+    "destination_root TEXT NOT NULL DEFAULT '',"
+    "destination_identity_valid INTEGER NOT NULL DEFAULT 0,"
+    "destination_device INTEGER NOT NULL DEFAULT 0,"
+    "destination_inode INTEGER NOT NULL DEFAULT 0,"
+    "destination_size INTEGER NOT NULL DEFAULT 0,"
     "settings_snapshot TEXT NOT NULL,"
     "watermark_free_second INTEGER NOT NULL,"
     "print_requested INTEGER NOT NULL,"
-    "checksum TEXT NOT NULL);"
+    "checksum TEXT NOT NULL,"
+    "failure_code INTEGER NOT NULL DEFAULT 0,"
+    "phase TEXT NOT NULL DEFAULT '',"
+    "duration_ms INTEGER NOT NULL DEFAULT 0,"
+    "deduplicated INTEGER NOT NULL DEFAULT 0);"
     "CREATE TABLE export_cache ("
     "id INTEGER PRIMARY KEY CHECK (id = 1),"
     "fast_export INTEGER NOT NULL);"
@@ -97,6 +108,27 @@ std::string column_text(sqlite3_stmt* stmt, int index) {
   }
   const int size = sqlite3_column_bytes(stmt, index);
   return std::string(reinterpret_cast<const char*>(text), static_cast<std::size_t>(size));
+}
+
+bool has_column(sqlite3* db, const char* table, const char* column) {
+  const char* sql = nullptr;
+  if (std::strcmp(table, "export_event") == 0) {
+    sql = "PRAGMA table_info(export_event);";
+  } else if (std::strcmp(table, "export_cache") == 0) {
+    sql = "PRAGMA table_info(export_cache);";
+  } else if (std::strcmp(table, "export_task_cache") == 0) {
+    sql = "PRAGMA table_info(export_task_cache);";
+  } else if (std::strcmp(table, "export_batch") == 0) {
+    sql = "PRAGMA table_info(export_batch);";
+  } else {
+    return false;
+  }
+  Statement stmt;
+  if (stmt.prepare(db, sql) != ResultCode::Ok) return false;
+  while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+    if (column_text(stmt.get(), 1) == column) return true;
+  }
+  return false;
 }
 
 std::string hex16(std::uint64_t value) {
@@ -179,7 +211,29 @@ ResultCode create_schema(sqlite3* db) {
 }
 
 ResultCode ensure_batch_schema(sqlite3* db) {
-  return exec_sql(db, "CREATE TABLE IF NOT EXISTS export_batch (export_id TEXT PRIMARY KEY, batch_id TEXT NOT NULL, original_id TEXT NOT NULL);");
+  const ResultCode batch = exec_sql(db, "CREATE TABLE IF NOT EXISTS export_batch (export_id TEXT PRIMARY KEY, batch_id TEXT NOT NULL, original_id TEXT NOT NULL);");
+  if (batch != ResultCode::Ok) return batch;
+  if (!has_column(db, "export_event", "destination_root")) {
+    const ResultCode root = exec_sql(db, "ALTER TABLE export_event ADD COLUMN destination_root TEXT NOT NULL DEFAULT ''; ");
+    if (root != ResultCode::Ok) return root;
+  }
+  if (!has_column(db, "export_event", "failure_code")) {
+    const ResultCode failure = exec_sql(db, "ALTER TABLE export_event ADD COLUMN failure_code INTEGER NOT NULL DEFAULT 0;");
+    if (failure != ResultCode::Ok) return failure;
+  }
+  if (!has_column(db, "export_event", "phase")) {
+    if (exec_sql(db, "ALTER TABLE export_event ADD COLUMN phase TEXT NOT NULL DEFAULT '';" ) != ResultCode::Ok ||
+        exec_sql(db, "ALTER TABLE export_event ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0;") != ResultCode::Ok ||
+        exec_sql(db, "ALTER TABLE export_event ADD COLUMN deduplicated INTEGER NOT NULL DEFAULT 0;") != ResultCode::Ok) return ResultCode::IoFailed;
+  }
+  if (!has_column(db, "export_event", "destination_identity_valid")) {
+    const ResultCode identity = exec_sql(db, "ALTER TABLE export_event ADD COLUMN destination_identity_valid INTEGER NOT NULL DEFAULT 0;");
+    if (identity != ResultCode::Ok) return identity;
+    if (exec_sql(db, "ALTER TABLE export_event ADD COLUMN destination_device INTEGER NOT NULL DEFAULT 0;") != ResultCode::Ok ||
+        exec_sql(db, "ALTER TABLE export_event ADD COLUMN destination_inode INTEGER NOT NULL DEFAULT 0;") != ResultCode::Ok ||
+        exec_sql(db, "ALTER TABLE export_event ADD COLUMN destination_size INTEGER NOT NULL DEFAULT 0;") != ResultCode::Ok) return ResultCode::IoFailed;
+  }
+  return ResultCode::Ok;
 }
 
 }  // namespace
@@ -251,8 +305,12 @@ ResultCode SqliteExportLog::load(std::vector<ExportEvent>& out) {
   Statement stmt;
   const ResultCode prepared = stmt.prepare(
       impl_->db,
-      "SELECT kind, export_id, original_id, document_revision, document_snapshot, destination_path, settings_snapshot, "
-      "watermark_free_second, print_requested, checksum FROM export_event ORDER BY seq;");
+      "SELECT e.kind, e.export_id, e.original_id, e.document_revision, e.document_snapshot, e.destination_path, e.destination_root, "
+      "e.destination_identity_valid, e.destination_device, e.destination_inode, e.destination_size, e.settings_snapshot, "
+      "e.watermark_free_second, e.print_requested, e.checksum, e.failure_code, e.phase, e.duration_ms, e.deduplicated, b.batch_id "
+      "FROM export_event AS e "
+      "LEFT JOIN export_batch AS b ON b.export_id = e.export_id AND b.original_id = e.original_id "
+      "ORDER BY e.seq;");
   if (prepared != ResultCode::Ok) {
     return prepared;
   }
@@ -265,16 +323,20 @@ ResultCode SqliteExportLog::load(std::vector<ExportEvent>& out) {
     event.document_revision = static_cast<std::uint64_t>(sqlite3_column_int64(stmt.get(), 3));
     event.document_snapshot = hex_bytes(column_text(stmt.get(), 4));
     event.destination_path = column_text(stmt.get(), 5);
-    event.settings_snapshot = column_text(stmt.get(), 6);
-    event.watermark_free_second = sqlite3_column_int(stmt.get(), 7) != 0;
-    event.print_requested = sqlite3_column_int(stmt.get(), 8) != 0;
-    event.checksum = parse_hex16(column_text(stmt.get(), 9));
-    Statement batch;
-    if (batch.prepare(impl_->db, "SELECT batch_id FROM export_batch WHERE export_id = ? AND original_id = ?;") == ResultCode::Ok &&
-        bind_text(batch.get(), 1, event.export_id) == ResultCode::Ok &&
-        bind_text(batch.get(), 2, event.original_id) == ResultCode::Ok && sqlite3_step(batch.get()) == SQLITE_ROW) {
-      event.batch_id = column_text(batch.get(), 0);
-    }
+    event.destination_root = column_text(stmt.get(), 6);
+    event.destination_identity.valid = sqlite3_column_int(stmt.get(), 7) != 0;
+    event.destination_identity.device = static_cast<std::uint64_t>(sqlite3_column_int64(stmt.get(), 8));
+    event.destination_identity.inode = static_cast<std::uint64_t>(sqlite3_column_int64(stmt.get(), 9));
+    event.destination_identity.size = static_cast<std::uint64_t>(sqlite3_column_int64(stmt.get(), 10));
+    event.settings_snapshot = column_text(stmt.get(), 11);
+    event.watermark_free_second = sqlite3_column_int(stmt.get(), 12) != 0;
+    event.print_requested = sqlite3_column_int(stmt.get(), 13) != 0;
+    event.checksum = parse_hex16(column_text(stmt.get(), 14));
+    event.failure_code = static_cast<ResultCode>(sqlite3_column_int(stmt.get(), 15));
+    event.phase = column_text(stmt.get(), 16);
+    event.duration_ms = static_cast<std::uint64_t>(sqlite3_column_int64(stmt.get(), 17));
+    event.deduplicated = sqlite3_column_int(stmt.get(), 18) != 0;
+    event.batch_id = column_text(stmt.get(), 19);
     out.push_back(std::move(event));
   }
   return stepped == SQLITE_DONE ? ResultCode::Ok : ResultCode::IoFailed;
@@ -284,8 +346,9 @@ ResultCode SqliteExportLog::append(const std::vector<ExportEvent>& events) {
   Statement stmt;
   const ResultCode prepared = stmt.prepare(
       impl_->db,
-      "INSERT INTO export_event(kind, export_id, original_id, document_revision, document_snapshot, destination_path, "
-      "settings_snapshot, watermark_free_second, print_requested, checksum) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);");
+      "INSERT INTO export_event(kind, export_id, original_id, document_revision, document_snapshot, destination_path, destination_root, "
+      "destination_identity_valid, destination_device, destination_inode, destination_size, settings_snapshot, "
+      "watermark_free_second, print_requested, checksum, failure_code, phase, duration_ms, deduplicated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);");
   if (prepared != ResultCode::Ok) {
     return prepared;
   }
@@ -315,20 +378,33 @@ ResultCode SqliteExportLog::append(const std::vector<ExportEvent>& events) {
     if (const ResultCode code = bind_text(stmt.get(), 6, event.destination_path); code != ResultCode::Ok) {
       return code;
     }
-    if (const ResultCode code = bind_text(stmt.get(), 7, event.settings_snapshot); code != ResultCode::Ok) {
+    if (const ResultCode code = bind_text(stmt.get(), 7, event.destination_root); code != ResultCode::Ok) {
       return code;
     }
-    if (const ResultCode code = map_sqlite(sqlite3_bind_int(stmt.get(), 8, event.watermark_free_second ? 1 : 0));
+    if (const ResultCode code = map_sqlite(sqlite3_bind_int(stmt.get(), 8, event.destination_identity.valid ? 1 : 0)); code != ResultCode::Ok) return code;
+    if (const ResultCode code = map_sqlite(sqlite3_bind_int64(stmt.get(), 9, static_cast<sqlite3_int64>(event.destination_identity.device))); code != ResultCode::Ok) return code;
+    if (const ResultCode code = map_sqlite(sqlite3_bind_int64(stmt.get(), 10, static_cast<sqlite3_int64>(event.destination_identity.inode))); code != ResultCode::Ok) return code;
+    if (const ResultCode code = map_sqlite(sqlite3_bind_int64(stmt.get(), 11, static_cast<sqlite3_int64>(event.destination_identity.size))); code != ResultCode::Ok) return code;
+    if (const ResultCode code = bind_text(stmt.get(), 12, event.settings_snapshot); code != ResultCode::Ok) {
+      return code;
+    }
+    if (const ResultCode code = map_sqlite(sqlite3_bind_int(stmt.get(), 13, event.watermark_free_second ? 1 : 0));
         code != ResultCode::Ok) {
       return code;
     }
-    if (const ResultCode code = map_sqlite(sqlite3_bind_int(stmt.get(), 9, event.print_requested ? 1 : 0));
+    if (const ResultCode code = map_sqlite(sqlite3_bind_int(stmt.get(), 14, event.print_requested ? 1 : 0));
         code != ResultCode::Ok) {
       return code;
     }
-    if (const ResultCode code = bind_text(stmt.get(), 10, hex16(event.checksum)); code != ResultCode::Ok) {
+    if (const ResultCode code = bind_text(stmt.get(), 15, hex16(event.checksum)); code != ResultCode::Ok) {
       return code;
     }
+    if (const ResultCode code = map_sqlite(sqlite3_bind_int(stmt.get(), 16, static_cast<int>(event.failure_code))); code != ResultCode::Ok) {
+      return code;
+    }
+    if (const ResultCode code = bind_text(stmt.get(), 17, event.phase); code != ResultCode::Ok) return code;
+    if (const ResultCode code = map_sqlite(sqlite3_bind_int64(stmt.get(), 18, static_cast<sqlite3_int64>(event.duration_ms))); code != ResultCode::Ok) return code;
+    if (const ResultCode code = map_sqlite(sqlite3_bind_int(stmt.get(), 19, event.deduplicated ? 1 : 0)); code != ResultCode::Ok) return code;
     const int inserted = sqlite3_step(stmt.get());
     if (inserted != SQLITE_DONE) {
       return map_sqlite(inserted);
@@ -378,10 +454,8 @@ ResultCode SqliteExportLog::read_cache(std::optional<ExportCache>& out) {
 }
 
 ResultCode SqliteExportLog::write_cache(const ExportCache& cache) {
-  const ResultCode cleared = exec_sql(impl_->db, "DELETE FROM export_task_cache;");
-  if (cleared != ResultCode::Ok) {
-    return cleared;
-  }
+  // The event log is authoritative.  Update only the task rows supplied by
+  // this cache; opening the log remains the explicit full-rebuild path.
   Statement row;
   const ResultCode prepared = row.prepare(
       impl_->db, "INSERT INTO export_cache(id, fast_export) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET "
@@ -399,13 +473,15 @@ ResultCode SqliteExportLog::write_cache(const ExportCache& cache) {
   }
   Statement task;
   const ResultCode task_prepared =
-      task.prepare(impl_->db, "INSERT INTO export_task_cache(export_id, status) VALUES (?, ?);");
+      task.prepare(impl_->db, "INSERT INTO export_task_cache(export_id, status) VALUES (?, ?) "
+                              "ON CONFLICT(export_id) DO UPDATE SET status = excluded.status;");
   if (task_prepared != ResultCode::Ok) {
     return task_prepared;
   }
+  std::set<std::string> seen;
   for (const auto& item : cache.statuses) {
-    sqlite3_reset(task.get());
-    sqlite3_clear_bindings(task.get());
+    if (!seen.insert(item.first).second) return ResultCode::StateConflict;
+    sqlite3_reset(task.get()); sqlite3_clear_bindings(task.get());
     if (const ResultCode code = bind_text(task.get(), 1, item.first); code != ResultCode::Ok) {
       return code;
     }

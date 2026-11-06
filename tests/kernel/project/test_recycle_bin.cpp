@@ -40,6 +40,7 @@ struct FakeDeleter : pixcake::SourceDeleter {
   pixcake::ResultCode next = pixcake::ResultCode::Ok;
   std::string last;
   pixcake::test::FakeFileSystem* files = nullptr;
+  pixcake::FileIdentity expected;
 
   pixcake::ResultCode remove_source(const std::string& path) override {
     ++calls;
@@ -48,6 +49,18 @@ struct FakeDeleter : pixcake::SourceDeleter {
       files->files.erase(path);
     }
     return next;
+  }
+
+  pixcake::ResultCode remove_source(const std::string& path, const pixcake::FileIdentity& identity) override {
+    ++calls;
+    last = path;
+    expected = identity;
+    if (next != pixcake::ResultCode::Ok) return next;
+    if (files == nullptr) return pixcake::ResultCode::IoFailed;
+    const pixcake::IoResult removed = files->remove_if_identity(path, identity);
+    if (removed.ok) return pixcake::ResultCode::Ok;
+    if (removed.not_found) return pixcake::ResultCode::SourceMissing;
+    return removed.code;
   }
 };
 
@@ -65,6 +78,104 @@ struct Fixture {
     deleter.files = &files;
     library = std::make_unique<pixcake::ProjectLibrary>(*store, files, clock, deleter, &log);
   }
+};
+
+class FailingPresenceStore final : public pixcake::ProjectStore {
+ public:
+  explicit FailingPresenceStore(pixcake::ProjectStore& inner) : inner_(inner) {}
+
+  int fail_on_presence_call = 0;
+  int presence_calls = 0;
+
+  pixcake::ResultCode insert_project(const pixcake::ProjectDraft& draft, std::int64_t& id) override {
+    return inner_.insert_project(draft, id);
+  }
+  pixcake::ResultCode update_project_deleted_at(std::int64_t id,
+                                                const std::optional<std::int64_t>& value) override {
+    return inner_.update_project_deleted_at(id, value);
+  }
+  pixcake::ResultCode load_project(std::int64_t id, std::optional<pixcake::ProjectRow>& out) override {
+    return inner_.load_project(id, out);
+  }
+  pixcake::ResultCode list_projects(std::vector<pixcake::ProjectRow>& out) override {
+    return inner_.list_projects(out);
+  }
+  pixcake::ResultCode erase_project_index(std::int64_t id) override { return inner_.erase_project_index(id); }
+  pixcake::ResultCode insert_photo(const pixcake::PhotoDraft& draft, std::int64_t& id) override {
+    return inner_.insert_photo(draft, id);
+  }
+  pixcake::ResultCode update_photo_presence(std::int64_t id, const std::string& presence) override {
+    ++presence_calls;
+    if (fail_on_presence_call != 0 && presence_calls == fail_on_presence_call) {
+      return pixcake::ResultCode::DiskFull;
+    }
+    return inner_.update_photo_presence(id, presence);
+  }
+  pixcake::ResultCode update_photo_rating(std::int64_t id, int rating) override {
+    return inner_.update_photo_rating(id, rating);
+  }
+  pixcake::ResultCode update_photo_flag(std::int64_t id, const std::string& flag) override {
+    return inner_.update_photo_flag(id, flag);
+  }
+  pixcake::ResultCode update_photo_color(std::int64_t id, const std::string& color) override {
+    return inner_.update_photo_color(id, color);
+  }
+  pixcake::ResultCode update_photo_ratings(const std::vector<std::int64_t>& ids, int rating) override {
+    return inner_.update_photo_ratings(ids, rating);
+  }
+  pixcake::ResultCode update_photo_flags(const std::vector<std::int64_t>& ids, const std::string& flag) override {
+    return inner_.update_photo_flags(ids, flag);
+  }
+  pixcake::ResultCode update_photo_colors(const std::vector<std::int64_t>& ids, const std::string& color) override {
+    return inner_.update_photo_colors(ids, color);
+  }
+  pixcake::ResultCode load_photo(std::int64_t id, std::optional<pixcake::PhotoRow>& out) override {
+    return inner_.load_photo(id, out);
+  }
+  pixcake::ResultCode list_photos(const std::optional<std::int64_t>& project_id,
+                                  std::vector<pixcake::PhotoRow>& out) override {
+    return inner_.list_photos(project_id, out);
+  }
+  pixcake::ResultCode erase_photo(std::int64_t id) override { return inner_.erase_photo(id); }
+  pixcake::ResultCode insert_virtual_copy(const pixcake::VirtualCopyDraft& draft, std::int64_t& id) override {
+    return inner_.insert_virtual_copy(draft, id);
+  }
+  pixcake::ResultCode load_virtual_copy(std::int64_t id,
+                                        std::optional<pixcake::VirtualCopyRow>& out) override {
+    return inner_.load_virtual_copy(id, out);
+  }
+  pixcake::ResultCode load_virtual_copy_by_document(const std::string& document_id,
+                                                    std::optional<pixcake::VirtualCopyRow>& out) override {
+    return inner_.load_virtual_copy_by_document(document_id, out);
+  }
+  pixcake::ResultCode list_virtual_copies(std::int64_t photo_id,
+                                          std::vector<pixcake::VirtualCopyRow>& out) override {
+    return inner_.list_virtual_copies(photo_id, out);
+  }
+  pixcake::ResultCode erase_virtual_copy(std::int64_t id) override { return inner_.erase_virtual_copy(id); }
+  pixcake::ResultCode erase_virtual_copies_of_photo(std::int64_t id) override {
+    return inner_.erase_virtual_copies_of_photo(id);
+  }
+  pixcake::ResultCode insert_trash(const std::string& subject, std::int64_t subject_id,
+                                   std::int64_t deleted_at) override {
+    return inner_.insert_trash(subject, subject_id, deleted_at);
+  }
+  pixcake::ResultCode load_trash(const std::string& subject, std::int64_t subject_id,
+                                 std::optional<pixcake::TrashRow>& out) override {
+    return inner_.load_trash(subject, subject_id, out);
+  }
+  pixcake::ResultCode list_trash(std::vector<pixcake::TrashRow>& out) override {
+    return inner_.list_trash(out);
+  }
+  pixcake::ResultCode erase_trash(const std::string& subject, std::int64_t subject_id) override {
+    return inner_.erase_trash(subject, subject_id);
+  }
+  pixcake::ResultCode in_transaction(const std::function<pixcake::ResultCode()>& body) override {
+    return inner_.in_transaction(body);
+  }
+
+ private:
+  pixcake::ProjectStore& inner_;
 };
 
 std::int64_t trash_time(pixcake::ProjectLibrary& library, const char* subject, std::int64_t id) {
@@ -263,13 +374,44 @@ void test_delete_source_file() {
   EXPECT(denied.notice == pixcake::kDiskFileRemains);
   EXPECT(world.files.files["/pictures/keep.png"] == before);
   EXPECT(world.library->load_photo(sibling.id, row) == pixcake::ResultCode::Ok);
-  EXPECT(row->presence == pixcake::kPresenceEditable);
+  EXPECT(row->presence == pixcake::kPresenceDeletePending);
   const std::int64_t kept = trash_time(*world.library, pixcake::kTrashPhoto, sibling.id);
   world.clock.now += 5;
   const pixcake::ProjectResult denied_again = world.library->delete_source_file(sibling.id);
   EXPECT(denied_again.code == pixcake::ResultCode::PermissionDenied);
   EXPECT(denied_again.notice == pixcake::kDiskFileRemains);
   EXPECT(trash_time(*world.library, pixcake::kTrashPhoto, sibling.id) == kept);
+  EXPECT(world.library->startup() == pixcake::ResultCode::Ok);
+  EXPECT(world.library->load_photo(sibling.id, row) == pixcake::ResultCode::Ok);
+  EXPECT(row->presence == pixcake::kPresenceEditable);
+}
+
+void test_delete_source_file_recovers_when_final_presence_write_fails() {
+  pixcake::test::TempDir dir;
+  std::unique_ptr<pixcake::SqliteProjectStore> sqlite;
+  EXPECT(pixcake::SqliteProjectStore::open(dir.path() + "/library.db", sqlite) == pixcake::ResultCode::Ok);
+  FailingPresenceStore store(*sqlite);
+  FixedClock clock;
+  pixcake::test::FakeFileSystem files;
+  files.files["/pictures/recover.png"] = {1, 2, 3};
+  FakeDeleter deleter;
+  deleter.files = &files;
+  MemoryLog log;
+  pixcake::ProjectLibrary library(store, files, clock, deleter, &log);
+  const pixcake::ProjectResult project = library.create_project("恢复删除", pixcake::kOriginLocal, false);
+  const pixcake::ProjectResult photo = library.add_photo(project.id, "/pictures/recover.png", "recover.png", {});
+  store.fail_on_presence_call = 2;  // intent succeeds; post-delete state write fails.
+  EXPECT(library.delete_source_file(photo.id).code == pixcake::ResultCode::DiskFull);
+  std::optional<pixcake::PhotoRow> pending;
+  EXPECT(library.load_photo(photo.id, pending) == pixcake::ResultCode::Ok);
+  EXPECT(pending.has_value());
+  EXPECT(pending->presence == pixcake::kPresenceDeletePending);
+  EXPECT(!files.files.count("/pictures/recover.png"));
+  store.fail_on_presence_call = 0;
+  EXPECT(library.startup() == pixcake::ResultCode::Ok);
+  EXPECT(library.load_photo(photo.id, pending) == pixcake::ResultCode::Ok);
+  EXPECT(pending.has_value());
+  EXPECT(pending->presence == pixcake::kPresenceMissing);
 }
 
 void test_file_source_deleter_rejects_relative_paths() {
@@ -285,6 +427,17 @@ void test_file_source_deleter_rejects_relative_paths() {
   EXPECT(files.files["/pictures/two.png"] == std::vector<std::uint8_t>({2}));
 }
 
+void test_delete_uses_enrolled_file_identity() {
+  Fixture world;
+  world.files.files["/pictures/orig.png"] = {1, 2, 3};
+  const pixcake::ProjectResult project = world.library->create_project("身份", pixcake::kOriginLocal, false);
+  const pixcake::ProjectResult photo = world.library->add_photo(project.id, "/pictures/orig.png", "orig.png", {});
+  EXPECT(photo.code == pixcake::ResultCode::Ok);
+  world.files.files["/pictures/orig.png"] = {9, 9, 9};
+  EXPECT(world.library->delete_source_file(photo.id).code == pixcake::ResultCode::StateConflict);
+  EXPECT(world.files.files["/pictures/orig.png"] == std::vector<std::uint8_t>({9, 9, 9}));
+}
+
 }  // namespace
 
 int main() {
@@ -297,6 +450,8 @@ int main() {
   test_trashing_twice_keeps_the_original_time();
   test_erase_trashed_project_removes_index_only();
   test_delete_source_file();
+  test_delete_source_file_recovers_when_final_presence_write_fails();
   test_file_source_deleter_rejects_relative_paths();
+  test_delete_uses_enrolled_file_identity();
   return g_failures == 0 ? 0 : 1;
 }

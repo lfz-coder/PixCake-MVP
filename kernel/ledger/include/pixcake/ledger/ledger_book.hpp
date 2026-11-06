@@ -22,6 +22,7 @@ class LedgerEventLog {
   virtual ~LedgerEventLog() = default;
 
   virtual ResultCode load(std::vector<LedgerEvent>& out) = 0;
+  virtual ResultCode event_count(std::size_t& out) = 0;
   virtual ResultCode append(const std::vector<LedgerEvent>& events) = 0;
   virtual ResultCode read_cache(std::optional<LedgerCache>& out) = 0;
   virtual ResultCode write_cache(const LedgerCache& cache) = 0;

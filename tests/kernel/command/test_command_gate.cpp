@@ -149,6 +149,19 @@ void test_b62_fast_export_stays_until_the_switch_is_turned_off() {
   EXPECT(document.committed_parameter("color.global", "exposure") == "-1.50");
 }
 
+void test_direct_document_commit_observes_registered_latch() {
+  auto document = *pixcake::EditDocument::create("img-1");
+  Latch latch;
+  latch.on = true;
+  pixcake::test::FakeFileSystem files;
+  pixcake::CommandGate gate(document, latch, files, "docs/img.pxedit", limits(), nullptr);
+  EXPECT(document.set_preview("color.global", "exposure", "1.00") == pixcake::ResultCode::Ok);
+  EXPECT(document.commit_preview(0, "color.global", "exposure", limits(), files, "docs/img.pxedit") ==
+         pixcake::ResultCode::FastExportBusy);
+  EXPECT(document.revision() == 0);
+  EXPECT(files.writes.empty());
+}
+
 void test_unknown_command_does_not_write() {
   auto document = *pixcake::EditDocument::create("img-1");
   Latch latch;
@@ -184,6 +197,19 @@ void test_b60_simultaneous_commits_serialize_to_one_revision() {
   EXPECT(document.committed_parameter("color.global", "exposure") == "-1.50");
 }
 
+void test_b60_two_gates_share_document_submission_state() {
+  auto first_document = *pixcake::EditDocument::create("img-1");
+  auto second_document = *pixcake::EditDocument::create("img-1");
+  Latch latch;
+  pixcake::test::FakeFileSystem files;
+  pixcake::CommandGate first(first_document, latch, files, "docs/shared.pxedit", limits(), nullptr);
+  pixcake::CommandGate second(second_document, latch, files, "docs/shared.pxedit", limits(), nullptr);
+  EXPECT(first.submit(command_with("preview", 0, "-1.50")).code == pixcake::ResultCode::Ok);
+  EXPECT(first.submit(command_with("commit", 0, "ignored")).code == pixcake::ResultCode::Ok);
+  EXPECT(second.submit(command_with("preview", 0, "2.00")).code == pixcake::ResultCode::StateConflict);
+  EXPECT(second_document.revision() == 0);
+}
+
 }  // namespace
 
 int main() {
@@ -192,7 +218,9 @@ int main() {
   test_b61_commit_writes_latest_preview();
   test_b73_stale_revision_does_not_write();
   test_b62_fast_export_stays_until_the_switch_is_turned_off();
+  test_direct_document_commit_observes_registered_latch();
   test_unknown_command_does_not_write();
   test_b60_simultaneous_commits_serialize_to_one_revision();
+  test_b60_two_gates_share_document_submission_state();
   return g_failures == 0 ? 0 : 1;
 }

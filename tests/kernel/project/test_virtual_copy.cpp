@@ -414,7 +414,7 @@ void test_delete_source_file_trashes_copies_without_a_second_path() {
   std::optional<pixcake::PhotoRow> still;
   EXPECT(denied.library->load_photo(denied_photo, still) == pixcake::ResultCode::Ok);
   EXPECT(still.has_value());
-  EXPECT(still->presence == pixcake::kPresenceEditable);
+  EXPECT(still->presence == pixcake::kPresenceDeletePending);
 
   Fixture again;
   const std::int64_t again_photo = add_project_photo(again, "/pictures/a.png", "a.png");

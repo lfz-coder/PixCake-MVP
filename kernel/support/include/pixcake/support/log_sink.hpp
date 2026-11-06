@@ -14,6 +14,9 @@ struct LogRecord {
   std::string path;
   std::uint64_t revision = 0;
   std::string capability_id;
+  std::string phase;
+  std::uint64_t duration_ms = 0;
+  bool deduplicated = false;
 };
 
 class LogSink {

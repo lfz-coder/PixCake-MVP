@@ -1,5 +1,7 @@
 #include "pixcake/workspace/workspace_display.hpp"
 
+#include <algorithm>
+
 #include <utility>
 
 namespace pixcake {
@@ -49,6 +51,9 @@ WorkspaceDisplay WorkspaceDisplay::logged_out() { return WorkspaceDisplay{}; }
 WorkspaceDisplay WorkspaceDisplay::home() {
   WorkspaceDisplay display;
   display.page_ = WorkspacePage::Home;
+  display.show_raw_ = true;
+  display.show_edit_ = true;
+  display.show_export_ = true;
   return display;
 }
 
@@ -56,6 +61,9 @@ WorkspaceDisplay WorkspaceDisplay::entered_project() {
   WorkspaceDisplay display;
   display.page_ = WorkspacePage::Refine;
   display.in_project_ = true;
+  display.show_raw_ = true;
+  display.show_edit_ = true;
+  display.show_export_ = true;
   return display;
 }
 
@@ -198,9 +206,10 @@ ResultCode WorkspaceDisplay::set_library_view(const std::string& view) {
 }
 
 ResultCode WorkspaceDisplay::set_grid_per_row(int count) {
-  if (page_ != WorkspacePage::Library || library_view_ != "网格视图" || count < 1 || count > 7) {
+  if (page_ != WorkspacePage::Library || library_view_ != "网格视图") {
     return ResultCode::StateConflict;
   }
+  count = std::max(1, std::min(7, count));
   grid_per_row_ = count;
   return ResultCode::Ok;
 }

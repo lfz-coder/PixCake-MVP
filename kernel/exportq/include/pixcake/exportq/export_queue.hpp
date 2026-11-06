@@ -18,9 +18,15 @@ struct ExportJob {
   std::uint64_t document_revision = 0;
   std::vector<std::uint8_t> document_snapshot;
   std::string destination_path;
+  std::string destination_root;
+  FileIdentity destination_identity;
   std::string settings_snapshot;
   bool watermark_free_second = false;
   bool print_requested = false;
+  ResultCode failure_code = ResultCode::Ok;
+  std::string phase;
+  std::uint64_t duration_ms = 0;
+  bool deduplicated = false;
 };
 
 struct ExportEvent {
@@ -31,9 +37,15 @@ struct ExportEvent {
   std::uint64_t document_revision = 0;
   std::vector<std::uint8_t> document_snapshot;
   std::string destination_path;
+  std::string destination_root;
+  FileIdentity destination_identity;
   std::string settings_snapshot;
   bool watermark_free_second = false;
   bool print_requested = false;
+  ResultCode failure_code = ResultCode::Ok;
+  std::string phase;
+  std::uint64_t duration_ms = 0;
+  bool deduplicated = false;
   std::uint64_t checksum = 0;
 };
 
@@ -84,6 +96,7 @@ class ExportQueue : public FastExportLatch {
   ResultCode recover(FileSystem& files);
 
   std::string status(const std::string& export_id) const;
+  ResultCode failure_reason(const std::string& export_id) const;
   bool find_job(const std::string& export_id, ExportJob& out) const;
   std::vector<ExportProductFact> products() const;
   ExportCache cache() const;

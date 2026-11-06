@@ -19,4 +19,18 @@ ResultCode FileSourceDeleter::remove_source(const std::string& absolute_path) {
   return removed.code;
 }
 
+ResultCode FileSourceDeleter::remove_source(const std::string& absolute_path, const FileIdentity& expected) {
+  if (absolute_path.empty() || absolute_path.front() != '/' ||
+      absolute_path.find('\0') != std::string::npos) {
+    return ResultCode::StateConflict;
+  }
+  if (!expected.valid) {
+    return ResultCode::StateConflict;
+  }
+  const IoResult removed = files_.remove_if_identity(absolute_path, expected);
+  if (removed.ok) return ResultCode::Ok;
+  if (removed.not_found) return ResultCode::SourceMissing;
+  return removed.code;
+}
+
 }  // namespace pixcake

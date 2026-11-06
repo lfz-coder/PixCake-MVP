@@ -21,6 +21,12 @@ void expect(bool cond, const char* text, int line) {
 
 const char* kPath = "docs/img.pxedit";
 
+class Latch final : public pixcake::FastExportLatch {
+ public:
+  bool on = false;
+  bool enabled() const override { return on; }
+};
+
 std::string han(std::size_t count) {
   std::string out;
   for (std::size_t i = 0; i < count; ++i) {
@@ -49,6 +55,8 @@ void test_c44_name_counts_characters_not_bytes() {
          pixcake::ResultCode::StateConflict);
   EXPECT(library.save(portrait_named("empty", ""), false) == pixcake::ResultCode::StateConflict);
   EXPECT(library.save(portrait_named("blank", " \t\n"), false) == pixcake::ResultCode::StateConflict);
+  EXPECT(library.save(portrait_named("fullwidth-blank", "\xE3\x80\x80"), false) ==
+         pixcake::ResultCode::StateConflict);
   EXPECT(library.save(portrait_named("badutf", "\xFF"), false) == pixcake::ResultCode::StateConflict);
   EXPECT(library.save(portrait_named("", han(1)), false) == pixcake::ResultCode::StateConflict);
   EXPECT(library.presets().size() == 2);
@@ -119,6 +127,7 @@ void test_c43_color_replaces_and_ai_color_stacks() {
   color.fragments.push_back(pixcake::PresetFragment{"color.global", 1, {9}});
 
   pixcake::PresetLibrary library;
+  Latch latch;
   const auto warning = library.check_apply(document, color);
   EXPECT(warning.code == pixcake::ResultCode::Ok);
   EXPECT(warning.overwrite_color);
@@ -132,7 +141,10 @@ void test_c43_color_replaces_and_ai_color_stacks() {
   EXPECT(ai_check.code == pixcake::ResultCode::Ok);
   EXPECT(!ai_check.overwrite_color);
 
-  EXPECT(library.apply(document, color, 0, files, kPath) == pixcake::ResultCode::Ok);
+  latch.on = true;
+  EXPECT(library.apply(document, color, 0, files, kPath, latch) == pixcake::ResultCode::FastExportBusy);
+  latch.on = false;
+  EXPECT(library.apply(document, color, 0, files, kPath, latch) == pixcake::ResultCode::Ok);
   EXPECT(document.revision() == 1);
   EXPECT(document.fragment("color.global")->inner == std::vector<std::uint8_t>({9}));
   EXPECT(!document.fragment("color.local").has_value());
@@ -140,17 +152,17 @@ void test_c43_color_replaces_and_ai_color_stacks() {
   EXPECT(document.fragment("color.match")->inner == std::vector<std::uint8_t>({4}));
   EXPECT(document.preset_refs().empty());
 
-  EXPECT(library.apply(document, ai, 1, files, kPath) == pixcake::ResultCode::Ok);
+  EXPECT(library.apply(document, ai, 1, files, kPath, latch) == pixcake::ResultCode::Ok);
   EXPECT(document.fragment("color.global")->inner == std::vector<std::uint8_t>({9}));
   EXPECT(document.fragment("color.style")->inner == std::vector<std::uint8_t>({8}));
 
   const auto saved = files.files[kPath];
-  EXPECT(library.apply(document, color, 0, files, kPath) == pixcake::ResultCode::StateConflict);
+  EXPECT(library.apply(document, color, 0, files, kPath, latch) == pixcake::ResultCode::StateConflict);
   EXPECT(document.revision() == 2);
   EXPECT(files.files[kPath] == saved);
 
   files.write_error = pixcake::ResultCode::DiskFull;
-  EXPECT(library.apply(document, color, 2, files, kPath) == pixcake::ResultCode::DiskFull);
+  EXPECT(library.apply(document, color, 2, files, kPath, latch) == pixcake::ResultCode::DiskFull);
   EXPECT(document.revision() == 2);
   EXPECT(files.files[kPath] == saved);
 }

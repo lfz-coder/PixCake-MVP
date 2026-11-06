@@ -19,6 +19,12 @@ void expect(bool cond, const char* text, int line) {
 
 #define EXPECT(cond) expect(static_cast<bool>(cond), #cond, __LINE__)
 
+class Latch final : public pixcake::FastExportLatch {
+ public:
+  bool on = false;
+  bool enabled() const override { return on; }
+};
+
 pixcake::LayerDocument opened() {
   auto document = pixcake::LayerDocument::create("img-1", 4);
   EXPECT(document.has_value());
@@ -80,10 +86,11 @@ void test_group_mask_selection_and_batch_design() {
   pixcake::LayerView masked;
   EXPECT(document.find_layer("layer-1", masked));
   EXPECT(masked.mask_density == 101);
-  EXPECT(document.set_mask_feather("layer-1", 1001) == pixcake::ResultCode::Ok);
+  EXPECT(document.set_mask_feather("layer-1", 100) == pixcake::ResultCode::Ok);
+  EXPECT(document.set_mask_feather("layer-1", 101) == pixcake::ResultCode::StateConflict);
   EXPECT(document.set_mask_feather("layer-1", -1) == pixcake::ResultCode::StateConflict);
   EXPECT(document.find_layer("layer-1", masked));
-  EXPECT(masked.mask_feather == 1001);
+  EXPECT(masked.mask_feather == 100);
   EXPECT(document.set_selection(true, 12) == pixcake::ResultCode::Ok);
   EXPECT(document.selection().present);
   EXPECT(document.selection().feather == 12);
@@ -260,6 +267,15 @@ void test_recovered_empty_save_round_trips() {
   EXPECT(second.layers().empty());
 }
 
+void test_layer_save_observes_explicit_write_latch() {
+  auto document = opened();
+  pixcake::test::FakeFileSystem files;
+  Latch latch;
+  latch.on = true;
+  EXPECT(document.save(files, "/creative/img-1.pxlayer", &latch) == pixcake::ResultCode::FastExportBusy);
+  EXPECT(files.writes.empty());
+}
+
 void test_remove_clears_generation_cursor_for_deleted_children() {
   auto document = opened();
   EXPECT(document.place_result("result-1", "新图层", "tool-a") == pixcake::ResultCode::Ok);
@@ -286,6 +302,7 @@ int main() {
   test_remove_clears_generation_cursor_for_deleted_children();
   test_round_trip_keeps_unknown_records_and_rejects_the_retouch_magic();
   test_recovered_empty_save_round_trips();
+  test_layer_save_observes_explicit_write_latch();
   test_apply_bakes_the_original_and_a_new_document_has_no_pixels();
   if (g_failures != 0) {
     std::fprintf(stderr, "%d failure(s)\n", g_failures);

@@ -10,7 +10,12 @@ ResultCode HistoryLog::record_committed(const std::string& image_id, const EditD
   if (batch_design_busy || image_id.empty() || document.image_id() != image_id) {
     return ResultCode::StateConflict;
   }
-  const auto existing = images_.find(image_id);
+  std::string history_id = document.editing_instance_id();
+  auto existing = images_.find(history_id);
+  if (existing == images_.end()) {
+    existing = images_.find(image_id);
+    if (existing != images_.end()) history_id = image_id;
+  }
   if (existing != images_.end() && !existing->second.steps.empty() &&
       document.revision() <= existing->second.steps.back().revision) {
     return ResultCode::StateConflict;
@@ -23,7 +28,7 @@ ResultCode HistoryLog::record_committed(const std::string& image_id, const EditD
   step.display_value = std::move(display_value);
   step.snapshot = document.encode();
 
-  auto& image = images_[image_id];
+  auto& image = images_[history_id];
   image.steps.push_back(std::move(step));
   image.current = image.steps.size() - 1;
   return ResultCode::Ok;
@@ -34,7 +39,8 @@ ResultCode HistoryLog::select(const std::string& image_id, EditDocument& documen
   if (batch_design_busy || image_id.empty()) {
     return ResultCode::StateConflict;
   }
-  const auto found = images_.find(image_id);
+  auto found = images_.find(document.editing_instance_id());
+  if (found == images_.end()) found = images_.find(image_id);
   if (found == images_.end() || index >= found->second.steps.size()) {
     return ResultCode::StateConflict;
   }
@@ -45,7 +51,15 @@ ResultCode HistoryLog::select(const std::string& image_id, EditDocument& documen
   if (!decoded) {
     return ResultCode::DocumentCorrupt;
   }
+  const std::string instance = document.editing_instance_id();
   document = std::move(*decoded);
+  document.set_editing_instance_id(instance);
+  // Selecting an older content snapshot never rewinds the committed
+  // document generation.  The next commit must use a new monotonic value.
+  // Keep the document's committed generation monotonic across a history
+  // branch.  Selecting older content changes payload only; the next commit
+  // must advance beyond the newest recorded step.
+  document.set_revision(found->second.steps.back().revision);
   found->second.current = index;
   return ResultCode::Ok;
 }
@@ -61,7 +75,9 @@ ResultCode HistoryLog::reopen_folded(const std::string& image_id, const EditDocu
   ImageSteps image;
   image.steps.push_back(std::move(step));
   image.current = 0;
-  images_[image_id] = std::move(image);
+  std::string history_id = loaded.editing_instance_id();
+  if (images_.find(image_id) != images_.end()) history_id = image_id;
+  images_[history_id] = std::move(image);
   return ResultCode::Ok;
 }
 

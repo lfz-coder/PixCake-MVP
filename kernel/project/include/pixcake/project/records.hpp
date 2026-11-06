@@ -1,5 +1,6 @@
 #pragma once
 
+#include "pixcake/persist/file_system.hpp"
 #include "pixcake/support/result_code.hpp"
 
 #include <cstdint>
@@ -14,6 +15,7 @@ inline constexpr char kOriginCloudUploaded[] = "云上传";
 inline constexpr char kOriginCloudDownloaded[] = "云下载";
 inline constexpr char kPresenceEditable[] = "可编辑";
 inline constexpr char kPresenceMissing[] = "原文件缺失";
+inline constexpr char kPresenceDeletePending[] = "删除待完成";
 inline constexpr char kTrashProject[] = "项目";
 inline constexpr char kTrashPhoto[] = "图片";
 inline constexpr char kTrashVirtualCopy[] = "虚拟副本";
@@ -47,6 +49,7 @@ struct PhotoRow {
   int rating = 0;
   std::string flag;
   std::string color_label;
+  FileIdentity source_identity;
 };
 
 struct TrashRow {
@@ -83,6 +86,7 @@ struct PhotoDraft {
   std::string file_name;
   std::vector<std::uint8_t> access_credential;
   std::string presence;
+  FileIdentity source_identity;
 };
 
 struct ProjectResult {

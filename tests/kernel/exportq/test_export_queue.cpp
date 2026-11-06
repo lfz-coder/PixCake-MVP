@@ -98,6 +98,20 @@ class PostUnlinkSyncFileSystem : public MismatchFileSystem {
   }
 };
 
+class TempCleanupFailureFileSystem : public pixcake::test::FakeFileSystem {
+ public:
+  pixcake::ResultCode remove_error = pixcake::ResultCode::Ok;
+  bool fail_temp_remove = true;
+
+  pixcake::IoResult remove_file(const std::string& path) override {
+    if (fail_temp_remove && path.find("/cache/") != std::string::npos &&
+        remove_error != pixcake::ResultCode::Ok) {
+      return pixcake::io_error(remove_error);
+    }
+    return pixcake::test::FakeFileSystem::remove_file(path);
+  }
+};
+
 class RejectFailSink : public pixcake::ExportEventSink {
  public:
   pixcake::ResultCode code = pixcake::ResultCode::DiskFull;
@@ -107,6 +121,21 @@ class RejectFailSink : public pixcake::ExportEventSink {
       return code;
     }
     return pixcake::ResultCode::Ok;
+  }
+};
+
+class RaceDestinationFileSystem : public pixcake::test::FakeFileSystem {
+ public:
+  std::string destination;
+  std::vector<std::uint8_t> raced_bytes;
+  bool race_on_publish = false;
+
+  pixcake::IoResult rename_file(const std::string& from, const std::string& to) override {
+    if (race_on_publish && to == destination) {
+      files[destination] = raced_bytes;
+      return pixcake::io_error(pixcake::ResultCode::StateConflict);
+    }
+    return pixcake::test::FakeFileSystem::rename_file(from, to);
   }
 };
 
@@ -156,6 +185,53 @@ void test_snapshot_and_fast_export_stay() {
   EXPECT(!queue.enabled());
   preview.name = "preview";
   EXPECT(gate.submit(preview).code == pixcake::ResultCode::Ok);
+}
+
+void test_quality_is_limited_by_export_contract() {
+  auto queue = pixcake::ExportQueue::open("/cache/exports");
+  auto invalid = job_of("quality-bad", "orig", "/out/quality.jpg");
+  invalid.settings_snapshot = "quality=15";
+  EXPECT(queue.enqueue(invalid) == pixcake::ResultCode::StateConflict);
+  auto valid = job_of("quality-good", "orig", "/out/quality.jpg");
+  valid.settings_snapshot = "quality=14";
+  EXPECT(queue.enqueue(valid) == pixcake::ResultCode::Ok);
+}
+
+void test_b63_stale_export_handle_cannot_publish_after_cancel() {
+  pixcake::test::TempDir dir;
+  const std::string db = dir.path() + "/export.db";
+  const std::string cache = dir.path() + "/cache";
+  const std::string destination = dir.path() + "/out.jpg";
+  pixcake::PosixFileSystem files;
+  std::unique_ptr<pixcake::SqliteExportLog> first_log;
+  std::unique_ptr<pixcake::SqliteExportLog> second_log;
+  EXPECT(pixcake::SqliteExportLog::open(db, first_log) == pixcake::ResultCode::Ok);
+  EXPECT(pixcake::SqliteExportLog::open(db, second_log) == pixcake::ResultCode::Ok);
+  std::unique_ptr<pixcake::ExportBook> first;
+  std::unique_ptr<pixcake::ExportBook> second;
+  EXPECT(pixcake::ExportBook::open(cache, *first_log, files, first) == pixcake::ResultCode::Ok);
+  EXPECT(first->queue().enqueue(job_of("stale-export", "original", destination)) == pixcake::ResultCode::Ok);
+  EXPECT(first->queue().prepare("stale-export") == pixcake::ResultCode::Ok);
+  EXPECT(first->queue().start_rendering("stale-export") == pixcake::ResultCode::Ok);
+  EXPECT(pixcake::ExportBook::open(cache, *second_log, files, second) == pixcake::ResultCode::Ok);
+  EXPECT(second->queue().cancel("stale-export") == pixcake::ResultCode::Ok);
+  EXPECT(first->queue().commit_product("stale-export", kBytes, files) == pixcake::ResultCode::StateConflict);
+  EXPECT(!files.exists(destination));
+}
+
+void test_p11_failed_temp_cleanup_remains_retryable_after_reopen() {
+  TempCleanupFailureFileSystem files;
+  files.sync_file_error = pixcake::ResultCode::IoFailed;
+  files.remove_error = pixcake::ResultCode::PermissionDenied;
+  auto queue = pixcake::ExportQueue::open("/cache/exports");
+  reach_render(queue, job_of("cleanup-pending", "original", "/out/cleanup.jpg"));
+  EXPECT(queue.commit_product("cleanup-pending", kBytes, files) == pixcake::ResultCode::IoFailed);
+  EXPECT(queue.status("cleanup-pending") == "待清理临时文件");
+  EXPECT(queue.failure_reason("cleanup-pending") == pixcake::ResultCode::PermissionDenied);
+  EXPECT(queue.recover(files) == pixcake::ResultCode::PermissionDenied);
+  files.fail_temp_remove = false;
+  EXPECT(queue.recover(files) == pixcake::ResultCode::Ok);
+  EXPECT(queue.status("cleanup-pending") == "失败");
 }
 
 void test_enqueue_requires_document_snapshot() {
@@ -347,9 +423,9 @@ void test_commit_returns_remove_error_when_mismatched_destination_cannot_be_dele
   auto queue = pixcake::ExportQueue::open("/cache/exports");
   reach_render(queue, job_of("exp-1", "orig-1", "/out/a.jpg"));
   const auto code = queue.commit_product("exp-1", kBytes, files);
-  EXPECT(code == pixcake::ResultCode::PermissionDenied);
-  EXPECT(queue.status("exp-1") == "提交到目标路径");
-  EXPECT(!has_kind(queue, "fail"));
+  EXPECT(code == pixcake::ResultCode::IoFailed);
+  EXPECT(queue.status("exp-1") == "失败");
+  EXPECT(has_kind(queue, "fail"));
   const auto destination = files.files.find("/out/a.jpg");
   EXPECT(destination != files.files.end());
   EXPECT(destination->second == kMismatched);
@@ -368,7 +444,7 @@ void test_rejected_fail_is_recorded_when_recover_finds_both_files_gone() {
   EXPECT(code == pixcake::ResultCode::DiskFull);
   EXPECT(queue.status("exp-1") == "提交到目标路径");
   EXPECT(!has_kind(queue, "fail"));
-  EXPECT(files.files.count("/out/a.jpg") == 0);
+  EXPECT(files.files["/out/a.jpg"] == kMismatched);
   EXPECT(files.files.count("/cache/exports/exp-1") == 0);
 
   queue.set_sink(nullptr);
@@ -386,10 +462,10 @@ void test_commit_returns_sync_error_after_unlinking_mismatched_destination() {
   auto queue = pixcake::ExportQueue::open("/cache/exports");
   reach_render(queue, job_of("exp-1", "orig-1", "/out/a.jpg"));
   const auto code = queue.commit_product("exp-1", kBytes, files);
-  EXPECT(code == pixcake::ResultCode::DiskFull);
-  EXPECT(queue.status("exp-1") == "提交到目标路径");
-  EXPECT(!has_kind(queue, "fail"));
-  EXPECT(files.files.count("/out/a.jpg") == 0);
+  EXPECT(code == pixcake::ResultCode::IoFailed);
+  EXPECT(queue.status("exp-1") == "失败");
+  EXPECT(has_kind(queue, "fail"));
+  EXPECT(files.files["/out/a.jpg"] == kMismatched);
 }
 
 void test_recover_returns_sync_error_after_unlinking_mismatched_destination() {
@@ -430,13 +506,11 @@ void test_recover_returns_remove_error_when_renamed_destination_cannot_be_delete
   files.files["/cache/exports/exp-1"] = kMismatched;
   const auto before = queue.events().size();
   const auto code = queue.recover(files);
-  EXPECT(code == pixcake::ResultCode::PermissionDenied);
+  EXPECT(code == pixcake::ResultCode::StateConflict);
   EXPECT(queue.status("exp-1") == "提交到目标路径");
   EXPECT(queue.events().size() == before);
   EXPECT(!has_kind(queue, "fail"));
-  const auto destination = files.files.find("/out/a.jpg");
-  EXPECT(destination != files.files.end());
-  EXPECT(destination->second == kMismatched);
+  EXPECT(files.files.count("/out/a.jpg") == 0);
 }
 
 void test_reopen_repairs_cache_and_finishes_rename() {
@@ -517,6 +591,103 @@ void test_reopen_repairs_cache_and_finishes_rename() {
   sqlite3_close(raw);
 }
 
+void test_b98_recovery_rejects_unowned_identical_temp_file() {
+  pixcake::test::TempDir dir;
+  pixcake::PosixFileSystem files;
+  const std::string cache = dir.path() + "/cache";
+  const std::string destination = dir.path() + "/owned.jpg";
+  EXPECT(files.create_directory(cache).ok);
+  auto queue = pixcake::ExportQueue::open(cache);
+  auto job = job_of("owned-temp", "orig", destination);
+  reach_render(queue, job);
+  // Reach the durable temp-end state through the normal writer first, then
+  // replace the cache entry with identical bytes.  The identity must still
+  // prevent recovery from claiming it.
+  EXPECT(queue.commit_product("owned-temp", kBytes, files) == pixcake::ResultCode::Ok);
+  auto events = queue.events();
+  for (auto& event : events) {
+    if (event.kind == "commit-end") event.kind = "commit-begin";
+  }
+  auto recovered = pixcake::ExportQueue::open(cache, std::move(events));
+  EXPECT(files.remove_file(destination).ok);
+  EXPECT(files.write_new(cache + "/owned-temp", kBytes).ok);
+  EXPECT(recovered.recover(files) == pixcake::ResultCode::StateConflict);
+  EXPECT(!files.exists(destination));
+}
+
+void test_recovery_rejects_persisted_path_escape_without_touching_user_file() {
+  pixcake::ExportEvent enqueue;
+  enqueue.kind = "enqueue";
+  enqueue.export_id = "../owned_by_user";
+  enqueue.original_id = "orig-escape";
+  enqueue.document_revision = 1;
+  enqueue.document_snapshot = {1};
+  enqueue.destination_path = "/out/escape.jpg";
+  enqueue.destination_root = "/out";
+  enqueue.settings_snapshot = "quality=8";
+  pixcake::ExportEvent prepare = enqueue;
+  prepare.kind = "prepare";
+  pixcake::ExportEvent render = enqueue;
+  render.kind = "render";
+  pixcake::ExportEvent temp = enqueue;
+  temp.kind = "temp-begin";
+
+  pixcake::test::FakeFileSystem files;
+  files.files["/cache/owned_by_user"] = {8, 8};
+  auto queue = pixcake::ExportQueue::open("/cache/exports", {enqueue, prepare, render, temp});
+  EXPECT(queue.recover(files) == pixcake::ResultCode::StateConflict);
+  EXPECT(files.files["/cache/owned_by_user"] == std::vector<std::uint8_t>({8, 8}));
+  EXPECT(queue.status("../owned_by_user") == "写临时文件");
+}
+
+void test_publish_does_not_overwrite_a_file_that_appears_after_preflight() {
+  RaceDestinationFileSystem files;
+  files.destination = "/out/race.jpg";
+  files.raced_bytes = {9, 9, 9};
+  files.race_on_publish = true;
+  auto queue = pixcake::ExportQueue::open("/cache/exports");
+  reach_render(queue, job_of("exp-race", "orig-race", files.destination));
+  EXPECT(queue.commit_product("exp-race", kBytes, files) == pixcake::ResultCode::StateConflict);
+  EXPECT(files.files[files.destination] == files.raced_bytes);
+  EXPECT(queue.status("exp-race") == "提交到目标路径");
+  EXPECT(queue.products().empty());
+}
+
+void test_enqueue_rejects_destination_outside_selected_root() {
+  auto queue = pixcake::ExportQueue::open("/cache/exports");
+  auto job = job_of("exp-root", "orig-root", "/selected/escape.jpg");
+  job.destination_root = "/selected/root";
+  EXPECT(queue.enqueue(job) == pixcake::ResultCode::StateConflict);
+  EXPECT(queue.events().empty());
+}
+
+void test_failure_reason_survives_reopen_and_other_jobs_continue() {
+  pixcake::test::TempDir dir;
+  const std::string path = dir.path() + "/export.db";
+  pixcake::test::FakeFileSystem files;
+  std::unique_ptr<pixcake::SqliteExportLog> log;
+  EXPECT(pixcake::SqliteExportLog::open(path, log) == pixcake::ResultCode::Ok);
+  std::unique_ptr<pixcake::ExportBook> book;
+  EXPECT(pixcake::ExportBook::open("/cache/exports", *log, files, book) == pixcake::ResultCode::Ok);
+  auto bad = job_of("exp-bad", "orig-bad", "/out/bad.jpg");
+  auto good = job_of("exp-good", "orig-good", "/out/good.jpg");
+  reach_render(book->queue(), bad);
+  reach_render(book->queue(), good);
+  files.write_error = pixcake::ResultCode::PermissionDenied;
+  EXPECT(book->queue().commit_product("exp-bad", kBytes, files) == pixcake::ResultCode::PermissionDenied);
+  EXPECT(book->queue().failure_reason("exp-bad") == pixcake::ResultCode::PermissionDenied);
+  files.write_error = pixcake::ResultCode::Ok;
+  EXPECT(book->queue().commit_product("exp-good", kBytes, files) == pixcake::ResultCode::Ok);
+  book.reset();
+  log.reset();
+  std::unique_ptr<pixcake::SqliteExportLog> reopened_log;
+  EXPECT(pixcake::SqliteExportLog::open(path, reopened_log) == pixcake::ResultCode::Ok);
+  std::unique_ptr<pixcake::ExportBook> reopened;
+  EXPECT(pixcake::ExportBook::open("/cache/exports", *reopened_log, files, reopened) == pixcake::ResultCode::Ok);
+  EXPECT(reopened->queue().failure_reason("exp-bad") == pixcake::ResultCode::PermissionDenied);
+  EXPECT(reopened->queue().status("exp-good") == "成功");
+}
+
 void test_duplicate_task_cache_key_is_state_conflict_and_one_row_round_trips() {
   pixcake::test::TempDir dir;
   const std::string path = dir.path() + "/export.db";
@@ -551,6 +722,9 @@ void test_duplicate_task_cache_key_is_state_conflict_and_one_row_round_trips() {
 
 int main() {
   test_snapshot_and_fast_export_stay();
+  test_quality_is_limited_by_export_contract();
+  test_b63_stale_export_handle_cannot_publish_after_cancel();
+  test_p11_failed_temp_cleanup_remains_retryable_after_reopen();
   test_enqueue_requires_document_snapshot();
   test_commit_once_and_reject_a_different_destination();
   test_disk_full_then_retry_uses_the_snapshot();
@@ -563,7 +737,12 @@ int main() {
   test_rejected_fail_is_recorded_when_recover_finds_both_files_gone();
   test_recover_returns_remove_error_when_renamed_destination_cannot_be_deleted();
   test_reopen_repairs_cache_and_finishes_rename();
+  test_b98_recovery_rejects_unowned_identical_temp_file();
   test_duplicate_task_cache_key_is_state_conflict_and_one_row_round_trips();
+  test_recovery_rejects_persisted_path_escape_without_touching_user_file();
+  test_publish_does_not_overwrite_a_file_that_appears_after_preflight();
+  test_enqueue_rejects_destination_outside_selected_root();
+  test_failure_reason_survives_reopen_and_other_jobs_continue();
   if (g_failures != 0) {
     std::fprintf(stderr, "%d failure(s)\n", g_failures);
     return 1;

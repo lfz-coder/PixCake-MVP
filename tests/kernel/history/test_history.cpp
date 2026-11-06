@@ -68,7 +68,8 @@ void test_c54_committed_step_restores_without_writing() {
   const auto writes = files.writes.size();
 
   EXPECT(history.select("img-1", document, 0, false) == pixcake::ResultCode::Ok);
-  EXPECT(document.revision() == 1);
+  // Selecting old content does not rewind the committed generation.
+  EXPECT(document.revision() == 2);
   EXPECT(document.committed_parameter("color.global", "exposure") == "-1.50");
   EXPECT(!document.preview("color.global", "exposure").has_value());
   EXPECT(history.current_index("img-1") == 0);
@@ -169,6 +170,26 @@ void test_b73_older_revision_does_not_append() {
   EXPECT(document.revision() == 2);
 }
 
+void test_history_branch_keeps_monotonic_revision() {
+  pixcake::test::FakeFileSystem files;
+  auto document = make_document("branch");
+  pixcake::HistoryLog history;
+  commit_exposure(document, files, "-1.50");
+  EXPECT(history.record_committed("branch", document, "color.global", "exposure", "-1.50", false) ==
+         pixcake::ResultCode::Ok);
+  commit_exposure(document, files, "0.25");
+  EXPECT(history.record_committed("branch", document, "color.global", "exposure", "0.25", false) ==
+         pixcake::ResultCode::Ok);
+  EXPECT(history.select("branch", document, 0, false) == pixcake::ResultCode::Ok);
+  EXPECT(document.revision() == 2);
+  commit_exposure(document, files, "1.00");
+  EXPECT(document.revision() == 3);
+  EXPECT(history.record_committed("branch", document, "color.global", "exposure", "1.00", false) ==
+         pixcake::ResultCode::Ok);
+  EXPECT(history.steps("branch")->size() == 3);
+  EXPECT(history.steps("branch")->at(2).revision == 3);
+}
+
 void test_b101_reopen_folds_to_last_save() {
   pixcake::test::FakeFileSystem files;
   auto document = make_document("img-1");
@@ -249,6 +270,7 @@ int main() {
   test_b29_bad_index_keeps_revision_and_neighbors();
   test_b70_batch_design_rejects_history_commands();
   test_b73_older_revision_does_not_append();
+  test_history_branch_keeps_monotonic_revision();
   test_b101_reopen_folds_to_last_save();
   test_history_sources_do_not_touch_sqlite_or_qt();
   if (g_failures != 0) {

@@ -3,6 +3,7 @@
 #include "pixcake/editdoc/edit_document.hpp"
 #include "pixcake/persist/file_system.hpp"
 #include "pixcake/support/result_code.hpp"
+#include "pixcake/support/fast_export_latch.hpp"
 
 #include <string>
 #include <vector>
@@ -40,7 +41,7 @@ class PresetLibrary {
   ResultCode import_preset(Preset preset, bool source_version_newer, bool source_deleted);
   PresetCheck check_apply(const EditDocument& document, const Preset& preset) const;
   ResultCode apply(EditDocument& document, const Preset& preset, std::uint64_t expected_revision,
-                   FileSystem& files, const std::string& path);
+                   FileSystem& files, const std::string& path, const FastExportLatch& latch);
   const std::vector<Preset>& presets() const;
 
  private:

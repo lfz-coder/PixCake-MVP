@@ -7,6 +7,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <functional>
 
 namespace pixcake::test {
 
@@ -92,6 +93,13 @@ class FakeFileSystem : public FileSystem {
     return io_ok();
   }
 
+  IoResult publish_new(const std::string& from, const std::string& to) override {
+    if (files.find(to) != files.end()) {
+      return io_error(ResultCode::StateConflict);
+    }
+    return rename_file(from, to);
+  }
+
   IoResult sync_file(const std::string& path) override {
     if (sync_file_error != ResultCode::Ok) {
       return io_error(sync_file_error);
@@ -112,6 +120,27 @@ class FakeFileSystem : public FileSystem {
   }
 
   IoResult create_directory(const std::string&) override { return io_ok(); }
+
+  IoResult identify(const std::string& path, FileIdentity& out) const override {
+    if (files.find(path) == files.end()) return io_not_found();
+    out.valid = true;
+    out.device = 1;
+    const auto& bytes = files.at(path);
+    std::string key(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    out.inode = static_cast<std::uint64_t>(std::hash<std::string>{}(key));
+    out.size = files.at(path).size();
+    return io_ok();
+  }
+
+  IoResult remove_if_identity(const std::string& path, const FileIdentity& expected) override {
+    FileIdentity actual;
+    const IoResult identified = identify(path, actual);
+    if (!identified.ok) return identified;
+    if (!expected.valid || actual.device != expected.device || actual.inode != expected.inode) {
+      return io_error(ResultCode::StateConflict);
+    }
+    return remove_file(path);
+  }
 
  private:
   int mutations_ = 0;

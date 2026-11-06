@@ -2,6 +2,7 @@
 
 #include "pixcake/editdoc/edit_document.hpp"
 #include "pixcake/persist/file_system.hpp"
+#include "pixcake/support/fast_export_latch.hpp"
 #include "pixcake/support/result_code.hpp"
 
 #include <cstdint>
@@ -20,13 +21,16 @@ struct SyncItem {
 };
 
 struct SyncTarget {
+  std::string id;
   EditDocument* document = nullptr;
   std::uint64_t expected_revision = 0;
   FileSystem* files = nullptr;
   std::string path;
+  const FastExportLatch* latch = nullptr;
 };
 
 struct SyncItemResult {
+  std::string id;
   std::string path;
   ResultCode code = ResultCode::Ok;
 };
@@ -45,6 +49,7 @@ std::vector<SyncItemResult> retry_failed(const EditDocument& source, const std::
                                         const std::vector<SyncItemResult>& previous);
 EffectClipboard copy_committed(const EditDocument& source);
 ResultCode paste_committed(EditDocument& target, const EffectClipboard& clipboard,
-                           std::uint64_t expected_revision, FileSystem& files, const std::string& path);
+                           std::uint64_t expected_revision, FileSystem& files, const std::string& path,
+                           const FastExportLatch* latch = nullptr);
 
 }  // namespace pixcake

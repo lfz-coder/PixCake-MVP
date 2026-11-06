@@ -17,6 +17,34 @@ void expect(bool condition, const char* expression, int line) {
 
 #define EXPECT(condition) expect(static_cast<bool>(condition), #condition, __LINE__)
 
+void test_parameter_modes() {
+  const auto& modes = pixcake::phase_one_parameter_modes();
+  EXPECT(!modes.empty());
+  const auto* exposure = pixcake::find_parameter_mode("color.global", "exposure");
+  EXPECT(exposure != nullptr);
+  if (exposure != nullptr) {
+    EXPECT(exposure->minimum == -5.0);
+    EXPECT(exposure->maximum == 5.0);
+    EXPECT(exposure->step == 0.05);
+    EXPECT(exposure->default_value == 0.0);
+  }
+  const auto* style = pixcake::find_parameter_mode("color.style", "amount");
+  EXPECT(style != nullptr);
+  if (style != nullptr) {
+    EXPECT(style->minimum == 0.0);
+    EXPECT(style->maximum == 200.0);
+    EXPECT(style->default_value == 100.0);
+  }
+  EXPECT(pixcake::validate_parameter_display_value("color.style", "amount", "200"));
+  EXPECT(!pixcake::validate_parameter_display_value("color.style", "amount", "200.5"));
+  EXPECT(pixcake::validate_parameter_display_value("mask", "feather", "100"));
+  EXPECT(!pixcake::validate_parameter_display_value("mask", "feather", "100.5"));
+  EXPECT(pixcake::validate_parameter_display_value("crop", "angle", "-45"));
+  EXPECT(!pixcake::validate_parameter_display_value("crop", "angle", "45.5"));
+  EXPECT(pixcake::validate_parameter_display_value("portrait.eye_glint", "rotation", "-100"));
+  EXPECT(!pixcake::validate_parameter_display_value("portrait.eye_glint", "rotation", "101"));
+}
+
 void test_pipeline() {
   const std::vector<pixcake::PipelineStep> pipeline = pixcake::phase_one_pipeline();
   const std::vector<std::string> expected = {
@@ -39,11 +67,24 @@ void test_pipeline() {
   std::string error;
   EXPECT(pixcake::validate_phase_one_pipeline(pipeline, &error));
   EXPECT(error.empty());
+  const auto order = pixcake::phase_one_pipeline_order(&error);
+  EXPECT(error.empty());
+  EXPECT(order.size() == pipeline.size());
+  if (order.size() == pipeline.size()) {
+    EXPECT(order[2] == "color.match");
+    EXPECT(order[3] == "color.style");
+    EXPECT(order[4] == "color.global");
+  }
 
   std::vector<pixcake::PipelineStep> duplicate = pipeline;
   duplicate.push_back(pixcake::PipelineStep{"duplicate", "color.match", true});
   EXPECT(!pixcake::validate_phase_one_pipeline(duplicate, &error));
   EXPECT(error == "能力在管线中重复: color.match");
+
+  std::vector<pixcake::PipelineStep> cycle = pipeline;
+  cycle[0].dependencies = {"crop"};
+  EXPECT(!pixcake::validate_phase_one_pipeline(cycle, &error));
+  EXPECT(error == "管线存在依赖环路");
 }
 
 }  // namespace
@@ -89,6 +130,20 @@ int main() {
   EXPECT(detail == nullptr);
   EXPECT(registry.find("color.match.local") == nullptr);
   EXPECT(registry.find("portrait.eyes") == nullptr);
+  EXPECT(pixcake::validate_parameter_display_value("color.global", "exposure", "1.50"));
+  EXPECT(!pixcake::validate_parameter_display_value("color.global", "exposure", "1.001"));
+  EXPECT(!pixcake::validate_parameter_display_value("color.global", "exposure", "1.03"));
+  EXPECT(pixcake::validate_parameter_display_value("color.global", "contrast", "1"));
+  EXPECT(!pixcake::validate_parameter_display_value("color.global", "contrast", "1.5"));
+  EXPECT(pixcake::validate_parameter_display_value("color.global", "temperature", "-100"));
+  EXPECT(!pixcake::validate_parameter_display_value("color.global", "temperature", "100.5"));
+  EXPECT(!pixcake::validate_parameter_display_value("color.global", "future", "1"));
+  const auto style_order = pixcake::phase_one_capability_order("color.style");
+  const auto global_order = pixcake::phase_one_capability_order("color.global");
+  EXPECT(style_order.has_value());
+  EXPECT(global_order.has_value());
+  if (style_order && global_order) EXPECT(*style_order < *global_order);
+  test_parameter_modes();
   test_pipeline();
 
   if (g_failures != 0) {

@@ -13,6 +13,7 @@ class SqliteLedgerLog : public LedgerEventLog {
   ~SqliteLedgerLog() override;
 
   ResultCode load(std::vector<LedgerEvent>& out) override;
+  ResultCode event_count(std::size_t& out) override;
   ResultCode append(const std::vector<LedgerEvent>& events) override;
   ResultCode read_cache(std::optional<LedgerCache>& out) override;
   ResultCode write_cache(const LedgerCache& cache) override;

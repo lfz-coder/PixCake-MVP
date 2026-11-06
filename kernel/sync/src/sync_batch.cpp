@@ -2,6 +2,7 @@
 
 #include "pixcake/capability/capability_sync.hpp"
 #include "pixcake/mask/mask_sync.hpp"
+#include "pixcake/persist/write_lock.hpp"
 
 #include <cstddef>
 #include <map>
@@ -67,12 +68,22 @@ ResultCode apply_one(const EditDocument& source, const std::string& source_path,
     return ResultCode::StateConflict;
   }
   std::vector<FragmentView> replacements;
+  std::vector<std::string> removable_ids;
   for (const auto& id : capability_ids) {
-    if (const auto fragment = source.fragment(id)) {
-      replacements.push_back(*fragment);
+    const auto existing = target.document->fragment(id);
+    const auto source_fragment = source.fragment(id);
+    if (existing && existing->version > 1) {
+      // Preserve a fragment from a newer producer even when the selected
+      // source has no replacement for it.
+      continue;
     }
+    removable_ids.push_back(id);
+    if (source_fragment) replacements.push_back(*source_fragment);
   }
-  return target.document->commit_fragment_replacement(target.expected_revision, capability_ids, replacements,
+  if (removable_ids.empty() && replacements.empty()) return ResultCode::Ok;
+  WriteScope scope(*target.files, target.path, target.latch);
+  if (!scope) return scope.code();
+  return target.document->commit_fragment_replacement(target.expected_revision, removable_ids, replacements,
                                                       *target.files, target.path);
 }
 
@@ -81,6 +92,7 @@ std::vector<SyncItemResult> results_for(const std::vector<SyncTarget>& targets, 
   results.reserve(targets.size());
   for (const auto& target : targets) {
     SyncItemResult result;
+    result.id = target.id;
     result.path = target.path;
     result.code = code;
     results.push_back(std::move(result));
@@ -112,6 +124,7 @@ std::vector<SyncItemResult> apply_checked(const EditDocument& source, const std:
   results.reserve(targets.size());
   for (const auto& target : targets) {
     SyncItemResult result;
+    result.id = target.id;
     result.path = target.path;
     result.code = apply_one(source, source_path, capability_ids, target);
     results.push_back(std::move(result));
@@ -128,9 +141,10 @@ std::vector<SyncItemResult> retry_failed(const EditDocument& source, const std::
   }
   std::vector<std::string> capability_ids;
   const bool selection_ok = checked_capabilities(checked_ids, capability_ids);
-  std::map<std::string, ResultCode> previous_by_path;
+  std::map<std::string, ResultCode> previous_by_id;
   for (const auto& result : previous) {
-    if (!previous_by_path.emplace(result.path, result.code).second) {
+    const std::string id = result.id.empty() ? result.path : result.id;
+    if (!previous_by_id.emplace(id, result.code).second) {
       return results_for(targets, ResultCode::StateConflict);
     }
   }
@@ -139,8 +153,9 @@ std::vector<SyncItemResult> retry_failed(const EditDocument& source, const std::
   for (const auto& target : targets) {
     SyncItemResult result;
     result.path = target.path;
-    const auto prior = previous_by_path.find(target.path);
-    if (prior == previous_by_path.end()) {
+    const std::string id = target.id.empty() ? target.path : target.id;
+    const auto prior = previous_by_id.find(id);
+    if (prior == previous_by_id.end()) {
       result.code = ResultCode::StateConflict;
     } else if (prior->second == ResultCode::Ok) {
       result.code = ResultCode::Ok;
@@ -161,7 +176,8 @@ EffectClipboard copy_committed(const EditDocument& source) {
 }
 
 ResultCode paste_committed(EditDocument& target, const EffectClipboard& clipboard,
-                           std::uint64_t expected_revision, FileSystem& files, const std::string& path) {
+                           std::uint64_t expected_revision, FileSystem& files, const std::string& path,
+                           const FastExportLatch* latch) {
   if (clipboard.fragments.empty()) {
     return ResultCode::Ok;
   }
@@ -173,6 +189,8 @@ ResultCode paste_committed(EditDocument& target, const EffectClipboard& clipboar
     }
     ids.push_back(fragment.capability_id);
   }
+  WriteScope scope(files, path, latch);
+  if (!scope) return scope.code();
   return target.commit_fragment_replacement(expected_revision, ids, clipboard.fragments, files, path);
 }
 

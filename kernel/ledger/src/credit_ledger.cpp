@@ -249,6 +249,20 @@ ResultCode CreditLedger::accelerate(const std::string& task_id) {
   if (found->second.accelerated) {
     return ResultCode::Ok;
   }
+  // Qualification is part of the decision to charge for acceleration.  In
+  // particular, an unsubscribed Master Picks task that has consumed its
+  // three free starts must be rejected before an acceleration event is
+  // appended; charging first would leave a point debit for an operation that
+  // cannot start.
+  const LedgerEvent& quoted = found->second.quote;
+  if (quoted.origin == "大师精选" && !quoted.high_compute && !quoted.batch_generation &&
+      !quoted.subscribed) {
+    const auto used = shot.master_free.find(quoted.tool_id);
+    const int count = used == shot.master_free.end() ? 0 : used->second;
+    if (count >= 3) {
+      return ResultCode::StateConflict;
+    }
+  }
   const std::int64_t cost = found->second.quote.acceleration_points;
   if (shot.points < cost) {
     return ResultCode::InsufficientBalance;

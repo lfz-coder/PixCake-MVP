@@ -31,7 +31,7 @@ endfunction()
 scan("${SOURCE_DIR}/kernel" "rule 1" "#include <Q" "#include <Qt" "QOpenGL" "#include \"Q")
 
 # 2. 能力目录不包含另一个能力目录。
-file(GLOB capability_dirs LIST_DIRECTORIES true "${SOURCE_DIR}/kernel/capabilities/*")
+file(GLOB capability_dirs LIST_DIRECTORIES true "${SOURCE_DIR}/kernel/capability/*")
 foreach(dir ${capability_dirs})
   if(NOT IS_DIRECTORY "${dir}")
     continue()
@@ -68,6 +68,12 @@ scan("${SOURCE_DIR}/gpu/backend/native" "rule 4" "#include <Q" "#include <Qt" "Q
 
 # 5. 生成进程不包含 Qt 或 OpenGL。
 scan("${SOURCE_DIR}/apps/generated" "rule 5" "#include <Q" "#include <Qt" "QOpenGL" "OpenGL" "GL/gl.h")
+
+# 5b. Preview and export process services stay independent from Qt Widgets and
+# raw OpenGL.  A backend can be added behind gpu/render later without leaking
+# platform headers into these orchestration boundaries.
+scan("${SOURCE_DIR}/apps/renderd" "rule 5b" "#include <Q" "#include <Qt" "QOpenGL" "OpenGL" "GL/gl.h")
+scan("${SOURCE_DIR}/apps/exportd" "rule 5b" "#include <Q" "#include <Qt" "QOpenGL" "OpenGL" "GL/gl.h")
 
 # 6. 账本不包含图像解码或导出队列私有头。
 scan("${SOURCE_DIR}/kernel/ledger" "rule 6" "jpeglib.h" "png.h" "opencv" "exportq/src")

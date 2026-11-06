@@ -1,6 +1,7 @@
 #include "pixcake/layerdoc/layer_document.hpp"
 
 #include "pixcake/persist/atomic_file.hpp"
+#include "pixcake/persist/write_lock.hpp"
 #include "pixcake/support/checksum.hpp"
 
 #include <algorithm>
@@ -148,7 +149,10 @@ bool decode_layer(const std::vector<std::uint8_t>& payload, LayerView& layer) {
   }
   layer.opacity = static_cast<int>(opacity);
   layer.mask_density = static_cast<int>(density);
-  layer.mask_feather = static_cast<int>(feather);
+  // PXLD v1 wrote feather values above the current editor range.  The field
+  // is understood, so migrate it to the nearest supported value while
+  // keeping the rest of the document readable.
+  layer.mask_feather = static_cast<int>(std::min<std::uint32_t>(feather, 100u));
   layer.group = (flags & 1u) != 0;
   layer.locked = (flags & 2u) != 0;
   layer.hidden = (flags & 4u) != 0;
@@ -483,7 +487,7 @@ ResultCode LayerDocument::set_mask_density(const std::string& id, int density) {
 }
 
 ResultCode LayerDocument::set_mask_feather(const std::string& id, int feather) {
-  if (!editable() || feather < 0) {
+  if (!editable() || feather < 0 || feather > 100) {
     return ResultCode::StateConflict;
   }
   LayerView* layer = find(id);
@@ -786,7 +790,11 @@ LoadResult LayerDocument::load(LayerDocument& destination, FileSystem& files, co
   return result;
 }
 
-ResultCode LayerDocument::save(FileSystem& files, const std::string& path) const {
+ResultCode LayerDocument::save(FileSystem& files, const std::string& path, const FastExportLatch* latch) const {
+  WriteScope scope(files, path, latch);
+  if (!scope) {
+    return scope.code();
+  }
   return atomic_replace(files, path, encode());
 }
 

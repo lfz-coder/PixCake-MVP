@@ -3,6 +3,8 @@
 #include "pixcake/support/checksum.hpp"
 
 #include <map>
+#include <string>
+#include <cstdlib>
 #include <utility>
 
 namespace pixcake {
@@ -15,6 +17,7 @@ struct JobView {
   bool temp_done = false;
   bool commit_begun = false;
   std::uint64_t checksum = 0;
+  ResultCode failure_code = ResultCode::Ok;
 };
 
 struct Fold {
@@ -31,24 +34,34 @@ ExportJob job_from(const ExportEvent& event) {
   job.document_revision = event.document_revision;
   job.document_snapshot = event.document_snapshot;
   job.destination_path = event.destination_path;
+  job.destination_root = event.destination_root;
+  if (job.destination_root.empty()) {
+    const auto slash = job.destination_path.rfind('/');
+    job.destination_root = slash == std::string::npos || slash == 0 ? "/" : job.destination_path.substr(0, slash);
+  }
   job.settings_snapshot = event.settings_snapshot;
   job.watermark_free_second = event.watermark_free_second;
   job.print_requested = event.print_requested;
+  job.destination_identity = event.destination_identity;
   return job;
 }
 
 ExportEvent event_from(const ExportJob& job, std::string kind) {
   ExportEvent event;
-  event.kind = std::move(kind);
+  event.kind = kind;
   event.export_id = job.export_id;
   event.original_id = job.original_id;
   event.batch_id = job.batch_id.empty() ? job.export_id : job.batch_id;
   event.document_revision = job.document_revision;
   event.document_snapshot = job.document_snapshot;
   event.destination_path = job.destination_path;
+  event.destination_root = job.destination_root;
   event.settings_snapshot = job.settings_snapshot;
   event.watermark_free_second = job.watermark_free_second;
   event.print_requested = job.print_requested;
+  event.destination_identity = job.destination_identity;
+  event.failure_code = ResultCode::Ok;
+  event.phase = std::move(kind);
   return event;
 }
 
@@ -78,12 +91,15 @@ Fold fold(const std::vector<ExportEvent>& events) {
       job.status = "写临时文件";
       job.temp_done = true;
       job.checksum = event.checksum;
+      job.job.destination_identity = event.destination_identity;
     } else if (event.kind == "commit-begin") {
       job.status = "提交到目标路径";
       job.commit_begun = true;
       job.checksum = event.checksum;
+      job.job.destination_identity = event.destination_identity;
     } else if (event.kind == "commit-end") {
       job.status = "成功";
+      job.job.destination_identity = event.destination_identity;
       ExportProductFact fact;
       fact.export_id = job.job.export_id;
       fact.original_id = job.job.original_id;
@@ -93,6 +109,10 @@ Fold fold(const std::vector<ExportEvent>& events) {
       shot.products.push_back(std::move(fact));
     } else if (event.kind == "fail") {
       job.status = "失败";
+      job.failure_code = event.failure_code;
+    } else if (event.kind == "cleanup-pending") {
+      job.status = "待清理临时文件";
+      job.failure_code = event.failure_code;
     } else if (event.kind == "cancel") {
       job.status = "取消";
     } else if (event.kind == "requeue") {
@@ -131,6 +151,17 @@ bool absolute_destination(const std::string& path) {
   return true;
 }
 
+bool path_within_root(const std::string& path, const std::string& root) {
+  if (!absolute_destination(path) || !absolute_destination(root)) return false;
+  if (path == root) return false;
+  return path.rfind(root + "/", 0) == 0;
+}
+
+std::string default_root(const std::string& path) {
+  const auto slash = path.rfind('/');
+  return slash == std::string::npos || slash == 0 ? "/" : path.substr(0, slash);
+}
+
 std::uint64_t checksum_of(const std::vector<std::uint8_t>& bytes) {
   return checksum_fnv1a64(bytes.data(), bytes.size());
 }
@@ -150,6 +181,11 @@ ResultCode read_checksum(FileSystem& files, const std::string& path, bool& prese
   return ResultCode::Ok;
 }
 
+bool same_identity(const FileIdentity& left, const FileIdentity& right) {
+  return left.valid && right.valid && left.device == right.device && left.inode == right.inode &&
+         left.size == right.size;
+}
+
 ResultCode remove_if_present(FileSystem& files, const std::string& path) {
   if (!files.exists(path)) {
     return ResultCode::Ok;
@@ -167,6 +203,19 @@ std::string parent_directory(const std::string& path) {
     return "/";
   }
   return path.substr(0, slash);
+}
+
+bool valid_quality_setting(const std::string& settings) {
+  const std::string key = "quality=";
+  const auto at = settings.find(key);
+  if (at == std::string::npos) return true;
+  const auto begin = at + key.size();
+  const auto end = settings.find_first_of(";&, ", begin);
+  const std::string value = settings.substr(begin, end == std::string::npos ? std::string::npos : end - begin);
+  if (value.empty()) return false;
+  char* parsed_end = nullptr;
+  const long parsed = std::strtol(value.c_str(), &parsed_end, 10);
+  return parsed_end == value.c_str() + value.size() && parsed >= 0 && parsed <= 14;
 }
 
 }  // namespace
@@ -194,6 +243,13 @@ std::string ExportQueue::status(const std::string& export_id) const {
     return "";
   }
   return found->second.status;
+}
+
+ResultCode ExportQueue::failure_reason(const std::string& export_id) const {
+  const auto shot = fold(events_);
+  const auto found = shot.jobs.find(export_id);
+  if (found == shot.jobs.end()) return ResultCode::StateConflict;
+  return found->second.failure_code;
 }
 
 bool ExportQueue::find_job(const std::string& export_id, ExportJob& out) const {
@@ -251,9 +307,13 @@ ResultCode ExportQueue::enqueue(const ExportJob& job) {
   if (normalized.batch_id.empty()) {
     normalized.batch_id = normalized.export_id;
   }
+  if (normalized.destination_root.empty()) {
+    normalized.destination_root = default_root(normalized.destination_path);
+  }
   if (!safe_export_id(normalized.export_id) || normalized.original_id.empty() || normalized.document_snapshot.empty() ||
       normalized.original_id.find('\0') != std::string::npos ||
-      !absolute_destination(normalized.destination_path)) {
+      !valid_quality_setting(normalized.settings_snapshot) ||
+      !path_within_root(normalized.destination_path, normalized.destination_root)) {
     return ResultCode::StateConflict;
   }
   const auto shot = fold(events_);
@@ -377,7 +437,16 @@ ResultCode ExportQueue::commit_product(const std::string& export_id, const std::
     return ResultCode::StateConflict;
   }
   const ExportJob& job = found->second.job;
+  const IoResult within_root = files.path_within_root(job.destination_path, job.destination_root);
+  if (!within_root.ok) {
+    return within_root.code;
+  }
   const std::uint64_t checksum = checksum_of(bytes);
+  auto record_cleanup_pending = [&](ResultCode cleanup_code) {
+    ExportEvent pending = event_from(job, "cleanup-pending");
+    pending.failure_code = cleanup_code;
+    return note(std::move(pending));
+  };
   bool destination_present = false;
   std::uint64_t destination_checksum = 0;
   const ResultCode looked = read_checksum(files, job.destination_path, destination_present, destination_checksum);
@@ -400,19 +469,30 @@ ResultCode ExportQueue::commit_product(const std::string& export_id, const std::
   const std::string temp = temp_path(export_id);
   const ResultCode cleared = remove_if_present(files, temp);
   if (cleared != ResultCode::Ok) {
-    return cleared;
+    const ResultCode noted = record_cleanup_pending(cleared);
+    return noted == ResultCode::Ok ? cleared : noted;
   }
   const IoResult written = files.write_new(temp, bytes);
   if (!written.ok) {
-    remove_if_present(files, temp);
+    const ResultCode cleanup = remove_if_present(files, temp);
+    if (cleanup != ResultCode::Ok) {
+      const ResultCode noted = record_cleanup_pending(cleanup);
+      return noted == ResultCode::Ok ? written.code : noted;
+    }
     ExportEvent failed = event_from(job, "fail");
+    failed.failure_code = written.code;
     const ResultCode noted = note(std::move(failed));
     return noted == ResultCode::Ok ? written.code : noted;
   }
   const IoResult synced = files.sync_file(temp);
   if (!synced.ok) {
-    remove_if_present(files, temp);
+    const ResultCode cleanup = remove_if_present(files, temp);
+    if (cleanup != ResultCode::Ok) {
+      const ResultCode noted = record_cleanup_pending(cleanup);
+      return noted == ResultCode::Ok ? synced.code : noted;
+    }
     ExportEvent failed = event_from(job, "fail");
+    failed.failure_code = synced.code;
     const ResultCode noted = note(std::move(failed));
     return noted == ResultCode::Ok ? synced.code : noted;
   }
@@ -420,24 +500,34 @@ ResultCode ExportQueue::commit_product(const std::string& export_id, const std::
   std::uint64_t temp_checksum = 0;
   const ResultCode reread = read_checksum(files, temp, temp_present, temp_checksum);
   if (reread != ResultCode::Ok || !temp_present || temp_checksum != checksum) {
-    remove_if_present(files, temp);
+    const ResultCode cleanup = remove_if_present(files, temp);
+    if (cleanup != ResultCode::Ok) {
+      const ResultCode noted = record_cleanup_pending(cleanup);
+      return noted == ResultCode::Ok ? ResultCode::IoFailed : noted;
+    }
     ExportEvent failed = event_from(job, "fail");
+    failed.failure_code = ResultCode::IoFailed;
     const ResultCode noted = note(std::move(failed));
     return noted == ResultCode::Ok ? ResultCode::IoFailed : noted;
   }
   ExportEvent temp_end = event_from(job, "temp-end");
   temp_end.checksum = checksum;
+  FileIdentity temp_identity;
+  const IoResult temp_identified = files.identify(temp, temp_identity);
+  if (temp_identified.ok) temp_end.destination_identity = temp_identity;
+  const FileIdentity owned_identity = temp_end.destination_identity;
   const ResultCode ended = note(std::move(temp_end));
   if (ended != ResultCode::Ok) {
     return ended;
   }
   ExportEvent commit_begin = event_from(job, "commit-begin");
   commit_begin.checksum = checksum;
+  commit_begin.destination_identity = owned_identity;
   const ResultCode commit_noted = note(std::move(commit_begin));
   if (commit_noted != ResultCode::Ok) {
     return commit_noted;
   }
-  const IoResult renamed = files.rename_file(temp, job.destination_path);
+  const IoResult renamed = files.publish_new(temp, job.destination_path);
   if (!renamed.ok) {
     return renamed.code;
   }
@@ -448,21 +538,30 @@ ResultCode ExportQueue::commit_product(const std::string& export_id, const std::
   bool committed_present = false;
   std::uint64_t committed_checksum = 0;
   const ResultCode verified = read_checksum(files, job.destination_path, committed_present, committed_checksum);
-  if (verified != ResultCode::Ok || !committed_present || committed_checksum != checksum) {
-    const ResultCode removed = remove_if_present(files, job.destination_path);
-    if (removed != ResultCode::Ok) {
-      return removed;
+  FileIdentity committed_identity;
+  const IoResult identity = files.identify(job.destination_path, committed_identity);
+  if (verified != ResultCode::Ok || !committed_present || committed_checksum != checksum ||
+      (owned_identity.valid &&
+       (!identity.ok || committed_identity.device != owned_identity.device ||
+        committed_identity.inode != owned_identity.inode))) {
+    if (owned_identity.valid && identity.ok && committed_identity.device == owned_identity.device &&
+        committed_identity.inode == owned_identity.inode) {
+      const IoResult removed = files.remove_if_identity(job.destination_path, owned_identity);
+      if (!removed.ok && !removed.not_found) return removed.code;
+      const IoResult parent_synced = files.sync_directory(parent_directory(job.destination_path));
+      if (!parent_synced.ok) return parent_synced.code;
     }
-    const IoResult parent_synced = files.sync_directory(parent_directory(job.destination_path));
-    if (!parent_synced.ok) {
-      return parent_synced.code;
-    }
+    // A destination replaced by a user, or a destination that could not be
+    // identified, remains untouched and the task stays retryable.
     ExportEvent failed = event_from(job, "fail");
+    failed.failure_code = verified == ResultCode::Ok ? ResultCode::IoFailed : verified;
+    const ResultCode failure = failed.failure_code;
     const ResultCode noted = note(std::move(failed));
-    return noted == ResultCode::Ok ? ResultCode::IoFailed : noted;
+    return noted == ResultCode::Ok ? failure : noted;
   }
   ExportEvent commit_end = event_from(job, "commit-end");
   commit_end.checksum = checksum;
+  commit_end.destination_identity = owned_identity;
   return note(std::move(commit_end));
 }
 
@@ -486,12 +585,17 @@ ResultCode ExportQueue::recover(FileSystem& files) {
 }
 
 ResultCode ExportQueue::recover_one(const std::string& export_id, FileSystem& files) {
+  if (!safe_export_id(export_id)) {
+    return ResultCode::StateConflict;
+  }
   const auto shot = fold(events_);
   const auto found = shot.jobs.find(export_id);
   if (found == shot.jobs.end()) {
     return ResultCode::Ok;
   }
   const JobView& job = found->second;
+  const IoResult within_root = files.path_within_root(job.job.destination_path, job.job.destination_root);
+  if (!within_root.ok) return within_root.code;
   if (job.status == "成功" || job.status == "失败" || job.status == "取消" || job.status == "排队") {
     return ResultCode::Ok;
   }
@@ -500,6 +604,15 @@ ResultCode ExportQueue::recover_one(const std::string& export_id, FileSystem& fi
     event.kind = "requeue";
     event.export_id = export_id;
     return note(std::move(event));
+  }
+  if (job.status == "待清理临时文件") {
+    const ResultCode removed = remove_if_present(files, temp_path(export_id));
+    if (removed != ResultCode::Ok) {
+      return removed;
+    }
+    ExportEvent failed = event_from(job.job, "fail");
+    failed.failure_code = job.failure_code;
+    return note(std::move(failed));
   }
   const std::string temp = temp_path(export_id);
   if (!job.commit_begun) {
@@ -520,14 +633,17 @@ ResultCode ExportQueue::recover_one(const std::string& export_id, FileSystem& fi
       return existing;
     }
     if (destination_present) {
-      remove_if_present(files, temp);
+      // A destination that appeared after the task started is not owned by
+      // this task.  Preserve it and record a retryable collision.
       ExportEvent failed;
       failed.kind = "fail";
       failed.export_id = export_id;
+      failed.failure_code = ResultCode::StateConflict;
       return note(std::move(failed));
     }
     ExportEvent begin = event_from(job.job, "commit-begin");
     begin.checksum = job.checksum;
+    begin.destination_identity = job.job.destination_identity;
     const ResultCode began = note(std::move(begin));
     if (began != ResultCode::Ok) {
       return began;
@@ -543,9 +659,18 @@ ResultCode ExportQueue::recover_one(const std::string& export_id, FileSystem& fi
   if (present) {
     // A path occupied before recovery is not provably owned by this task.
     // Preserve it and fail the task instead of deleting a user's file.
-    ExportEvent failed;
-    failed.kind = "fail";
-    failed.export_id = export_id;
+    if (job.job.destination_identity.valid) {
+      FileIdentity current;
+      const IoResult identity = files.identify(job.job.destination_path, current);
+      if (identity.ok && current.device == job.job.destination_identity.device &&
+          current.inode == job.job.destination_identity.inode) {
+        ExportEvent end = event_from(job.job, "commit-end");
+        end.checksum = job.checksum;
+        return note(std::move(end));
+      }
+    }
+    ExportEvent failed = event_from(job.job, "fail");
+    failed.failure_code = ResultCode::StateConflict;
     return note(std::move(failed));
   }
   if (!present) {
@@ -559,7 +684,23 @@ ResultCode ExportQueue::recover_one(const std::string& export_id, FileSystem& fi
       failed.export_id = export_id;
       return note(std::move(failed));
     }
-    const IoResult renamed = files.rename_file(temp, job.job.destination_path);
+    bool temp_present = false;
+    std::uint64_t temp_checksum = 0;
+    const ResultCode temp_read = read_checksum(files, temp, temp_present, temp_checksum);
+    if (temp_read != ResultCode::Ok) return temp_read;
+    if (!temp_present || temp_checksum != job.checksum) {
+      // The temp path is occupied by bytes that this task did not create.
+      // Keep it for inspection/retry; never unlink an unproven owner.
+      return ResultCode::StateConflict;
+    }
+    FileIdentity temp_identity;
+    const IoResult identified = files.identify(temp, temp_identity);
+    if (!identified.ok || !same_identity(temp_identity, job.job.destination_identity)) {
+      // A checksum alone does not prove ownership: another task or a user can
+      // create identical bytes at the cache path after a crash.
+      return ResultCode::StateConflict;
+    }
+    const IoResult renamed = files.publish_new(temp, job.job.destination_path);
     if (!renamed.ok) {
       return renamed.code;
     }
@@ -567,18 +708,16 @@ ResultCode ExportQueue::recover_one(const std::string& export_id, FileSystem& fi
     if (verified != ResultCode::Ok) {
       return verified;
     }
-    if (!present || destination_checksum != job.checksum) {
-      const ResultCode removed = remove_if_present(files, job.job.destination_path);
-      if (removed != ResultCode::Ok) {
-        return removed;
-      }
-      const IoResult parent_synced = files.sync_directory(parent_directory(job.job.destination_path));
-      if (!parent_synced.ok) {
-        return parent_synced.code;
-      }
+    FileIdentity destination_identity;
+    const IoResult identity = files.identify(job.job.destination_path, destination_identity);
+    if (!present || destination_checksum != job.checksum ||
+        (job.job.destination_identity.valid &&
+         (!identity.ok || destination_identity.device != job.job.destination_identity.device ||
+          destination_identity.inode != job.job.destination_identity.inode))) {
       ExportEvent failed;
       failed.kind = "fail";
       failed.export_id = export_id;
+      failed.failure_code = verified == ResultCode::Ok ? ResultCode::IoFailed : verified;
       return note(std::move(failed));
     }
   } else {
@@ -590,6 +729,7 @@ ResultCode ExportQueue::recover_one(const std::string& export_id, FileSystem& fi
   }
   ExportEvent end = event_from(job.job, "commit-end");
   end.checksum = job.checksum;
+  end.destination_identity = job.job.destination_identity;
   return note(std::move(end));
 }
 

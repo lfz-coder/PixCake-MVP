@@ -27,6 +27,32 @@ void expect(bool cond, const char* text, int line) {
 const std::vector<std::uint8_t> kOld{'O', 'L', 'D'};
 const std::vector<std::uint8_t> kNew{'N', 'E', 'W'};
 
+class TransientRollbackFileSystem final : public pixcake::test::FakeFileSystem {
+ public:
+  int rename_calls = 0;
+
+  pixcake::IoResult rename_file(const std::string& from, const std::string& to) override {
+    ++rename_calls;
+    if (rename_calls == 2 || rename_calls == 3) {
+      return pixcake::io_error(pixcake::ResultCode::IoFailed);
+    }
+    return pixcake::test::FakeFileSystem::rename_file(from, to);
+  }
+};
+
+class PermanentRollbackFileSystem final : public pixcake::test::FakeFileSystem {
+ public:
+  int rename_calls = 0;
+
+  pixcake::IoResult rename_file(const std::string& from, const std::string& to) override {
+    ++rename_calls;
+    if (rename_calls >= 2) {
+      return pixcake::io_error(pixcake::ResultCode::IoFailed);
+    }
+    return pixcake::test::FakeFileSystem::rename_file(from, to);
+  }
+};
+
 bool accepts_known(const std::vector<std::uint8_t>& bytes) {
   return bytes == kOld || bytes == kNew;
 }
@@ -103,6 +129,25 @@ void test_b111_crash_after_backup_rename_reopens_backup() {
   EXPECT(fs.files["dir/note"] == kOld);
 }
 
+void test_b111_transient_restore_failure_retries_and_preserves_formal() {
+  TransientRollbackFileSystem fs;
+  fs.files["dir/note"] = kOld;
+  EXPECT(pixcake::atomic_replace(fs, "dir/note", kNew) == pixcake::ResultCode::IoFailed);
+  EXPECT(fs.rename_calls >= 4);
+  EXPECT(fs.files["dir/note"] == kOld);
+  EXPECT(fs.files.count("dir/note.bak") == 0);
+  EXPECT(fs.files.count("dir/note.tmp") == 0);
+}
+
+void test_b111_permanent_restore_failure_recreates_formal_from_backup() {
+  PermanentRollbackFileSystem fs;
+  fs.files["dir/note"] = kOld;
+  EXPECT(pixcake::atomic_replace(fs, "dir/note", kNew) == pixcake::ResultCode::IoFailed);
+  EXPECT(fs.files["dir/note"] == kOld);
+  EXPECT(fs.files.count("dir/note.tmp") == 0);
+  EXPECT(fs.files.count("dir/note.bak") == 1);
+}
+
 void test_b100_bad_file_is_isolated_and_backup_restored() {
   pixcake::test::FakeFileSystem fs;
   fs.files["dir/note"] = {'B', 'A', 'D'};
@@ -164,6 +209,26 @@ void test_posix_truncated_formal_reopens_backup() {
   fs::remove_all(root);
 }
 
+void test_posix_write_lock_is_exclusive_across_file_system_instances() {
+  namespace fs = std::filesystem;
+  const auto root = fs::temp_directory_path() / ("pixcake-lock-" + std::to_string(::getpid()));
+  fs::remove_all(root);
+  fs::create_directories(root);
+  const auto formal = (root / "note").string();
+  pixcake::PosixFileSystem first;
+  pixcake::PosixFileSystem second;
+  auto held = first.try_write_lock(formal);
+  EXPECT(held.code == pixcake::ResultCode::Ok);
+  EXPECT(held.lock != nullptr);
+  auto denied = second.try_write_lock(formal);
+  EXPECT(denied.code == pixcake::ResultCode::StateConflict);
+  held.lock.reset();
+  auto acquired = second.try_write_lock(formal);
+  EXPECT(acquired.code == pixcake::ResultCode::Ok);
+  EXPECT(acquired.lock != nullptr);
+  fs::remove_all(root);
+}
+
 }  // namespace
 
 int main() {
@@ -173,9 +238,12 @@ int main() {
   test_b115_directory_sync_failure_rolls_back();
   test_b115_first_save_directory_sync_failure_leaves_no_formal_file();
   test_b111_crash_after_backup_rename_reopens_backup();
+  test_b111_transient_restore_failure_retries_and_preserves_formal();
+  test_b111_permanent_restore_failure_recreates_formal_from_backup();
   test_b100_bad_file_is_isolated_and_backup_restored();
   test_b08_no_backup_marks_recovered_empty_and_does_not_write_formal();
   test_absent_file_is_not_success_or_corruption();
   test_posix_truncated_formal_reopens_backup();
+  test_posix_write_lock_is_exclusive_across_file_system_instances();
   return g_failures == 0 ? 0 : 1;
 }

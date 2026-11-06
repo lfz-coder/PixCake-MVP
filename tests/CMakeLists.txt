@@ -25,6 +25,10 @@ add_executable(test_shell_display ui/test_shell_display.cpp)
 target_link_libraries(test_shell_display PRIVATE pixcake_ui_shell pixcake_warnings)
 add_test(NAME test_shell_display COMMAND test_shell_display)
 
+add_executable(test_color_adjustment_panel ui/test_color_adjustment_panel.cpp)
+target_link_libraries(test_color_adjustment_panel PRIVATE pixcake_ui_shell pixcake_warnings)
+add_test(NAME test_color_adjustment_panel COMMAND test_color_adjustment_panel)
+
 add_executable(test_guide_copy kernel/workspace/test_guide_copy.cpp)
 target_link_libraries(test_guide_copy PRIVATE pixcake_workspace pixcake_warnings)
 add_test(NAME test_guide_copy COMMAND test_guide_copy)
@@ -47,6 +51,61 @@ add_test(NAME test_sync COMMAND test_sync)
 add_executable(test_capability_registry kernel/capability/test_capability_registry.cpp)
 target_link_libraries(test_capability_registry PRIVATE pixcake_capability pixcake_warnings)
 add_test(NAME test_capability_registry COMMAND test_capability_registry)
+
+add_executable(test_render_description kernel/render/test_render_description.cpp)
+target_include_directories(test_render_description PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+target_link_libraries(test_render_description PRIVATE pixcake_render pixcake_warnings)
+add_test(NAME test_render_description COMMAND test_render_description)
+
+add_executable(test_preview_coordinator kernel/preview/test_preview_coordinator.cpp)
+target_link_libraries(test_preview_coordinator PRIVATE pixcake_preview pixcake_warnings)
+add_test(NAME test_preview_coordinator COMMAND test_preview_coordinator)
+
+add_executable(test_preview_protocol kernel/ipc/test_preview_protocol.cpp)
+target_link_libraries(test_preview_protocol PRIVATE pixcake_ipc pixcake_warnings)
+add_test(NAME test_preview_protocol COMMAND test_preview_protocol)
+
+add_executable(test_generation_task kernel/generate/test_generation_task.cpp)
+target_link_libraries(test_generation_task PRIVATE pixcake_generate pixcake_warnings)
+add_test(NAME test_generation_task COMMAND test_generation_task)
+
+add_executable(test_source_probe kernel/import/test_source_probe.cpp)
+target_include_directories(test_source_probe PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+target_link_libraries(test_source_probe PRIVATE pixcake_image_import pixcake_warnings)
+add_test(NAME test_source_probe COMMAND test_source_probe)
+
+add_executable(test_import_coordinator kernel/import/test_import_coordinator.cpp)
+target_include_directories(test_import_coordinator PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+target_link_libraries(test_import_coordinator PRIVATE pixcake_image_import pixcake_storage pixcake_warnings)
+add_test(NAME test_import_coordinator COMMAND test_import_coordinator)
+
+add_executable(test_manual_stroke_session kernel/manual/test_manual_stroke_session.cpp)
+target_link_libraries(test_manual_stroke_session PRIVATE pixcake_manual pixcake_warnings)
+add_test(NAME test_manual_stroke_session COMMAND test_manual_stroke_session)
+
+add_executable(test_subject_store kernel/subject/test_subject_store.cpp)
+target_link_libraries(test_subject_store PRIVATE pixcake_subject pixcake_warnings)
+add_test(NAME test_subject_store COMMAND test_subject_store)
+
+add_executable(test_config_store services/config/test_config_store.cpp)
+target_link_libraries(test_config_store PRIVATE pixcake_config pixcake_warnings)
+add_test(NAME test_config_store COMMAND test_config_store)
+
+add_executable(test_account_session services/account/test_account_session.cpp)
+target_link_libraries(test_account_session PRIVATE pixcake_account pixcake_warnings)
+add_test(NAME test_account_session COMMAND test_account_session)
+
+add_executable(test_recipe kernel/recipe/test_recipe.cpp)
+target_link_libraries(test_recipe PRIVATE pixcake_recipe pixcake_warnings)
+add_test(NAME test_recipe COMMAND test_recipe)
+
+add_executable(test_asset_catalog kernel/assets/test_asset_catalog.cpp)
+target_link_libraries(test_asset_catalog PRIVATE pixcake_assets pixcake_warnings)
+add_test(NAME test_asset_catalog COMMAND test_asset_catalog)
+
+add_executable(test_cull_session kernel/cull/test_cull_session.cpp)
+target_link_libraries(test_cull_session PRIVATE pixcake_cull pixcake_warnings)
+add_test(NAME test_cull_session COMMAND test_cull_session)
 
 add_executable(test_ledger kernel/ledger/test_ledger.cpp)
 target_include_directories(test_ledger PRIVATE ${CMAKE_SOURCE_DIR}/tests)
@@ -97,6 +156,23 @@ add_executable(test_photo_marks kernel/project/test_photo_marks.cpp)
 target_include_directories(test_photo_marks PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 target_link_libraries(test_photo_marks PRIVATE pixcake_storage pixcake_warnings)
 add_test(NAME test_photo_marks COMMAND test_photo_marks)
+
+add_executable(test_gpu_facade gpu/test_gpu_facade.cpp)
+target_link_libraries(test_gpu_facade PRIVATE pixcake_gpu_render pixcake_gpu_facade pixcake_warnings)
+add_test(NAME test_gpu_facade COMMAND test_gpu_facade)
+
+add_executable(test_gpu_backend_qt gpu/test_gpu_backend_qt.cpp)
+target_link_libraries(test_gpu_backend_qt PRIVATE pixcake_gpu_backend_qt pixcake_warnings)
+add_test(NAME test_gpu_backend_qt COMMAND test_gpu_backend_qt)
+set_tests_properties(test_gpu_backend_qt PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(test_renderd apps/test_renderd.cpp)
+target_link_libraries(test_renderd PRIVATE pixcake_renderd_service pixcake_warnings)
+add_test(NAME test_renderd COMMAND test_renderd)
+
+add_executable(test_exportd apps/test_exportd.cpp)
+target_link_libraries(test_exportd PRIVATE pixcake_exportd_service pixcake_warnings)
+add_test(NAME test_exportd COMMAND test_exportd)
 
 add_test(
   NAME arch_dependencies

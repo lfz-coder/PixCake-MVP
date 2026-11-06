@@ -85,6 +85,11 @@ void test_b08_posix_truncate_without_backup_is_marked_empty() {
   EXPECT(loaded.recovered_empty());
   EXPECT(loaded.image_id() != "img-1");
   EXPECT(!files.exists(formal));
+  pixcake::EditDocument reopened;
+  const auto second = pixcake::EditDocument::load(reopened, files, formal, {});
+  EXPECT(second.code == pixcake::ResultCode::DocumentCorrupt);
+  EXPECT(second.recovered_empty);
+  EXPECT(!second.absent);
   fs::remove_all(root);
 }
 

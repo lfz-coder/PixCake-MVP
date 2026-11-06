@@ -1,6 +1,8 @@
 #include "pixcake/editdoc/edit_document.hpp"
 
 #include "pixcake/persist/atomic_file.hpp"
+#include "pixcake/persist/write_lock.hpp"
+#include "pixcake/capability/capability_registry.hpp"
 #include "pixcake/support/checksum.hpp"
 
 #include <algorithm>
@@ -19,6 +21,7 @@ constexpr std::uint32_t kRecordManual = 7;
 constexpr std::uint32_t kRecordPreset = 8;
 constexpr std::uint32_t kRecordRecovered = 9;
 constexpr std::uint32_t kRecordBaked = 10;
+constexpr std::uint32_t kRecordEditingInstance = 11;
 constexpr std::uint32_t kInnerParameter = 1;
 constexpr std::uint32_t kFormatVersion = 1;
 
@@ -192,6 +195,7 @@ std::optional<EditDocument> EditDocument::create(std::string image_id) {
   append_u64(revision.payload, 0);
   document.records_.push_back(std::move(version));
   document.records_.push_back(std::move(image));
+  document.editing_instance_id_ = image_id;
   document.records_.push_back(std::move(revision));
   return document;
 }
@@ -211,6 +215,7 @@ EditDocument EditDocument::make_recovered_empty() {
   recovered.payload.push_back(1);
   document.records_.push_back(std::move(version));
   document.records_.push_back(std::move(image));
+  document.editing_instance_id_.clear();
   document.records_.push_back(std::move(revision));
   document.records_.push_back(std::move(recovered));
   return document;
@@ -336,6 +341,10 @@ LoadResult EditDocument::load(EditDocument& destination, FileSystem& files, cons
     return result;
   }
   decoded->limits_ = limits;
+  // The path is the stable identity of this editing instance.  Older files
+  // do not carry an instance field, and copies intentionally retain the
+  // original image id while getting a distinct document path.
+  decoded->editing_instance_id_ = path;
   destination = std::move(*decoded);
   result.code = ResultCode::Ok;
   result.used_backup = opened.used_backup;
@@ -344,7 +353,8 @@ LoadResult EditDocument::load(EditDocument& destination, FileSystem& files, cons
 
 LoadResult EditDocument::copy_committed(FileSystem& files, const std::string& source_path,
                                         const std::string& destination_path,
-                                        const std::vector<VersionLimit>& limits, EditDocument& copy) {
+                                        const std::vector<VersionLimit>& limits, EditDocument& copy,
+                                        const FastExportLatch* latch) {
   LoadResult rejected;
   if (source_path.empty() || destination_path.empty() || source_path == destination_path) {
     rejected.code = ResultCode::StateConflict;
@@ -355,19 +365,25 @@ LoadResult EditDocument::copy_committed(FileSystem& files, const std::string& so
   if (opened.absent || !opened.code.has_value() || *opened.code != ResultCode::Ok || opened.recovered_empty) {
     return opened;
   }
-  const ResultCode saved = loaded.write_snapshot(files, destination_path);
+  const ResultCode saved = loaded.write_snapshot(files, destination_path, latch);
   if (saved != ResultCode::Ok) {
     rejected.code = saved;
     return rejected;
   }
   copy = std::move(loaded);
+  copy.set_editing_instance_id(destination_path);
   LoadResult result;
   result.code = ResultCode::Ok;
   result.used_backup = opened.used_backup;
   return result;
 }
 
-ResultCode EditDocument::write_snapshot(FileSystem& files, const std::string& path) const {
+ResultCode EditDocument::write_snapshot(FileSystem& files, const std::string& path,
+                                        const FastExportLatch* latch) const {
+  WriteScope scope(files, path, latch);
+  if (!scope) {
+    return scope.code();
+  }
   return atomic_replace(files, path, encode());
 }
 
@@ -378,6 +394,14 @@ std::string EditDocument::image_id() const {
     }
   }
   return "";
+}
+
+std::string EditDocument::editing_instance_id() const {
+  if (!editing_instance_id_.empty()) return editing_instance_id_;
+  for (const auto& record : records_) {
+    if (record.type == kRecordEditingInstance) return text_of(record.payload);
+  }
+  return image_id();
 }
 
 std::uint64_t EditDocument::revision() const {
@@ -621,15 +645,26 @@ void EditDocument::clear_recovered_flag() {
                  records_.end());
 }
 
+void EditDocument::set_editing_instance_id(std::string value) {
+  editing_instance_id_ = std::move(value);
+}
+
 ResultCode EditDocument::commit_preview(std::uint64_t expected_revision, const std::string& capability_id,
                                         const std::string& parameter_id,
                                         const std::vector<VersionLimit>& limits, FileSystem& files,
                                         const std::string& path) {
+  WriteScope scope(files, path);
+  if (!scope) {
+    return scope.code();
+  }
   if (expected_revision != revision() || capability_id.empty() || parameter_id.empty()) {
     return ResultCode::StateConflict;
   }
   const auto preview_value = preview(capability_id, parameter_id);
   if (!preview_value) {
+    return ResultCode::StateConflict;
+  }
+  if (!validate_parameter_display_value(capability_id, parameter_id, *preview_value)) {
     return ResultCode::StateConflict;
   }
   const auto existing = fragment(capability_id);
@@ -639,6 +674,9 @@ ResultCode EditDocument::commit_preview(std::uint64_t expected_revision, const s
     return ResultCode::StateConflict;
   }
   if (too_new) {
+    return ResultCode::CapabilityTooNew;
+  }
+  if (existing && existing->version > 1) {
     return ResultCode::CapabilityTooNew;
   }
 
@@ -684,12 +722,24 @@ ResultCode EditDocument::commit_preview(std::uint64_t expected_revision, const s
 ResultCode EditDocument::commit_fragment_replacement(
     std::uint64_t expected_revision, const std::vector<std::string>& remove_capability_ids,
     const std::vector<FragmentView>& replacements, FileSystem& files, const std::string& path) {
+  WriteScope scope(files, path);
+  if (!scope) {
+    return scope.code();
+  }
   if (expected_revision != revision()) {
     return ResultCode::StateConflict;
   }
+  if (remove_capability_ids.empty() && replacements.empty()) return ResultCode::Ok;
   for (const auto& fragment : replacements) {
     if (fragment.capability_id.empty()) {
       return ResultCode::StateConflict;
+    }
+    if (!limits_.empty()) {
+      bool too_new = false;
+      if (!known_capability(limits_, fragment.capability_id, too_new, fragment.version)) {
+        return ResultCode::StateConflict;
+      }
+      if (too_new) return ResultCode::CapabilityTooNew;
     }
   }
 
@@ -704,9 +754,19 @@ ResultCode EditDocument::commit_fragment_replacement(
                                        if (!parsed) {
                                          return false;
                                        }
-                                       return std::find(remove_capability_ids.begin(),
-                                                        remove_capability_ids.end(),
-                                                        parsed->id) != remove_capability_ids.end();
+                                       if (std::find(remove_capability_ids.begin(),
+                                                     remove_capability_ids.end(),
+                                                     parsed->id) == remove_capability_ids.end()) {
+                                         return false;
+                                       }
+                                       if (parsed->version > 1) return false;
+                                       if (!limits_.empty()) {
+                                         bool too_new = false;
+                                         if (!known_capability(limits_, parsed->id, too_new, parsed->version) || too_new) {
+                                           return false;
+                                         }
+                                       }
+                                       return true;
                                      }),
                       next.records_.end());
   for (const auto& fragment : replacements) {
@@ -732,6 +792,10 @@ bool EditDocument::effects_baked() const {
 
 ResultCode EditDocument::commit_baked_reset(std::uint64_t expected_revision, FileSystem& files,
                                             const std::string& path) {
+  WriteScope scope(files, path);
+  if (!scope) {
+    return scope.code();
+  }
   if (expected_revision != revision()) {
     return ResultCode::StateConflict;
   }
@@ -739,8 +803,22 @@ ResultCode EditDocument::commit_baked_reset(std::uint64_t expected_revision, Fil
     return ResultCode::Ok;
   }
   EditDocument next = *this;
-  next.records_.erase(std::remove_if(next.records_.begin(), next.records_.end(),
-                                     [](const Record& record) { return record.type == kRecordFragment; }),
+  next.records_.erase(std::remove_if(next.records_.begin(), next.records_.end(), [&](const Record& record) {
+                       if (record.type != kRecordFragment) return false;
+                       const auto parsed = parse_fragment(record.payload);
+                       if (!parsed) return false;
+                       const auto* descriptor = CapabilityRegistry::phase_one().find(parsed->id);
+                       bool too_new = descriptor == nullptr || parsed->version > 1;
+                       if (!limits_.empty()) {
+                         bool known_too_new = false;
+                         if (known_capability(limits_, parsed->id, known_too_new, parsed->version)) {
+                           too_new = known_too_new;
+                         } else {
+                           too_new = true;
+                         }
+                       }
+                       return !too_new;
+                     }),
                       next.records_.end());
   if (!next.effects_baked()) {
     Record baked;

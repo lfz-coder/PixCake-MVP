@@ -2,6 +2,7 @@
 
 #include "pixcake/editdoc/edit_document.hpp"
 #include "pixcake/support/result_code.hpp"
+#include "pixcake/support/fast_export_latch.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -76,7 +77,8 @@ class LayerDocument {
   static std::optional<LayerDocument> decode(const std::vector<std::uint8_t>& bytes);
   static LoadResult load(LayerDocument& destination, FileSystem& files, const std::string& path);
   std::vector<std::uint8_t> encode() const;
-  ResultCode save(FileSystem& files, const std::string& path) const;
+  ResultCode save(FileSystem& files, const std::string& path,
+                  const FastExportLatch* latch = nullptr) const;
   ResultCode append_unknown_record(std::uint32_t type, std::vector<std::uint8_t> payload);
   std::vector<std::pair<std::uint32_t, std::vector<std::uint8_t>>> unknown_records() const;
 

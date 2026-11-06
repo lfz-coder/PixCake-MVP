@@ -372,9 +372,9 @@ void test_master_acceleration_does_not_bypass_subscription() {
   blocked.acceleration_points = 5;
   EXPECT(ledger.quote(blocked) == pixcake::ResultCode::Ok);
   EXPECT(ledger.enqueue(blocked.task_id) == pixcake::ResultCode::Ok);
-  EXPECT(ledger.accelerate(blocked.task_id) == pixcake::ResultCode::Ok);
+  EXPECT(ledger.accelerate(blocked.task_id) == pixcake::ResultCode::StateConflict);
   EXPECT(ledger.start_generating(blocked.task_id) == pixcake::ResultCode::StateConflict);
-  EXPECT(ledger.creative_points() == 95);
+  EXPECT(ledger.creative_points() == 100);
 }
 
 }  // namespace

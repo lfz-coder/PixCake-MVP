@@ -1,7 +1,10 @@
 #pragma once
 
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace pixcake {
@@ -33,9 +36,44 @@ struct PipelineStep {
   std::string step_id;
   std::string capability_id;
   bool registered_for_drawing = true;
+  std::vector<std::string> dependencies;
+
+  PipelineStep() = default;
+  PipelineStep(std::string step, std::string capability, bool registered,
+               std::vector<std::string> deps = {})
+      : step_id(std::move(step)),
+        capability_id(std::move(capability)),
+        registered_for_drawing(registered),
+        dependencies(std::move(deps)) {}
+};
+
+struct ParameterMode {
+  std::string capability_id;
+  std::string parameter_id;
+  double minimum = 0.0;
+  double maximum = 0.0;
+  double step = 1.0;
+  double default_value = 0.0;
+  // Stable render contract fields. They are descriptive strings, not GPU
+  // handles or backend types; the renderer may map them to a shader later.
+  std::string render_stage;
+  std::string render_program;
+  std::string render_channel;
+  std::uint32_t schema_version = 1;
+  std::uint32_t order = 0;
 };
 
 std::vector<PipelineStep> phase_one_pipeline();
 bool validate_phase_one_pipeline(const std::vector<PipelineStep>& pipeline, std::string* error);
+std::vector<std::string> phase_one_pipeline_order(std::string* error = nullptr);
+std::optional<std::uint32_t> phase_one_capability_order(std::string_view capability_id);
+const std::vector<ParameterMode>& phase_one_parameter_modes();
+const ParameterMode* find_parameter_mode(std::string_view capability_id, std::string_view parameter_id);
+
+// Validates the ranges and steps explicitly defined by the phase-one contract.
+// An unknown parameter is rejected until its owning capability publishes a
+// display mode.
+bool validate_parameter_display_value(std::string_view capability_id, std::string_view parameter_id,
+                                      std::string_view display_value);
 
 }  // namespace pixcake

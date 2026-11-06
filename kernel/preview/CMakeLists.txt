@@ -1,0 +1,5 @@
+add_library(pixcake_preview
+  src/preview_coordinator.cpp
+)
+target_include_directories(pixcake_preview PUBLIC include)
+target_link_libraries(pixcake_preview PUBLIC pixcake_render pixcake_capability pixcake_editdoc pixcake_support pixcake_warnings)

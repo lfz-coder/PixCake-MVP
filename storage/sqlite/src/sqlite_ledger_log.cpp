@@ -6,6 +6,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <set>
 
 namespace pixcake {
 namespace {
@@ -54,16 +55,16 @@ constexpr const char* kInsertEvent =
     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
 
 constexpr const char* kSelectEvents =
-    "SELECT kind, task_id, tool_id, stroke_id, origin, original_id, export_id, "
-    "high_compute, batch_generation, member, subscribed, consumed_master_free, "
-    "quoted_points, acceleration_points, points_delta, sheets_delta "
-    "FROM ledger_event ORDER BY seq;";
+    "SELECT e.kind, e.task_id, e.tool_id, e.stroke_id, e.origin, e.original_id, e.export_id, "
+    "e.high_compute, e.batch_generation, e.member, e.subscribed, e.consumed_master_free, "
+    "e.quoted_points, e.acceleration_points, e.points_delta, e.sheets_delta, b.batch_id "
+    "FROM ledger_event AS e "
+    "LEFT JOIN ledger_export_batch AS b "
+    "ON b.export_id = e.export_id AND b.original_id = e.original_id "
+    "ORDER BY e.seq;";
 constexpr const char* kBatchUpsert =
     "INSERT INTO ledger_export_batch(export_id, batch_id, original_id) VALUES (?, ?, ?) "
     "ON CONFLICT(export_id) DO UPDATE SET batch_id = excluded.batch_id, original_id = excluded.original_id;";
-constexpr const char* kBatchLookup =
-    "SELECT batch_id FROM ledger_export_batch WHERE export_id = ? AND original_id = ?;";
-
 ResultCode map_sqlite(int rc) {
   if (rc == SQLITE_OK || rc == SQLITE_DONE || rc == SQLITE_ROW) {
     return ResultCode::Ok;
@@ -348,15 +349,18 @@ ResultCode SqliteLedgerLog::load(std::vector<LedgerEvent>& out) {
       return map_sqlite(rc);
     }
     LedgerEvent event = read_event(stmt.get());
-    if (!event.export_id.empty()) {
-      Statement batch;
-      if (batch.prepare(impl_->db, kBatchLookup) != ResultCode::Ok) return ResultCode::IoFailed;
-      if (bind_text(batch.get(), 1, event.export_id) != ResultCode::Ok ||
-          bind_text(batch.get(), 2, event.original_id) != ResultCode::Ok) return ResultCode::IoFailed;
-      if (sqlite3_step(batch.get()) == SQLITE_ROW) event.batch_id = column_text(batch.get(), 0);
-    }
+    event.batch_id = column_text(stmt.get(), 16);
     events.push_back(std::move(event));
   }
+}
+
+ResultCode SqliteLedgerLog::event_count(std::size_t& out) {
+  Statement stmt;
+  const ResultCode prepared = stmt.prepare(impl_->db, "SELECT COUNT(*) FROM ledger_event;");
+  if (prepared != ResultCode::Ok) return prepared;
+  if (sqlite3_step(stmt.get()) != SQLITE_ROW) return ResultCode::IoFailed;
+  out = static_cast<std::size_t>(sqlite3_column_int64(stmt.get(), 0));
+  return ResultCode::Ok;
 }
 
 ResultCode SqliteLedgerLog::append(const std::vector<LedgerEvent>& events) {
@@ -425,13 +429,10 @@ ResultCode SqliteLedgerLog::read_cache(std::optional<LedgerCache>& out) {
 }
 
 ResultCode SqliteLedgerLog::write_cache(const LedgerCache& cache) {
-  const ResultCode cleared_balance = exec_sql(impl_->db, "DELETE FROM ledger_cache;");
-  if (cleared_balance != ResultCode::Ok) {
-    return cleared_balance;
-  }
   Statement balance;
   const ResultCode prepared =
-      balance.prepare(impl_->db, "INSERT INTO ledger_cache(id, creative_points, export_sheets) VALUES (1, ?, ?);");
+      balance.prepare(impl_->db, "INSERT INTO ledger_cache(id, creative_points, export_sheets) VALUES (1, ?, ?) "
+                               "ON CONFLICT(id) DO UPDATE SET creative_points=excluded.creative_points, export_sheets=excluded.export_sheets;");
   if (prepared != ResultCode::Ok) {
     return prepared;
   }
@@ -446,17 +447,15 @@ ResultCode SqliteLedgerLog::write_cache(const LedgerCache& cache) {
     return map_sqlite(inserted);
   }
 
-  const ResultCode cleared_tasks = exec_sql(impl_->db, "DELETE FROM ledger_task_cache;");
-  if (cleared_tasks != ResultCode::Ok) {
-    return cleared_tasks;
-  }
+  Statement task;
+  const ResultCode task_prepared =
+      task.prepare(impl_->db, "INSERT INTO ledger_task_cache(task_id, status) VALUES (?, ?) "
+                             "ON CONFLICT(task_id) DO UPDATE SET status=excluded.status;");
+  if (task_prepared != ResultCode::Ok) return task_prepared;
+  std::set<std::string> seen;
   for (const auto& item : cache.task_statuses) {
-    Statement task;
-    const ResultCode task_prepared =
-        task.prepare(impl_->db, "INSERT INTO ledger_task_cache(task_id, status) VALUES (?, ?);");
-    if (task_prepared != ResultCode::Ok) {
-      return task_prepared;
-    }
+    if (!seen.insert(item.first).second) return ResultCode::StateConflict;
+    sqlite3_reset(task.get()); sqlite3_clear_bindings(task.get());
     if (const ResultCode code = bind_text(task.get(), 1, item.first); code != ResultCode::Ok) {
       return code;
     }

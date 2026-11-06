@@ -122,11 +122,14 @@ void test_library_controls() {
   EXPECT(library.show(pixcake::WorkspacePage::Library) == pixcake::ResultCode::Ok);
   EXPECT(library.library_view() == "网格视图");
   EXPECT(!library.grid_per_row().has_value());
-  EXPECT(!library.shown("显示RAW格式").has_value());
+  EXPECT(library.shown("显示RAW格式") == true);
+  EXPECT(library.shown("显示修图状态") == true);
+  EXPECT(library.shown("显示导出状态") == true);
   EXPECT(!library.full_effect().has_value());
-  EXPECT(library.set_grid_per_row(0) == pixcake::ResultCode::StateConflict);
-  EXPECT(library.set_grid_per_row(8) == pixcake::ResultCode::StateConflict);
-  EXPECT(!library.grid_per_row().has_value());
+  EXPECT(library.set_grid_per_row(0) == pixcake::ResultCode::Ok);
+  EXPECT(library.grid_per_row() == 1);
+  EXPECT(library.set_grid_per_row(8) == pixcake::ResultCode::Ok);
+  EXPECT(library.grid_per_row() == 7);
   EXPECT(library.set_grid_per_row(7) == pixcake::ResultCode::Ok);
   EXPECT(library.set_grid_per_row(1) == pixcake::ResultCode::Ok);
   EXPECT(library.grid_per_row() == 1);

@@ -2,6 +2,7 @@
 
 #include <sqlite3.h>
 
+#include <cstring>
 #include <utility>
 
 namespace pixcake {
@@ -22,6 +23,10 @@ constexpr const char* kSchema =
     "file_name TEXT NOT NULL,"
     "access_credential BLOB NOT NULL,"
     "presence TEXT NOT NULL,"
+    "source_identity_valid INTEGER NOT NULL DEFAULT 0,"
+    "source_device INTEGER NOT NULL DEFAULT 0,"
+    "source_inode INTEGER NOT NULL DEFAULT 0,"
+    "source_size INTEGER NOT NULL DEFAULT 0,"
     "rating INTEGER NOT NULL DEFAULT 0,"
     "flag TEXT NOT NULL DEFAULT '',"
     "color_label TEXT NOT NULL DEFAULT '',"
@@ -49,14 +54,6 @@ constexpr const char* kVirtualCopySchema =
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_virtual_copy_document ON virtual_copy(document_id);"
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_virtual_copy_sequence "
     "ON virtual_copy(source_photo_id, sequence);";
-
-constexpr const char* kPhotoMarkMigration =
-    "ALTER TABLE photo ADD COLUMN rating INTEGER NOT NULL DEFAULT 0;"
-    "ALTER TABLE photo ADD COLUMN flag TEXT NOT NULL DEFAULT '';"
-    "ALTER TABLE photo ADD COLUMN color_label TEXT NOT NULL DEFAULT '';"
-    "CREATE INDEX IF NOT EXISTS idx_photo_rating ON photo(rating);"
-    "CREATE INDEX IF NOT EXISTS idx_photo_flag ON photo(flag);"
-    "CREATE INDEX IF NOT EXISTS idx_photo_color ON photo(color_label);";
 
 ResultCode map_sqlite(int rc) {
   if (rc == SQLITE_OK || rc == SQLITE_DONE || rc == SQLITE_ROW) {
@@ -138,6 +135,49 @@ std::string column_text(sqlite3_stmt* stmt, int index) {
   return std::string(reinterpret_cast<const char*>(text), static_cast<std::size_t>(size));
 }
 
+bool has_column(sqlite3* db, const char* table, const char* column) {
+  const char* sql = nullptr;
+  if (std::strcmp(table, "photo") == 0) {
+    sql = "PRAGMA table_info(photo);";
+  } else if (std::strcmp(table, "project") == 0) {
+    sql = "PRAGMA table_info(project);";
+  } else if (std::strcmp(table, "virtual_copy") == 0) {
+    sql = "PRAGMA table_info(virtual_copy);";
+  } else if (std::strcmp(table, "trash") == 0) {
+    sql = "PRAGMA table_info(trash);";
+  } else {
+    return false;
+  }
+  Statement stmt;
+  if (stmt.prepare(db, sql) != ResultCode::Ok) return false;
+  while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+    if (column_text(stmt.get(), 1) == column) return true;
+  }
+  return false;
+}
+
+ResultCode ensure_photo_columns(sqlite3* db) {
+  struct Column { const char* name; const char* ddl; };
+  const Column columns[] = {
+      {"rating", "ALTER TABLE photo ADD COLUMN rating INTEGER NOT NULL DEFAULT 0;"},
+      {"flag", "ALTER TABLE photo ADD COLUMN flag TEXT NOT NULL DEFAULT '';"},
+      {"color_label", "ALTER TABLE photo ADD COLUMN color_label TEXT NOT NULL DEFAULT '';"},
+      {"source_identity_valid", "ALTER TABLE photo ADD COLUMN source_identity_valid INTEGER NOT NULL DEFAULT 0;"},
+      {"source_device", "ALTER TABLE photo ADD COLUMN source_device INTEGER NOT NULL DEFAULT 0;"},
+      {"source_inode", "ALTER TABLE photo ADD COLUMN source_inode INTEGER NOT NULL DEFAULT 0;"},
+      {"source_size", "ALTER TABLE photo ADD COLUMN source_size INTEGER NOT NULL DEFAULT 0;"},
+  };
+  for (const Column& column : columns) {
+    if (!has_column(db, "photo", column.name)) {
+      const ResultCode added = exec_sql(db, column.ddl);
+      if (added != ResultCode::Ok) return added;
+    }
+  }
+  return exec_sql(db, "CREATE INDEX IF NOT EXISTS idx_photo_rating ON photo(rating);"
+                       "CREATE INDEX IF NOT EXISTS idx_photo_flag ON photo(flag);"
+                       "CREATE INDEX IF NOT EXISTS idx_photo_color ON photo(color_label);");
+}
+
 std::vector<std::uint8_t> column_blob(sqlite3_stmt* stmt, int index) {
   const int size = sqlite3_column_bytes(stmt, index);
   const auto* data = static_cast<const std::uint8_t*>(sqlite3_column_blob(stmt, index));
@@ -167,9 +207,13 @@ PhotoRow read_photo(sqlite3_stmt* stmt) {
   row.file_name = column_text(stmt, 3);
   row.access_credential = column_blob(stmt, 4);
   row.presence = column_text(stmt, 5);
-  row.rating = sqlite3_column_int(stmt, 6);
-  row.flag = column_text(stmt, 7);
-  row.color_label = column_text(stmt, 8);
+  row.source_identity.valid = sqlite3_column_int(stmt, 6) != 0;
+  row.source_identity.device = static_cast<std::uint64_t>(sqlite3_column_int64(stmt, 7));
+  row.source_identity.inode = static_cast<std::uint64_t>(sqlite3_column_int64(stmt, 8));
+  row.source_identity.size = static_cast<std::uint64_t>(sqlite3_column_int64(stmt, 9));
+  row.rating = sqlite3_column_int(stmt, 10);
+  row.flag = column_text(stmt, 11);
+  row.color_label = column_text(stmt, 12);
   return row;
 }
 
@@ -271,29 +315,31 @@ ResultCode SqliteProjectStore::open(const std::string& path, std::unique_ptr<Sql
       sqlite3_close(db);
       return copies;
     }
-  } else if (version == 1) {
-    const ResultCode copies = exec_sql(db, kVirtualCopySchema);
-    if (copies != ResultCode::Ok) {
-      sqlite3_close(db);
-      return copies;
-    }
-    const ResultCode marks = exec_sql(db, kPhotoMarkMigration);
-    if (marks != ResultCode::Ok) {
-      sqlite3_close(db);
-      return marks;
-    }
-  } else if (version == 2) {
-    const ResultCode marks = exec_sql(db, kPhotoMarkMigration);
-    if (marks != ResultCode::Ok) {
-      sqlite3_close(db);
-      return marks;
-    }
-  }
-  if (version != 3) {
     const ResultCode stamp = exec_sql(db, "PRAGMA user_version=3;");
     if (stamp != ResultCode::Ok) {
       sqlite3_close(db);
       return stamp;
+    }
+  } else {
+    const ResultCode began = exec_sql(db, "BEGIN IMMEDIATE;");
+    if (began != ResultCode::Ok) {
+      sqlite3_close(db);
+      return began;
+    }
+    ResultCode migrated = ResultCode::Ok;
+    if (version == 1) migrated = exec_sql(db, kVirtualCopySchema);
+    if (migrated == ResultCode::Ok) migrated = ensure_photo_columns(db);
+    if (migrated == ResultCode::Ok && version != 3) migrated = exec_sql(db, "PRAGMA user_version=3;");
+    if (migrated != ResultCode::Ok) {
+      exec_sql(db, "ROLLBACK;");
+      sqlite3_close(db);
+      return migrated;
+    }
+    const ResultCode committed = exec_sql(db, "COMMIT;");
+    if (committed != ResultCode::Ok) {
+      exec_sql(db, "ROLLBACK;");
+      sqlite3_close(db);
+      return committed;
     }
   }
 
@@ -522,7 +568,7 @@ ResultCode SqliteProjectStore::insert_photo(const PhotoDraft& draft, std::int64_
   Statement stmt;
   const ResultCode prepared = stmt.prepare(
       impl_->db,
-      "INSERT INTO photo(project_id, absolute_path, file_name, access_credential, presence) VALUES (?, ?, ?, ?, ?);");
+      "INSERT INTO photo(project_id, absolute_path, file_name, access_credential, presence, source_identity_valid, source_device, source_inode, source_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);");
   if (prepared != ResultCode::Ok) {
     return prepared;
   }
@@ -541,6 +587,10 @@ ResultCode SqliteProjectStore::insert_photo(const PhotoDraft& draft, std::int64_
   if (const ResultCode code = bind_text(stmt.get(), 5, draft.presence); code != ResultCode::Ok) {
     return code;
   }
+  if (const ResultCode code = map_sqlite(sqlite3_bind_int(stmt.get(), 6, draft.source_identity.valid ? 1 : 0)); code != ResultCode::Ok) return code;
+  if (const ResultCode code = bind_int64(stmt.get(), 7, static_cast<std::int64_t>(draft.source_identity.device)); code != ResultCode::Ok) return code;
+  if (const ResultCode code = bind_int64(stmt.get(), 8, static_cast<std::int64_t>(draft.source_identity.inode)); code != ResultCode::Ok) return code;
+  if (const ResultCode code = bind_int64(stmt.get(), 9, static_cast<std::int64_t>(draft.source_identity.size)); code != ResultCode::Ok) return code;
   const int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
     return map_sqlite(rc);
@@ -597,6 +647,51 @@ ResultCode SqliteProjectStore::update_photo_color(std::int64_t id, const std::st
   return rc == SQLITE_DONE ? ResultCode::Ok : map_sqlite(rc);
 }
 
+ResultCode SqliteProjectStore::update_photo_ratings(const std::vector<std::int64_t>& ids, int rating) {
+  if (ids.empty()) return ResultCode::StateConflict;
+  Statement stmt;
+  const ResultCode prepared = stmt.prepare(impl_->db, "UPDATE photo SET rating = ? WHERE id = ?;");
+  if (prepared != ResultCode::Ok) return prepared;
+  return in_transaction([&] {
+    for (const auto id : ids) {
+      sqlite3_reset(stmt.get()); sqlite3_clear_bindings(stmt.get());
+      if (bind_int64(stmt.get(), 1, rating) != ResultCode::Ok || bind_int64(stmt.get(), 2, id) != ResultCode::Ok) return ResultCode::IoFailed;
+      if (sqlite3_step(stmt.get()) != SQLITE_DONE || sqlite3_changes(impl_->db) == 0) return ResultCode::StateConflict;
+    }
+    return ResultCode::Ok;
+  });
+}
+
+ResultCode SqliteProjectStore::update_photo_flags(const std::vector<std::int64_t>& ids, const std::string& flag) {
+  if (ids.empty()) return ResultCode::StateConflict;
+  Statement stmt;
+  const ResultCode prepared = stmt.prepare(impl_->db, "UPDATE photo SET flag = ? WHERE id = ?;");
+  if (prepared != ResultCode::Ok) return prepared;
+  return in_transaction([&] {
+    for (const auto id : ids) {
+      sqlite3_reset(stmt.get()); sqlite3_clear_bindings(stmt.get());
+      if (bind_text(stmt.get(), 1, flag) != ResultCode::Ok || bind_int64(stmt.get(), 2, id) != ResultCode::Ok) return ResultCode::IoFailed;
+      if (sqlite3_step(stmt.get()) != SQLITE_DONE || sqlite3_changes(impl_->db) == 0) return ResultCode::StateConflict;
+    }
+    return ResultCode::Ok;
+  });
+}
+
+ResultCode SqliteProjectStore::update_photo_colors(const std::vector<std::int64_t>& ids, const std::string& color) {
+  if (ids.empty()) return ResultCode::StateConflict;
+  Statement stmt;
+  const ResultCode prepared = stmt.prepare(impl_->db, "UPDATE photo SET color_label = ? WHERE id = ?;");
+  if (prepared != ResultCode::Ok) return prepared;
+  return in_transaction([&] {
+    for (const auto id : ids) {
+      sqlite3_reset(stmt.get()); sqlite3_clear_bindings(stmt.get());
+      if (bind_text(stmt.get(), 1, color) != ResultCode::Ok || bind_int64(stmt.get(), 2, id) != ResultCode::Ok) return ResultCode::IoFailed;
+      if (sqlite3_step(stmt.get()) != SQLITE_DONE || sqlite3_changes(impl_->db) == 0) return ResultCode::StateConflict;
+    }
+    return ResultCode::Ok;
+  });
+}
+
 ResultCode SqliteProjectStore::update_photo_presence(std::int64_t id, const std::string& presence) {
   Statement stmt;
   const ResultCode prepared = stmt.prepare(impl_->db, "UPDATE photo SET presence = ? WHERE id = ?;");
@@ -618,7 +713,7 @@ ResultCode SqliteProjectStore::load_photo(std::int64_t id, std::optional<PhotoRo
   Statement stmt;
   const ResultCode prepared = stmt.prepare(
       impl_->db,
-      "SELECT id, project_id, absolute_path, file_name, access_credential, presence, rating, flag, color_label "
+      "SELECT id, project_id, absolute_path, file_name, access_credential, presence, source_identity_valid, source_device, source_inode, source_size, rating, flag, color_label "
       "FROM photo WHERE id = ?;");
   if (prepared != ResultCode::Ok) {
     return prepared;
@@ -643,9 +738,9 @@ ResultCode SqliteProjectStore::list_photos(const std::optional<std::int64_t>& pr
   Statement stmt;
   const char* sql = project_id.has_value()
                         ? "SELECT id, project_id, absolute_path, file_name, access_credential, presence, "
-                          "rating, flag, color_label FROM photo WHERE project_id = ? ORDER BY id;"
+                          "source_identity_valid, source_device, source_inode, source_size, rating, flag, color_label FROM photo WHERE project_id = ? ORDER BY id;"
                         : "SELECT id, project_id, absolute_path, file_name, access_credential, presence, "
-                          "rating, flag, color_label FROM photo ORDER BY id;";
+                          "source_identity_valid, source_device, source_inode, source_size, rating, flag, color_label FROM photo ORDER BY id;";
   const ResultCode prepared = stmt.prepare(impl_->db, sql);
   if (prepared != ResultCode::Ok) {
     return prepared;

@@ -1,5 +1,7 @@
 #include "pixcake/persist/atomic_file.hpp"
 
+#include "pixcake/persist/write_lock.hpp"
+
 #include <filesystem>
 
 namespace pixcake {
@@ -48,10 +50,48 @@ ResultCode quarantine_file(FileSystem& files, const std::string& formal_path) {
   return ResultCode::Ok;
 }
 
+bool retry_rename(FileSystem& files, const std::string& from, const std::string& to, IoResult& last) {
+  for (int attempt = 0; attempt < 8; ++attempt) {
+    last = files.rename_file(from, to);
+    if (last.ok || last.not_found) return last.ok;
+  }
+  return false;
+}
+
+bool restore_backup(FileSystem& files, const std::string& formal, const std::string& backup) {
+  IoResult restored;
+  if (retry_rename(files, backup, formal, restored)) {
+    return true;
+  }
+  // A rename can remain unavailable after the first error (for example when
+  // a filesystem briefly rejects metadata changes).  The last good bytes are
+  // still durable in the backup, so recreate the missing formal file without
+  // truncating an existing path.  Keeping the backup is intentional: it is a
+  // second recovery source if the final sync fails.
+  if (files.exists(formal)) {
+    return true;
+  }
+  std::vector<std::uint8_t> bytes;
+  const IoResult read = files.read_file(backup, bytes);
+  if (!read.ok) {
+    return false;
+  }
+  const IoResult written = files.write_new(formal, bytes);
+  if (!written.ok) {
+    return false;
+  }
+  const IoResult synced = files.sync_file(formal);
+  return synced.ok;
+}
+
 }  // namespace
 
 ResultCode atomic_replace(FileSystem& files, const std::string& formal_path,
                           const std::vector<std::uint8_t>& bytes) {
+  WriteScope scope(files, formal_path);
+  if (!scope) {
+    return scope.code();
+  }
   const std::string temp = formal_path + ".tmp";
   const std::string backup = formal_path + ".bak";
   if (files.exists(temp)) {
@@ -84,7 +124,7 @@ ResultCode atomic_replace(FileSystem& files, const std::string& formal_path,
   const IoResult published = files.rename_file(temp, formal_path);
   if (!published.ok) {
     if (had_formal) {
-      files.rename_file(backup, formal_path);
+      restore_backup(files, formal_path, backup);
     }
     files.remove_file(temp);
     return published.code;
@@ -93,8 +133,9 @@ ResultCode atomic_replace(FileSystem& files, const std::string& formal_path,
   const IoResult directory = files.sync_directory(parent_directory(formal_path));
   if (!directory.ok) {
     if (had_formal && files.exists(backup)) {
-      files.rename_file(formal_path, temp);
-      files.rename_file(backup, formal_path);
+      IoResult moved;
+      retry_rename(files, formal_path, temp, moved);
+      restore_backup(files, formal_path, backup);
       files.remove_file(temp);
     } else if (!had_formal) {
       files.remove_file(formal_path);
@@ -107,7 +148,19 @@ ResultCode atomic_replace(FileSystem& files, const std::string& formal_path,
 DurableLoad open_durable_file(FileSystem& files, const std::string& formal_path,
                               const std::function<bool(const std::vector<std::uint8_t>&)>& valid) {
   DurableLoad loaded;
+  WriteScope scope(files, formal_path);
+  if (!scope) {
+    loaded.code = scope.code();
+    return loaded;
+  }
   const std::string backup = formal_path + ".bak";
+  const std::string marker = formal_path + ".recovered";
+  if (!files.exists(formal_path) && !files.exists(backup) && files.exists(marker)) {
+    loaded.recovered_empty = true;
+    loaded.recovery_marker = true;
+    loaded.code = ResultCode::DocumentCorrupt;
+    return loaded;
+  }
   if (!files.exists(formal_path) && !files.exists(backup)) {
     loaded.absent = true;
     loaded.code = ResultCode::IoFailed;
@@ -164,6 +217,12 @@ DurableLoad open_durable_file(FileSystem& files, const std::string& formal_path,
 
   loaded.recovered_empty = true;
   loaded.code = ResultCode::DocumentCorrupt;
+  const IoResult marked = files.write_new(marker, {});
+  if (!marked.ok && !marked.not_found) {
+    loaded.code = marked.code;
+  } else {
+    loaded.recovery_marker = true;
+  }
   return loaded;
 }
 

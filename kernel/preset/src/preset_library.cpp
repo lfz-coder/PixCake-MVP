@@ -1,5 +1,8 @@
 #include "pixcake/preset/preset_library.hpp"
 
+#include "pixcake/capability/capability_registry.hpp"
+#include "pixcake/persist/write_lock.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -10,25 +13,11 @@
 namespace pixcake {
 namespace {
 
-struct ModuleRow {
-  const char* capability_id;
-  const char* module;
-};
-
-const ModuleRow kModules[] = {
-    {"color.match", "AI 色彩"},   {"color.style", "AI 色彩"},  {"color.global", "色彩"},
-    {"color.local", "色彩"},      {"color.post", "色彩"},      {"detail", "色彩"},
-    {"portrait.blemish", "人像"}, {"portrait.skin", "人像"},   {"portrait.reshape", "人像"},
-    {"portrait.feature", "人像"}, {"portrait.body", "人像"},   {"image.background", "图像"},
-    {"image.idphoto", "图像"},    {"image.sky", "图像"},       {"clothes", "衣物"},
-    {"crop", "裁剪"},
-};
-
 const char* module_of(const std::string& capability_id) {
-  for (const auto& row : kModules) {
-    if (capability_id == row.capability_id) {
-      return row.module;
-    }
+  static const auto registry = CapabilityRegistry::phase_one();
+  if (capability_id == "detail") return "色彩";
+  if (const auto* descriptor = registry.find(capability_id)) {
+    return descriptor->module_label.c_str();
   }
   return nullptr;
 }
@@ -64,10 +53,28 @@ std::optional<std::vector<char32_t>> code_points(const std::string& text) {
       }
       value = (value << 6) | (next & 0x3F);
     }
+    if ((need == 2 && value < 0x80) || (need == 3 && value < 0x800) ||
+        (need == 4 && value < 0x10000) || value > 0x10FFFF || (value >= 0xD800 && value <= 0xDFFF)) {
+      return std::nullopt;
+    }
     points.push_back(value);
     index += need;
   }
   return points;
+}
+
+bool combining_mark(char32_t point) {
+  return (point >= 0x0300 && point <= 0x036F) || (point >= 0x1AB0 && point <= 0x1AFF) ||
+         (point >= 0x1DC0 && point <= 0x1DFF) || (point >= 0x20D0 && point <= 0x20FF) ||
+         (point >= 0xFE20 && point <= 0xFE2F);
+}
+
+std::size_t visible_count(const std::vector<char32_t>& points) {
+  std::size_t count = 0;
+  for (const auto point : points) {
+    if (!combining_mark(point)) ++count;
+  }
+  return count;
 }
 
 bool blank_points(const std::vector<char32_t>& points) {
@@ -75,7 +82,12 @@ bool blank_points(const std::vector<char32_t>& points) {
     return true;
   }
   for (char32_t point : points) {
-    if (point != 0x09 && point != 0x0A && point != 0x0D && point != 0x20) {
+    const bool unicode_space =
+        point == 0x09 || point == 0x0A || point == 0x0B || point == 0x0C || point == 0x0D ||
+        point == 0x20 || point == 0x85 || point == 0xA0 || point == 0x1680 ||
+        (point >= 0x2000 && point <= 0x200A) || point == 0x2028 || point == 0x2029 ||
+        point == 0x202F || point == 0x205F || point == 0x3000 || point == 0xFEFF;
+    if (!unicode_space) {
       return false;
     }
   }
@@ -85,15 +97,18 @@ bool blank_points(const std::vector<char32_t>& points) {
 const char* kComboModules[] = {"人像", "色彩", "AI 色彩", "图像", "衣物", "裁剪"};
 
 ResultCode validate(const Preset& preset) {
+  static const auto registry = CapabilityRegistry::phase_one();
   if (preset.id.empty()) {
     return ResultCode::StateConflict;
   }
   const auto points = code_points(preset.name);
-  if (!points || blank_points(*points) || points->size() > 20) {
+  if (!points || blank_points(*points) || visible_count(*points) == 0 || visible_count(*points) > 20) {
     return ResultCode::StateConflict;
   }
   for (const auto& fragment : preset.fragments) {
-    if (module_of(fragment.capability_id) == nullptr) {
+    const auto* module = module_of(fragment.capability_id);
+    const auto* descriptor = registry.find(fragment.capability_id);
+    if (module == nullptr || (descriptor != nullptr && !descriptor->can_use_in_preset)) {
       return ResultCode::StateConflict;
     }
   }
@@ -207,21 +222,26 @@ PresetCheck PresetLibrary::check_apply(const EditDocument& document, const Prese
 }
 
 ResultCode PresetLibrary::apply(EditDocument& document, const Preset& preset,
-                                std::uint64_t expected_revision, FileSystem& files, const std::string& path) {
+                                std::uint64_t expected_revision, FileSystem& files, const std::string& path,
+                                const FastExportLatch& latch) {
+  WriteScope scope(files, path, &latch);
+  if (!scope) return scope.code();
   if (const ResultCode code = validate(preset); code != ResultCode::Ok) {
     return code;
   }
   const auto modules = replaced_modules(preset);
   std::vector<std::string> remove_ids;
-  for (const auto& row : kModules) {
+  static const auto registry = CapabilityRegistry::phase_one();
+  for (const auto& descriptor : registry.descriptors()) {
+    const auto& capability_id = descriptor.id;
     bool selected = false;
     for (const auto& module : modules) {
-      if (module == row.module) {
+      if (module == descriptor.module_label) {
         selected = true;
       }
     }
-    if (selected && document.fragment(row.capability_id).has_value()) {
-      remove_ids.push_back(row.capability_id);
+    if (selected && document.fragment(capability_id).has_value()) {
+      remove_ids.push_back(capability_id);
     }
   }
   std::vector<FragmentView> replacements;

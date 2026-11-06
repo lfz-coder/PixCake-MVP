@@ -4,9 +4,11 @@
 #include <cstdint>
 #include <filesystem>
 #include <fcntl.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
+#include <filesystem>
 
 namespace pixcake {
 namespace {
@@ -44,7 +46,45 @@ class Fd {
   int fd_ = -1;
 };
 
+class PosixWriteLock final : public FileWriteLock {
+ public:
+  explicit PosixWriteLock(int fd) : fd_(fd) {}
+  ~PosixWriteLock() override {
+    if (fd_ >= 0) {
+      ::close(fd_);
+    }
+  }
+
+ private:
+  int fd_ = -1;
+};
+
 }  // namespace
+
+IoResult FileSystem::path_within_root(const std::string& path, const std::string& root) const {
+  if (path.empty() || root.empty() || path.front() != '/' || root.front() != '/') {
+    return io_error(ResultCode::StateConflict);
+  }
+  std::filesystem::path p(path);
+  std::filesystem::path r(root);
+  if (p.filename().empty()) return io_error(ResultCode::StateConflict);
+  for (const auto& part : p) {
+    if (part == "." || part == "..") return io_error(ResultCode::StateConflict);
+  }
+  const auto relative = p.lexically_relative(r);
+  if (relative.empty() || relative == "." || relative.string().rfind("..", 0) == 0) {
+    return io_error(ResultCode::StateConflict);
+  }
+  return io_ok();
+}
+
+IoResult FileSystem::identify(const std::string&, FileIdentity&) const {
+  return io_error(ResultCode::StateConflict);
+}
+
+IoResult FileSystem::remove_if_identity(const std::string&, const FileIdentity&) {
+  return io_error(ResultCode::StateConflict);
+}
 
 bool PosixFileSystem::exists(const std::string& path) const {
   struct stat info;
@@ -130,6 +170,18 @@ IoResult PosixFileSystem::rename_file(const std::string& from, const std::string
   return io_ok();
 }
 
+IoResult PosixFileSystem::publish_new(const std::string& from, const std::string& to) {
+  if (::link(from.c_str(), to.c_str()) != 0) {
+    return from_errno(errno);
+  }
+  if (::unlink(from.c_str()) != 0) {
+    const int error = errno;
+    ::unlink(to.c_str());
+    return from_errno(error);
+  }
+  return io_ok();
+}
+
 IoResult PosixFileSystem::sync_file(const std::string& path) {
   Fd fd(::open(path.c_str(), O_RDWR));
   if (fd.get() < 0) {
@@ -165,6 +217,67 @@ IoResult PosixFileSystem::create_directory(const std::string& path) {
     return io_error(ResultCode::DiskFull);
   }
   return io_error(ResultCode::IoFailed);
+}
+
+IoResult PosixFileSystem::path_within_root(const std::string& path, const std::string& root) const {
+  std::error_code error;
+  const auto canonical_root = std::filesystem::weakly_canonical(root, error);
+  if (error) return io_error(error == std::errc::permission_denied ? ResultCode::PermissionDenied : ResultCode::IoFailed);
+  const auto parent = std::filesystem::path(path).parent_path();
+  const auto canonical_parent = std::filesystem::weakly_canonical(parent, error);
+  if (error) return io_error(error == std::errc::permission_denied ? ResultCode::PermissionDenied : ResultCode::IoFailed);
+  const auto relative = canonical_parent.lexically_relative(canonical_root);
+  if (relative.empty() || relative.string().rfind("..", 0) == 0 || relative.is_absolute()) {
+    return io_error(ResultCode::StateConflict);
+  }
+  return io_ok();
+}
+
+IoResult PosixFileSystem::identify(const std::string& path, FileIdentity& out) const {
+  struct stat info;
+  if (::lstat(path.c_str(), &info) != 0) return from_errno(errno);
+  if (!S_ISREG(info.st_mode)) return io_error(ResultCode::StateConflict);
+  out.valid = true;
+  out.device = static_cast<std::uint64_t>(info.st_dev);
+  out.inode = static_cast<std::uint64_t>(info.st_ino);
+  out.size = static_cast<std::uint64_t>(info.st_size);
+  out.fingerprint = 0;
+  return io_ok();
+}
+
+IoResult PosixFileSystem::remove_if_identity(const std::string& path, const FileIdentity& expected) {
+  FileIdentity current;
+  const IoResult found = identify(path, current);
+  if (!found.ok) return found;
+  if (!expected.valid || current.device != expected.device || current.inode != expected.inode ||
+      current.size != expected.size) {
+    return io_error(ResultCode::StateConflict);
+  }
+  return remove_file(path);
+}
+
+FileWriteLockResult PosixFileSystem::try_write_lock(const std::string& path) const {
+  FileWriteLockResult result;
+  if (path.empty()) {
+    result.code = ResultCode::StateConflict;
+    return result;
+  }
+  const std::string lock_path = path + ".lock";
+  const int fd = ::open(lock_path.c_str(), O_CREAT | O_RDWR, 0644);
+  if (fd < 0) {
+    result.code = from_errno(errno).code;
+    return result;
+  }
+  if (::flock(fd, LOCK_EX | LOCK_NB) != 0) {
+    const int error = errno;
+    ::close(fd);
+    result.code = (error == EWOULDBLOCK || error == EAGAIN) ? ResultCode::StateConflict
+                                                            : from_errno(error).code;
+    return result;
+  }
+  result.lock = std::make_unique<PosixWriteLock>(fd);
+  result.code = ResultCode::Ok;
+  return result;
 }
 
 }  // namespace pixcake

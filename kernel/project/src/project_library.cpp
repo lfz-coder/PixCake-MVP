@@ -20,29 +20,20 @@ bool allowed_color(const std::string& color) {
          color == kColorBlue || color == kColorPurple;
 }
 
-ProjectResult write_marks(ProjectStore& store, const std::vector<std::int64_t>& photo_ids,
-                          const std::function<ResultCode(std::int64_t)>& update) {
+ProjectResult write_marks_batch(ProjectStore& store, const std::vector<std::int64_t>& photo_ids,
+                                const std::function<ResultCode(const std::vector<std::int64_t>&)>& update) {
   ProjectResult result;
-  if (photo_ids.empty()) {
-    result.code = ResultCode::StateConflict;
-    return result;
-  }
+  if (photo_ids.empty()) { result.code = ResultCode::StateConflict; return result; }
   result.code = store.in_transaction([&] {
-    for (const std::int64_t id : photo_ids) {
-      std::optional<PhotoRow> photo;
-      const ResultCode loaded = store.load_photo(id, photo);
-      if (loaded != ResultCode::Ok) {
-        return loaded;
-      }
-      if (!photo.has_value()) {
-        return ResultCode::StateConflict;
-      }
-      const ResultCode wrote = update(id);
-      if (wrote != ResultCode::Ok) {
-        return wrote;
-      }
+    std::vector<PhotoRow> rows;
+    const ResultCode listed = store.list_photos(std::nullopt, rows);
+    if (listed != ResultCode::Ok) return listed;
+    for (const auto id : photo_ids) {
+      bool found = false;
+      for (const auto& row : rows) if (row.id == id) { found = true; break; }
+      if (!found) return ResultCode::StateConflict;
     }
-    return ResultCode::Ok;
+    return update(photo_ids);
   });
   return result;
 }
@@ -532,7 +523,6 @@ ProjectResult ProjectLibrary::delete_source_file(std::int64_t photo_id) {
   if (!photo.has_value()) {
     return failed(ResultCode::StateConflict);
   }
-  const ResultCode removed = deleter_.remove_source(photo->absolute_path);
   std::optional<TrashRow> existing;
   const ResultCode trash = store_.load_trash(kTrashPhoto, photo_id, existing);
   if (trash != ResultCode::Ok) {
@@ -541,24 +531,35 @@ ProjectResult ProjectLibrary::delete_source_file(std::int64_t photo_id) {
   const std::int64_t now = clock_.unix_seconds();
   const bool already_trashed = existing.has_value();
 
+  {
+    const ResultCode intent = store_.in_transaction([this, photo_id, now, already_trashed] {
+      if (!already_trashed) {
+        const ResultCode inserted = store_.insert_trash(kTrashPhoto, photo_id, now);
+        if (inserted != ResultCode::Ok) return inserted;
+      }
+      const ResultCode pending = store_.update_photo_presence(photo_id, kPresenceDeletePending);
+      if (pending != ResultCode::Ok) return pending;
+      return already_trashed ? ResultCode::Ok : trash_new_copies(store_, photo_id, now);
+    });
+    if (intent != ResultCode::Ok) return failed(intent);
+  }
+
+  const ResultCode removed = deleter_.remove_source(photo->absolute_path, photo->source_identity);
+
   if (removed != ResultCode::Ok && removed != ResultCode::PermissionDenied &&
       removed != ResultCode::SourceMissing) {
     return failed(removed);
   }
 
-  const ResultCode wrote = store_.in_transaction([this, photo_id, now, already_trashed, removed] {
-    if (removed != ResultCode::PermissionDenied) {
+  const ResultCode wrote = store_.in_transaction([this, photo_id, already_trashed, removed] {
+    if (removed == ResultCode::Ok || removed == ResultCode::SourceMissing) {
       const ResultCode presence = store_.update_photo_presence(photo_id, kPresenceMissing);
       if (presence != ResultCode::Ok) {
         return presence;
       }
     }
     if (!already_trashed) {
-      const ResultCode inserted = store_.insert_trash(kTrashPhoto, photo_id, now);
-      if (inserted != ResultCode::Ok) {
-        return inserted;
-      }
-      return trash_new_copies(store_, photo_id, now);
+      return ResultCode::Ok;
     }
     return ResultCode::Ok;
   });
@@ -625,6 +626,10 @@ ProjectResult ProjectLibrary::add_photo(std::int64_t project_id, std::string abs
   draft.file_name = std::move(file_name);
   draft.access_credential = std::move(access_credential);
   draft.presence = kPresenceEditable;
+  const IoResult identity = files_.identify(draft.absolute_path, draft.source_identity);
+  if (!identity.ok && !identity.not_found) {
+    return failed(identity.code);
+  }
   ProjectResult result;
   result.code = store_.insert_photo(draft, result.id);
   return result;
@@ -709,8 +714,8 @@ ProjectResult ProjectLibrary::set_photo_ratings(std::vector<std::int64_t> photo_
     result.code = ResultCode::StateConflict;
     return result;
   }
-  return write_marks(store_, photo_ids, [this, rating](std::int64_t id) {
-    return store_.update_photo_rating(id, rating);
+  return write_marks_batch(store_, photo_ids, [this, rating](const std::vector<std::int64_t>& ids) {
+    return store_.update_photo_ratings(ids, rating);
   });
 }
 
@@ -720,8 +725,8 @@ ProjectResult ProjectLibrary::set_photo_flags(std::vector<std::int64_t> photo_id
     result.code = ResultCode::StateConflict;
     return result;
   }
-  return write_marks(store_, photo_ids, [this, flag = std::move(flag)](std::int64_t id) {
-    return store_.update_photo_flag(id, flag);
+  return write_marks_batch(store_, photo_ids, [this, flag = std::move(flag)](const std::vector<std::int64_t>& ids) {
+    return store_.update_photo_flags(ids, flag);
   });
 }
 
@@ -731,8 +736,8 @@ ProjectResult ProjectLibrary::set_photo_colors(std::vector<std::int64_t> photo_i
     result.code = ResultCode::StateConflict;
     return result;
   }
-  return write_marks(store_, photo_ids, [this, color = std::move(color)](std::int64_t id) {
-    return store_.update_photo_color(id, color);
+  return write_marks_batch(store_, photo_ids, [this, color = std::move(color)](const std::vector<std::int64_t>& ids) {
+    return store_.update_photo_colors(ids, color);
   });
 }
 
