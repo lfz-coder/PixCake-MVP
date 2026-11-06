@@ -5,6 +5,15 @@ find_package(Qt6Svg REQUIRED PATHS
 
 add_executable(pixcake_app_shell
   main.cpp
+  shell_window.cpp
+  shell_controller.cpp
+  page_kit.cpp
+  shell_icons.cpp
+  login_page.cpp
+  home_page.cpp
+  library_page.cpp
+  refine_page.cpp
+  creative_page.cpp
   pixcake_widgets.hpp
 )
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/login-hero.png

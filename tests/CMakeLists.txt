@@ -17,9 +17,6 @@ target_include_directories(test_layer_document PRIVATE ${CMAKE_SOURCE_DIR}/tests
 target_link_libraries(test_layer_document PRIVATE pixcake_layerdoc pixcake_editdoc pixcake_warnings)
 add_test(NAME test_layer_document COMMAND test_layer_document)
 
-add_executable(test_workspace_display kernel/workspace/test_workspace_display.cpp)
-target_link_libraries(test_workspace_display PRIVATE pixcake_workspace pixcake_warnings)
-add_test(NAME test_workspace_display COMMAND test_workspace_display)
 
 add_executable(test_shell_display ui/test_shell_display.cpp)
 target_link_libraries(test_shell_display PRIVATE pixcake_ui_shell pixcake_warnings)
@@ -233,6 +230,11 @@ add_executable(test_generated apps/test_generated.cpp)
 target_include_directories(test_generated PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 target_link_libraries(test_generated PRIVATE pixcake_generated_service pixcake_storage pixcake_warnings)
 add_test(NAME test_generated COMMAND test_generated)
+
+add_executable(test_shell_sources apps/test_shell_sources.cpp)
+target_compile_definitions(test_shell_sources PRIVATE PIXCAKE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+target_link_libraries(test_shell_sources PRIVATE pixcake_warnings)
+add_test(NAME test_shell_sources COMMAND test_shell_sources)
 
 if(APPLE)
   add_executable(test_mac_source_access platform/test_mac_source_access.cpp)

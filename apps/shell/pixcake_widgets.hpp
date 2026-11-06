@@ -15,7 +15,14 @@
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 
+#include "pixcake/ui/shell/page_copy.hpp"
+
+#include <string_view>
+
 namespace pixcake::shell {
+
+// 页面文字只来自 ui/shell 的文案表（Q-11）。
+inline QString copyText(std::string_view key) { return QString::fromStdString(ui::shell::page_text(key)); }
 
 // Shared shell widgets keep page-specific code focused on composition while
 // preserving stable names for AX and visual regression checks.
@@ -109,8 +116,7 @@ inline QLabel* pendingIcon(QWidget* parent = nullptr, int size = 28,
                            const QString& accessible = QString()) {
   auto* icon = new QLabel(parent);
   icon->setObjectName(QStringLiteral("pending-icon"));
-  icon->setAccessibleName(accessible.isEmpty() ? QStringLiteral("待补充官方图标")
-                                               : accessible);
+  icon->setAccessibleName(accessible.isEmpty() ? copyText("icon.pending") : accessible);
   icon->setFixedSize(size, size);
   return icon;
 }
@@ -131,7 +137,7 @@ class PixCakeHistogram final : public QFrame {
  public:
   explicit PixCakeHistogram(QWidget* parent = nullptr) : QFrame(parent) {
     setObjectName(QStringLiteral("refine-histogram"));
-    setAccessibleName(QStringLiteral("直方图"));
+    setAccessibleName(copyText("widget.histogram"));
   }
 
  protected:
@@ -165,8 +171,7 @@ inline QLabel* assetIcon(const QString& relative, int size, const QString& acces
   const auto pixmap = loadAssetPixmap(relative, size);
   if (pixmap.isNull()) {
     return pendingIcon(parent, size,
-                       accessible.isEmpty() ? QString()
-                                            : accessible + QStringLiteral("待补充"));
+                       accessible.isEmpty() ? QString() : accessible + copyText("icon.pending_suffix"));
   }
   auto* icon = new QLabel(parent);
   icon->setObjectName(QStringLiteral("shell-icon"));
@@ -184,81 +189,6 @@ inline void applyAssetIcon(QPushButton* button, const QString& relative, int siz
   icon.addPixmap(pixmap, QIcon::Disabled);
   button->setIcon(icon);
   button->setIconSize(QSize(size, size));
-}
-
-inline QString toolAssetPath(const QString& label) {
-  if (label == QStringLiteral("显示比例调整")) return QStringLiteral("workspace-tools/zoom-display.svg");
-  if (label == QStringLiteral("抓手")) return QStringLiteral("workspace-tools/hand.svg");
-  if (label == QStringLiteral("祛边")) return QStringLiteral("workspace-tools/edge-remove.svg");
-  if (label == QStringLiteral("参考线")) return QStringLiteral("workspace-tools/guides.svg");
-  if (label == QStringLiteral("液化")) return QStringLiteral("workspace-tools/liquify.svg");
-  if (label == QStringLiteral("污点修复") || label == QStringLiteral("污点修复画笔"))
-    return QStringLiteral("workspace-tools/spot-heal.svg");
-  if (label == QStringLiteral("修补") || label == QStringLiteral("修补工具"))
-    return QStringLiteral("workspace-tools/patch.svg");
-  if (label == QStringLiteral("仿制图章")) return QStringLiteral("workspace-tools/clone-stamp.svg");
-  if (label == QStringLiteral("智能消除")) return QStringLiteral("workspace-tools/smart-remove.svg");
-  if (label == QStringLiteral("AI点修")) return QStringLiteral("workspace-tools/ai-spot.svg");
-  if (label == QStringLiteral("重置效果")) return QStringLiteral("workspace-tools/reset.svg");
-  if (label == QStringLiteral("预设")) return QStringLiteral("workspace-tools/preset.svg");
-  if (label == QStringLiteral("更改屏幕模式")) return QStringLiteral("workspace-tools/screen-mode.svg");
-  if (label == QStringLiteral("移动图层")) return QStringLiteral("workspace-tools/move-layer.svg");
-  if (label == QStringLiteral("缩放工具")) return QStringLiteral("workspace-tools/zoom-tool.svg");
-  if (label == QStringLiteral("矩形/椭圆选区")) return QStringLiteral("workspace-tools/marquee.svg");
-  if (label == QStringLiteral("套索/选区画笔")) return QStringLiteral("workspace-tools/lasso.svg");
-  if (label == QStringLiteral("裁切")) return QStringLiteral("workspace-tools/crop.svg");
-  return {};
-}
-
-inline QString globalAssetPath(const QString& label) {
-  if (label == QStringLiteral("搜索")) return QStringLiteral("workspace-global/search.svg");
-  if (label == QStringLiteral("会员续费")) return QStringLiteral("workspace-global/membership.svg");
-  if (label == QStringLiteral("技术支持")) return QStringLiteral("workspace-global/support.svg");
-  if (label == QStringLiteral("个人中心")) return QStringLiteral("workspace-global/account.svg");
-  if (label == QStringLiteral("消息中心")) return QStringLiteral("workspace-global/messages.svg");
-  if (label == QStringLiteral("传输列表")) return QStringLiteral("workspace-global/transfer.svg");
-  if (label == QStringLiteral("导出列表")) return QStringLiteral("workspace-global/export-list.svg");
-  if (label == QStringLiteral("导出")) return QStringLiteral("workspace-global/export.svg");
-  if (label == QStringLiteral("像素助手")) return QStringLiteral("workspace-global/assistant.svg");
-  if (label == QStringLiteral("AI工具")) return QStringLiteral("workspace-global/ai-tools.svg");
-  if (label == QStringLiteral("历史")) return QStringLiteral("workspace-global/history.svg");
-  if (label == QStringLiteral("批量")) return QStringLiteral("workspace-global/batch.svg");
-  if (label == QStringLiteral("帮助")) return QStringLiteral("help.svg");
-  if (label == QStringLiteral("商家账号")) return QStringLiteral("merchant.svg");
-  if (label == QStringLiteral("返回") || label == QStringLiteral("首页"))
-    return QStringLiteral("workspace-global/home.svg");
-  if (label == QStringLiteral("筛选")) return QStringLiteral("workspace-global/filter.svg");
-  if (label == QStringLiteral("排序")) return QStringLiteral("workspace-global/sort.svg");
-  if (label == QStringLiteral("星标")) return QStringLiteral("workspace-global/star.svg");
-  if (label == QStringLiteral("旗标")) return QStringLiteral("workspace-global/flag.svg");
-  if (label == QStringLiteral("色标")) return QStringLiteral("workspace-global/color-tag.svg");
-  if (label == QStringLiteral("网格视图")) return QStringLiteral("workspace-global/view-grid.svg");
-  if (label == QStringLiteral("单视图")) return QStringLiteral("workspace-global/view-single.svg");
-  if (label == QStringLiteral("筛选视图")) return QStringLiteral("workspace-global/view-filter.svg");
-  if (label == QStringLiteral("对比视图")) return QStringLiteral("workspace-global/view-compare.svg");
-  if (label == QStringLiteral("参考视图")) return QStringLiteral("workspace-global/view-reference.svg");
-  if (label == QStringLiteral("图库")) return QStringLiteral("workspace-global/tab-library.svg");
-  if (label == QStringLiteral("精修")) return QStringLiteral("workspace-global/tab-refine.svg");
-  if (label == QStringLiteral("创意")) return QStringLiteral("workspace-global/tab-creative.svg");
-  return {};
-}
-
-inline QString homeNavAssetPath(const QString& label) {
-  if (label == QStringLiteral("主页")) return QStringLiteral("home-nav/home.svg");
-  if (label == QStringLiteral("AI 工具箱")) return QStringLiteral("home-nav/ai-toolbox.svg");
-  if (label == QStringLiteral("本地项目")) return QStringLiteral("home-nav/local-projects.svg");
-  if (label == QStringLiteral("云空间")) return QStringLiteral("home-nav/cloud.svg");
-  if (label == QStringLiteral("工作流")) return QStringLiteral("home-nav/workflow.svg");
-  if (label == QStringLiteral("选片交付")) return QStringLiteral("home-nav/delivery.svg");
-  if (label == QStringLiteral("回收站")) return QStringLiteral("home-nav/trash.svg");
-  return {};
-}
-
-inline QString homeCardAssetPath(const QString& label) {
-  if (label == QStringLiteral("联机拍摄")) return QStringLiteral("home-capture.svg");
-  if (label == QStringLiteral("AI工具箱")) return QStringLiteral("home-ai-toolbox.svg");
-  if (label == QStringLiteral("像素助手")) return QStringLiteral("home-assistant.svg");
-  return {};
 }
 
 inline QStringList uploadedShellAssets() {

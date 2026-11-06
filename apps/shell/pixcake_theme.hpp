@@ -63,7 +63,8 @@ struct PixCakeTheme final {
       QPushButton#primary:disabled { background: #685a0c; color: #34300d; border-color: #685a0c; }
       QPushButton#icon-button { min-width: 34px; max-width: 34px; padding: 3px; }
       QPushButton#pill { border-radius: 14px; min-height: 26px; padding: 3px 12px; }
-      QPushButton#login-wechat, QPushButton#login-merchant { border-radius: 18px; min-height: 34px; padding: 3px 14px; background: #111111; border-color: #303030; }
+      QPushButton#login-wechat, QPushButton#login-merchant {
+        border-radius: 18px; min-height: 34px; padding: 3px 14px; background: #111111; border-color: #303030; }
       QPushButton#login-wechat:disabled, QPushButton#login-merchant:disabled { color: #8a8a8a; border-color: #303030; background: #111111; }
       QPushButton#top-action { min-height: 26px; padding: 3px 8px; border: none; background: transparent; }
       QPushButton#top-action:hover { background: #2a2a2a; border-radius: 4px; }

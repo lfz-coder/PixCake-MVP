@@ -1,5 +1,4 @@
 #include "pixcake/workspace/guide_copy.hpp"
-#include "pixcake/workspace/workspace_display.hpp"
 
 #include <cstdio>
 #include <string>
@@ -17,16 +16,6 @@ void expect(bool cond, const char* text, int line) {
 }
 
 #define EXPECT(cond) expect(static_cast<bool>(cond), #cond, __LINE__)
-
-const pixcake::DisplayRegion* find_region(const std::vector<pixcake::DisplayRegion>& regions,
-                                          const std::string& label) {
-  for (const auto& region : regions) {
-    if (region.label == label) {
-      return &region;
-    }
-  }
-  return nullptr;
-}
 
 }  // namespace
 
@@ -60,11 +49,7 @@ int main() {
   EXPECT(std::string(pixcake::transfer_list_shows()) == "查看上传及下载任务");
   EXPECT(std::string(pixcake::export_list_shows()) == "查看导出任务");
 
-  const auto regions = pixcake::WorkspaceDisplay::home().regions();
-  const pixcake::DisplayRegion* nav = find_region(regions, "导航栏");
-  const pixcake::DisplayRegion* common = find_region(regions, "常用功能");
-  EXPECT(nav != nullptr && nav->entries.size() == 7);
-  EXPECT(common != nullptr && common->entries.empty());
+  // 主页导航栏 7 项、常用功能为空：显示模型的核对移到 tests/ui/test_shell_display.cpp。
 
   EXPECT(std::string(pixcake::refine_export_target()) == "当前选中的图片");
   EXPECT(std::string(pixcake::refine_canvas_shows()) == "精修后的图片");

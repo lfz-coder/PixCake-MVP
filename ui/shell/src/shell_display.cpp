@@ -1,17 +1,26 @@
 #include "pixcake/ui/shell/shell_display.hpp"
 
+#include "pixcake/ui/shell/page_copy.hpp"
+
+#include <algorithm>
 #include <utility>
 
 namespace pixcake::ui::shell {
 namespace {
 
-RegionEntry entry(std::string id, std::string label) {
-  return RegionEntry{std::move(id), std::move(label)};
-}
-
-Region region(std::string id, std::string label, std::vector<RegionEntry> entries = {}, bool collapsible = false,
-              RegionPlacement placement = RegionPlacement::Center) {
-  return Region{std::move(id), std::move(label), collapsible, placement, std::move(entries)};
+// 区域名取 region.<编号>，条目取文案表里的一组；条目有手册叫法时用手册叫法。
+Region region(const std::string& id, RegionPlacement placement, std::string_view list = {}, bool collapsible = false) {
+  Region value;
+  value.id = id;
+  value.label = page_text("region." + id);
+  value.collapsible = collapsible;
+  value.placement = placement;
+  if (!list.empty()) {
+    for (const auto& entry : page_list(list)) {
+      value.entries.push_back(RegionEntry{entry.id, entry.guide.empty() ? entry.text : entry.guide});
+    }
+  }
+  return value;
 }
 
 }  // namespace
@@ -19,15 +28,15 @@ Region region(std::string id, std::string label, std::vector<RegionEntry> entrie
 const char* page_label(Page page) {
   switch (page) {
     case Page::Login:
-      return "登录页面";
+      return page_text("page.login").c_str();
     case Page::Home:
-      return "主页面";
+      return page_text("page.home").c_str();
     case Page::Library:
-      return "图库";
+      return page_text("page.library").c_str();
     case Page::Refine:
-      return "精修";
+      return page_text("page.refine").c_str();
     case Page::Creative:
-      return "创意";
+      return page_text("page.creative").c_str();
   }
   return "";
 }
@@ -84,7 +93,7 @@ bool ShellDisplay::in_project() const { return in_project_; }
 const std::vector<Region>& ShellDisplay::regions() const { return regions_; }
 
 WindowContract ShellDisplay::contract() const {
-  return WindowContract{"像素蛋糕", true, page_, in_project_, regions_};
+  return WindowContract{page_text("app.title"), true, page_, in_project_, regions_};
 }
 
 ResultCode ShellDisplay::open_project() {
@@ -120,95 +129,85 @@ ResultCode ShellDisplay::navigate(Page target) {
 }
 
 void ShellDisplay::rebuild_regions() {
-  if (page_ == Page::Login) {
-    regions_ = {
-        region("login-account", "账号输入框", {}, false, RegionPlacement::Center),
-        region("login-code", "验证码输入框", {entry("get-code", "获取验证码")}, false, RegionPlacement::Center),
-        region("login-methods", "登录方式切换",
-               {entry("sms", "手机验证码登录"), entry("wechat", "微信登录"), entry("merchant", "商家账号登录")}, false, RegionPlacement::Center),
-        region("login-help", "帮助", {entry("support", "联系售后"), entry("shortcuts", "查看快捷键")}, false, RegionPlacement::Bottom),
-    };
-    return;
+  using P = RegionPlacement;
+  switch (page_) {
+    case Page::Login:
+      regions_ = {region("login-account", P::Center), region("login-code", P::Center, "login-code"),
+                  region("login-methods", P::Center, "login-methods"), region("login-help", P::Bottom, "login-help")};
+      return;
+    case Page::Home:
+      regions_ = {region("home-nav", P::Left, "home-nav"), region("home-import", P::Center),
+                  region("home-search", P::Top),          region("home-global", P::Top, "global"),
+                  region("home-common", P::Center),       region("home-quick", P::Center),
+                  region("home-projects", P::Bottom)};
+      return;
+    case Page::Library:
+      regions_ = {region("library-nav", P::Top, "library-nav"),
+                  region("library-status", P::Left, "library-status"),
+                  region("library-effect", P::Left),
+                  region("library-thumbs", P::Bottom, "library-thumbs"),
+                  region("library-delete", P::Left),
+                  region("library-side", P::Right, "library-side"),
+                  region("library-tools", P::Bottom, "library-tools"),
+                  region("library-views", P::Bottom, "library-views")};
+      return;
+    case Page::Creative:
+      regions_ = {region("creative-tools", P::Center, "creative-tools", true), region("creative-canvas", P::Center),
+                  region("creative-thumbs", P::Bottom, "library-tools"),       region("creative-toolbox", P::Right),
+                  region("creative-side", P::Center, "creative-side"),         region("creative-layers", P::Right)};
+      return;
+    case Page::Refine:
+      regions_ = {region("refine-top", P::Top, "refine-top"),         region("refine-switch", P::Top, "page-switch"),
+                  region("refine-global", P::Top, "refine-global"),   region("refine-toolbar", P::Left, "refine-tools"),
+                  region("refine-canvas", P::Center, "refine-canvas"), region("refine-thumbs", P::Bottom, "refine-thumbs"),
+                  region("refine-modules", P::Right)};
+      return;
   }
+}
 
-  if (page_ == Page::Home) {
-    regions_ = {
-        region("home-nav", "导航栏",
-               {entry("home", "主页"), entry("toolbox", "AI工具箱"), entry("local", "本地项目"),
-                entry("cloud", "云空间"), entry("workflow", "工作流"), entry("delivery", "选片交付"),
-                entry("trash", "回收站")}, false, RegionPlacement::Left),
-        region("home-import", "导入照片创建新项目", {}, false, RegionPlacement::Center),
-        region("home-search", "搜索", {}, false, RegionPlacement::Top),
-        region("home-global", "全局功能区",
-              {entry("support", "技术支持"), entry("account", "个人中心"), entry("messages", "消息中心"),
-              entry("transfers", "传输列表"), entry("export-list", "导出列表")}, false, RegionPlacement::Top),
-        region("home-common", "常用功能", {}, false, RegionPlacement::Center),
-        region("home-quick", "快捷功能", {}, false, RegionPlacement::Center),
-        region("home-projects", "项目列表", {}, false, RegionPlacement::Bottom),
-    };
-    return;
+const std::string& ShellDisplay::library_view() const { return library_view_; }
+std::optional<int> ShellDisplay::grid_per_row() const { return grid_per_row_; }
+std::optional<bool> ShellDisplay::full_effect() const { return full_effect_; }
+
+std::optional<bool> ShellDisplay::shown(const std::string& id) const {
+  if (id == "show-raw") return show_raw_;
+  if (id == "show-edit") return show_edit_;
+  if (id == "show-export") return show_export_;
+  return std::nullopt;
+}
+
+ResultCode ShellDisplay::set_library_view(const std::string& id) {
+  if (page_ != Page::Library || (id != "grid" && id != "single" && id != "filter-view")) {
+    return ResultCode::StateConflict;
   }
+  library_view_ = id;
+  return ResultCode::Ok;
+}
 
-  if (page_ == Page::Library) {
-    regions_ = {
-        region("library-nav", "项目内导航", {entry("home", "首页"), entry("search", "搜索"), entry("library", "图库"),
-                                                entry("refine", "精修"), entry("creative", "创意")}, false, RegionPlacement::Top),
-        region("library-status", "显示状态",
-               {entry("show-raw", "显示RAW格式"), entry("show-edit", "显示修图状态"),
-                entry("show-export", "显示导出状态")}, false, RegionPlacement::Left),
-        region("library-effect", "全效果模式", {}, false, RegionPlacement::Left),
-        region("library-thumbs", "缩略图区",
-               {entry("raw", "RAW图"), entry("exported", "已导出"), entry("edited", "已编辑"),
-                entry("flag", "旗标"), entry("star", "星标"), entry("color", "色标")}, false, RegionPlacement::Bottom),
-        region("library-delete", "批量删除", {}, false, RegionPlacement::Left),
-        region("library-side", "侧边栏", {entry("cull", "AI挑图"), entry("preset", "预设"), entry("meta", "元数据")}, false, RegionPlacement::Right),
-        region("library-tools", "导入新图片/筛选/排序",
-               {entry("import", "导入新图片"), entry("filter", "筛选"), entry("sort", "排序")}, false, RegionPlacement::Bottom),
-        region("library-views", "视图切换", {entry("grid", "网格视图"), entry("single", "单视图"),
-                                               entry("filter-view", "筛选视图")}, false, RegionPlacement::Bottom),
-    };
-    return;
+ResultCode ShellDisplay::set_grid_per_row(int count) {
+  if (page_ != Page::Library || library_view_ != "grid") return ResultCode::StateConflict;
+  grid_per_row_ = std::max(1, std::min(7, count));
+  return ResultCode::Ok;
+}
+
+ResultCode ShellDisplay::set_shown(const std::string& id, bool on) {
+  if (page_ != Page::Library) return ResultCode::StateConflict;
+  if (id == "show-raw") {
+    show_raw_ = on;
+  } else if (id == "show-edit") {
+    show_edit_ = on;
+  } else if (id == "show-export") {
+    show_export_ = on;
+  } else {
+    return ResultCode::StateConflict;
   }
+  return ResultCode::Ok;
+}
 
-  if (page_ == Page::Creative) {
-    regions_ = {
-        region("creative-tools", "手动工具栏",
-               {entry("zoom", "显示比例调整"), entry("screen", "更改屏幕模式"), entry("hand", "抓手"),
-                entry("move", "移动图层"), entry("scale", "缩放工具"), entry("liquify", "液化"),
-                entry("spot", "污点修复画笔"), entry("patch", "修补工具"), entry("clone", "仿制图章"),
-                entry("marquee", "矩形选区工具&椭圆选区工具"), entry("lasso", "套索工具&选区画笔工具"),
-                entry("crop", "裁切")}, true),
-        region("creative-canvas", "画布", {}, false, RegionPlacement::Center),
-        region("creative-thumbs", "缩略图区",
-               {entry("import", "导入新图片"), entry("filter", "筛选"), entry("sort", "排序")}, false, RegionPlacement::Bottom),
-        region("creative-toolbox", "AI工具箱", {}, false, RegionPlacement::Right),
-        region("creative-side", "侧边栏",
-               {entry("ai", "AI工具"), entry("history", "历史记录"), entry("batch", "批量设计"),
-                entry("help", "帮助"), entry("guide", "新手引导"), entry("feedback", "反馈")}),
-        region("creative-layers", "图层面板", {}, false, RegionPlacement::Right),
-    };
-    return;
-  }
-
-  regions_ = {
-      region("refine-top", "返回主页面、搜索和像素助手",
-             {entry("back", "返回主页面"), entry("search", "搜索"), entry("assistant", "像素助手")}, false, RegionPlacement::Top),
-      region("refine-switch", "图库/精修/创意页面切换",
-             {entry("library", "图库"), entry("refine", "精修"), entry("creative", "创意")}, false, RegionPlacement::Top),
-      region("refine-global", "全局功能区",
-             {entry("support", "技术支持"), entry("account", "个人中心"), entry("messages", "消息中心"),
-              entry("transfers", "传输列表"), entry("export-list", "导出列表"), entry("export", "导出")}, false, RegionPlacement::Top),
-      region("refine-toolbar", "工具栏",
-             {entry("zoom", "显示比例调整"), entry("hand", "抓手"), entry("fringe", "祛边"), entry("guides", "参考线"),
-              entry("liquify", "液化"), entry("spot", "污点修复"), entry("patch", "修补"), entry("clone", "仿制图章"),
-              entry("remove", "智能消除"), entry("point", "AI点修"), entry("reset", "重置效果"), entry("preset", "预设")}, false, RegionPlacement::Left),
-      region("refine-canvas", "画布", {entry("compare", "查看对比")}, false, RegionPlacement::Center),
-      region("refine-thumbs", "缩略图区",
-             {entry("add", "+"), entry("filter", "筛选"), entry("sort", "排序"), entry("cull", "去挑图"),
-              entry("star", "星标"), entry("flag", "旗标"), entry("color", "色标"), entry("single", "单视图"),
-              entry("compare-view", "对比视图"), entry("reference", "参考视图")}, false, RegionPlacement::Bottom),
-      region("refine-modules", "功能区", {}, false, RegionPlacement::Right),
-  };
+ResultCode ShellDisplay::set_full_effect(bool on) {
+  if (page_ != Page::Library) return ResultCode::StateConflict;
+  full_effect_ = on;
+  return ResultCode::Ok;
 }
 
 }  // namespace pixcake::ui::shell

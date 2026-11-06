@@ -1,7 +1,9 @@
+#include "pixcake/ui/shell/page_copy.hpp"
 #include "pixcake/ui/shell/shell_display.hpp"
 
 #include <cstdio>
 #include <string>
+#include <vector>
 
 namespace {
 int failures = 0;
@@ -123,7 +125,153 @@ void test_o13_notice_stays_on_the_page() {
   EXPECT(display.notices().empty());
 }
 
+void expect_region(const std::vector<pixcake::ui::shell::Region>& regions, const std::string& id,
+                   const std::string& label, const std::vector<std::string>& entries) {
+  const auto* region = find_region_by_id(regions, id);
+  EXPECT(region != nullptr);
+  if (region == nullptr) return;
+  if (region->label != label) std::fprintf(stderr, "  region %s label %s\n", id.c_str(), region->label.c_str());
+  EXPECT(region->label == label);
+  EXPECT(region->entries.size() == entries.size());
+  for (std::size_t index = 0; index < entries.size() && index < region->entries.size(); ++index) {
+    EXPECT(region->entries[index].label == entries[index]);
+  }
+}
+
+void expect_ids(const std::vector<pixcake::ui::shell::Region>& regions, const std::vector<std::string>& ids) {
+  EXPECT(regions.size() == ids.size());
+  for (std::size_t index = 0; index < ids.size() && index < regions.size(); ++index) {
+    EXPECT(regions[index].id == ids[index]);
+  }
+}
+
+// Q-11：显示模型的区域名与条目来自页面文案表；原 kernel/workspace 的第二份显示模型已删除，
+// 条目内容在这里逐条核对（官方手册的叫法）。
+void test_q11_regions_take_copy_from_the_page_table() {
+  using namespace pixcake::ui::shell;
+  EXPECT(std::string(page_label(Page::Login)) == "登录页面");
+  EXPECT(std::string(page_label(Page::Home)) == "主页面");
+  EXPECT(std::string(page_label(Page::Library)) == "图库");
+  EXPECT(std::string(page_label(Page::Refine)) == "精修");
+  EXPECT(std::string(page_label(Page::Creative)) == "创意");
+  EXPECT(ShellDisplay::logged_out().contract().title == "像素蛋糕");
+
+  const auto login = ShellDisplay::logged_out().regions();
+  expect_ids(login, {"login-account", "login-code", "login-methods", "login-help"});
+  expect_region(login, "login-account", "账号输入框", {});
+  expect_region(login, "login-code", "验证码输入框", {"获取验证码"});
+  expect_region(login, "login-methods", "登录方式切换", {"手机验证码登录", "微信登录", "商家账号登录"});
+  expect_region(login, "login-help", "帮助", {"联系售后", "查看快捷键"});
+
+  SignedIn session;
+  const auto home = ShellDisplay::for_session(session).regions();
+  expect_ids(home, {"home-nav", "home-import", "home-search", "home-global", "home-common", "home-quick",
+                    "home-projects"});
+  expect_region(home, "home-nav", "导航栏", {"主页", "AI工具箱", "本地项目", "云空间", "工作流", "选片交付", "回收站"});
+  expect_region(home, "home-import", "导入照片创建新项目", {});
+  expect_region(home, "home-search", "搜索", {});
+  expect_region(home, "home-global", "全局功能区", {"技术支持", "个人中心", "消息中心", "传输列表", "导出列表"});
+  expect_region(home, "home-common", "常用功能", {});
+  expect_region(home, "home-quick", "快捷功能", {});
+  expect_region(home, "home-projects", "项目列表", {});
+
+  auto project = ShellDisplay::for_session(session);
+  EXPECT(project.open_project() == pixcake::ResultCode::Ok);
+  const auto refine = project.regions();
+  expect_ids(refine, {"refine-top", "refine-switch", "refine-global", "refine-toolbar", "refine-canvas", "refine-thumbs",
+                      "refine-modules"});
+  expect_region(refine, "refine-top", "返回主页面、搜索和像素助手", {"返回主页面", "搜索", "像素助手"});
+  expect_region(refine, "refine-switch", "图库/精修/创意页面切换", {"图库", "精修", "创意"});
+  expect_region(refine, "refine-global", "全局功能区",
+                {"技术支持", "个人中心", "消息中心", "传输列表", "导出列表", "导出"});
+  expect_region(refine, "refine-toolbar", "工具栏",
+                {"显示比例调整", "抓手", "祛边", "参考线", "液化", "污点修复", "修补", "仿制图章", "智能消除", "AI点修",
+                 "重置效果", "预设"});
+  expect_region(refine, "refine-canvas", "画布", {"查看对比"});
+  expect_region(refine, "refine-thumbs", "缩略图区",
+                {"+", "筛选", "排序", "去挑图", "星标", "旗标", "色标", "单视图", "对比视图", "参考视图"});
+  expect_region(refine, "refine-modules", "功能区", {});
+
+  EXPECT(project.navigate(Page::Library) == pixcake::ResultCode::Ok);
+  const auto library = project.regions();
+  expect_ids(library, {"library-nav", "library-status", "library-effect", "library-thumbs", "library-delete",
+                       "library-side", "library-tools", "library-views"});
+  expect_region(library, "library-nav", "项目内导航", {"首页", "搜索", "图库", "精修", "创意"});
+  expect_region(library, "library-status", "显示状态", {"显示RAW格式", "显示修图状态", "显示导出状态"});
+  expect_region(library, "library-effect", "全效果模式", {});
+  expect_region(library, "library-thumbs", "缩略图区", {"RAW图", "已导出", "已编辑", "旗标", "星标", "色标"});
+  expect_region(library, "library-delete", "批量删除", {});
+  expect_region(library, "library-side", "侧边栏", {"AI挑图", "预设", "元数据"});
+  expect_region(library, "library-tools", "导入新图片/筛选/排序", {"导入新图片", "筛选", "排序"});
+  expect_region(library, "library-views", "视图切换", {"网格视图", "单视图", "筛选视图"});
+
+  EXPECT(project.navigate(Page::Creative) == pixcake::ResultCode::Ok);
+  const auto creative = project.regions();
+  expect_ids(creative, {"creative-tools", "creative-canvas", "creative-thumbs", "creative-toolbox", "creative-side",
+                        "creative-layers"});
+  expect_region(creative, "creative-tools", "手动工具栏",
+                {"显示比例调整", "更改屏幕模式", "抓手", "移动图层", "缩放工具", "液化", "污点修复画笔", "修补工具",
+                 "仿制图章", "矩形选区工具&椭圆选区工具", "套索工具&选区画笔工具", "裁切"});
+  const auto* tools = find_region_by_id(creative, "creative-tools");
+  EXPECT(tools != nullptr && tools->collapsible);
+  expect_region(creative, "creative-canvas", "画布", {});
+  expect_region(creative, "creative-thumbs", "缩略图区", {"导入新图片", "筛选", "排序"});
+  expect_region(creative, "creative-toolbox", "AI工具箱", {});
+  expect_region(creative, "creative-side", "侧边栏", {"AI工具", "历史记录", "批量设计", "帮助", "新手引导", "反馈"});
+  expect_region(creative, "creative-layers", "图层面板", {});
+
+  // 个人中心的五个动作（需求第 226 行）。
+  std::vector<std::string> actions;
+  for (const auto& entry : page_list("account-actions")) actions.push_back(entry.text);
+  EXPECT(actions == std::vector<std::string>({"查看剩余张数", "查看已购买套餐", "当前软件版本", "升级软件", "退出登录"}));
+  EXPECT(missing_page_copy().empty());
+}
+
+// 图库的显示控制（从原 kernel/workspace 显示模型移来）：只在图库页可改；网格每行 1 到 7 张；
+// 只有网格视图能改每行张数；三种显示状态默认都开。
+void test_library_controls() {
+  using namespace pixcake::ui::shell;
+  SignedIn session;
+  auto home = ShellDisplay::for_session(session);
+  EXPECT(home.set_library_view("grid") == pixcake::ResultCode::StateConflict);
+  EXPECT(home.set_grid_per_row(4) == pixcake::ResultCode::StateConflict);
+  EXPECT(home.set_shown("show-raw", true) == pixcake::ResultCode::StateConflict);
+  EXPECT(home.set_full_effect(true) == pixcake::ResultCode::StateConflict);
+
+  auto library = ShellDisplay::for_session(session);
+  EXPECT(library.open_project() == pixcake::ResultCode::Ok);
+  EXPECT(library.navigate(Page::Library) == pixcake::ResultCode::Ok);
+  EXPECT(library.library_view() == "grid");
+  EXPECT(!library.grid_per_row().has_value());
+  EXPECT(library.shown("show-raw") == true);
+  EXPECT(library.shown("show-edit") == true);
+  EXPECT(library.shown("show-export") == true);
+  EXPECT(!library.full_effect().has_value());
+  EXPECT(library.set_grid_per_row(0) == pixcake::ResultCode::Ok);
+  EXPECT(library.grid_per_row() == 1);
+  EXPECT(library.set_grid_per_row(8) == pixcake::ResultCode::Ok);
+  EXPECT(library.grid_per_row() == 7);
+  EXPECT(library.set_grid_per_row(1) == pixcake::ResultCode::Ok);
+  EXPECT(library.set_library_view("filter-view") == pixcake::ResultCode::Ok);
+  EXPECT(library.set_grid_per_row(3) == pixcake::ResultCode::StateConflict);
+  EXPECT(library.grid_per_row() == 1);
+  EXPECT(library.set_library_view("no-such-view") == pixcake::ResultCode::StateConflict);
+  EXPECT(library.library_view() == "filter-view");
+  EXPECT(library.set_library_view("grid") == pixcake::ResultCode::Ok);
+  EXPECT(library.set_shown("show-export", false) == pixcake::ResultCode::Ok);
+  EXPECT(library.shown("show-export") == false);
+  EXPECT(library.set_shown("star", true) == pixcake::ResultCode::StateConflict);
+  EXPECT(!library.shown("star").has_value());
+  EXPECT(library.set_full_effect(false) == pixcake::ResultCode::Ok);
+  EXPECT(library.full_effect() == false);
+  EXPECT(library.navigate(Page::Refine) == pixcake::ResultCode::Ok);
+  EXPECT(library.set_full_effect(true) == pixcake::ResultCode::StateConflict);
+  EXPECT(library.full_effect() == false);
+}
+
 int main() {
+  test_q11_regions_take_copy_from_the_page_table();
+  test_library_controls();
   test_o13_notice_stays_on_the_page();
   test_s25_session_decides_the_page();
   EXPECT(std::string(pixcake::ui::shell::page_label(pixcake::ui::shell::Page::Login)) == "登录页面");

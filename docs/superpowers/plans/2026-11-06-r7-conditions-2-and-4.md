@@ -40,7 +40,7 @@
 - [x] **Task 4（S-25）**：命令入口与项目、导出、生成、账本的写操作要求已登录会话（接口 `SessionGuard`，由 `services/account` 实现）；未登录返回 `NotSignedIn`。壳层：`--page` 只在 `PIXCAKE_DEV_PAGES` 构建可用；发布构建由会话决定首页（需求 79、103）。测试 `test_s25_signed_out_commands_rejected`、`test_s25_restored_session_enters_home`、门禁检查发布构建没有 `--page`。
 - [x] **Task 5（S-10）**：原图访问凭据。`kernel/project` 只接受带书签的绝对路径；`SourceAccess` 接口解析书签（失效、过期、路径变化），`platform/macos` 用安全范围书签实现，内核测试用替身。书签失效标“原文件缺失”，参数文档保留（需求 118）。测试 `test_s10_admission_requires_bookmark`、`test_s10_stale_bookmark_marks_missing_and_keeps_document`、`test_s10_resolved_path_change_updates_record`。
 - [x] **Task 6（O-13–O-15）**：结果呈现链路。内核 `kernel/support` 增加 `UserNotice`（结果码 + 场景 → 文案 + 停留页面）；登录流程 `services/account/LoginFlow`（替身远端）区分验证码错误、过期、未收到（可重发）、断网，停留登录页（需求 897、223）；导入逐张结果（O-14）；原图缺失、文档恢复为空、能力需要更新三态分开（O-15）。壳层显示提示。测试 `test_o13_*`、`test_o14_import_reports_each_file`、`test_o15_three_states_distinct`。
-- [ ] **Task 7（Q-11、Q-12）**：拆 `apps/shell/main.cpp`：每页一个文件（登录、主页、图库、精修、创意），控件构建与文档修改分开（页面类只画，动作经控制器调用命令入口）；页面文字单一来源（`ui/shell` 的文案表，壳层与 `kernel/workspace` 不再各写一份）；没有超过 160 字符的行。测试：门禁统计 `apps/shell` 行宽；`test_q11_page_copy_single_source`（同一文案只在文案表出现）。
+- [x] **Task 7（Q-11、Q-12）**：拆 `apps/shell/main.cpp`：每页一个文件（登录、主页、图库、精修、创意），控件构建与文档修改分开（页面类只画，动作经控制器调用命令入口）；页面文字单一来源（`ui/shell` 的文案表，壳层与 `kernel/workspace` 不再各写一份）；没有超过 160 字符的行。测试：门禁统计 `apps/shell` 行宽；`test_q11_page_copy_single_source`（同一文案只在文案表出现）。
 - [ ] **Task 8（T-03）**：替身场景：第三方坏返回、超时、生成进程崩溃（与 Task 3、6 共用替身）。测试 `test_t03_*`。
 - [ ] **Task 9（T-02、T-09）**：第 2 关审查范围内每条 B 行至少一条用例，测试名带编号；已有用例改名补编号。
 
@@ -70,3 +70,10 @@
 - Task 6：`UserNotice` 文案按“场景 + 结果码”取，表在 `kernel/support/src/user_notice.cpp`。文案没有官方原文来源，按需求与运维清单的“用户必须能区分的原因”写；接 test 版实测后可替换，测试只断言互不相同与不空。顺带覆盖 O-16（四种结果文案不混用，`test_o16_notices_do_not_share_text`）。
 - Task 6：O-15 的“能力需要更新”以片段版本高于本程序 `phase_one_parameter_modes` 中该能力的最高 schema 版本判断；三种状态可以同时出现，各出一条提示。
 - Task 6：壳层这一步只到显示模型（`ShellDisplay::post_notice`/`notices`，换页与登录成功清空）；Qt 控件显示提示随 Task 7 的页面拆分接入。代价：在 Task 7 前界面上还看不见提示。
+- Task 7：文案表用 ASCII 键在运行时查（`page_text`、`page_list`、`page_item`），不为几百条文案各起一个编译期常量名。找不到的键返回空并记下，冒烟检查在 `missing_page_copy()` 非空时失败（退出码 6），五个页面的冒烟测试都跑。代价：键拼错要到冒烟测试才发现，编译期不报。
+- Task 7：精修色彩面板的显示顺序、显示名和参数绑定合成 `ui/panels` 里的一张表（`refine_color_rows`），绑定查询（`refine_color_binding`、`refine_subgroup_binding`）查同一张表；后期调色复用其分组标题。
+- Task 7：`kernel/workspace` 的 `WorkspaceDisplay` 是 `ShellDisplay` 的第二份，只有自己的测试在用，删除；图库显示控制（视图、每行张数、三种显示状态、全效果）移进 `ShellDisplay`，改用条目编号（`grid`、`show-raw` 等）而不是显示文字；区域条目的逐条核对移到 `test_shell_display`。`guide_copy` 保留，缩略图标识字样由文案表引用它。
+- Task 7：门禁按“字面量相同”判重复：`ui` 与 `kernel/workspace` 里同一段中文字面量只能在一个文件；两处共用的词放 `ui/shell/shared_words.hpp`（`预设`、`旋转`）。为此 `pixcake_ui_panels` 链接 `pixcake_ui_shell`，`pixcake_ui_shell` 私有链接 `pixcake_workspace`。代价：不同控件恰好同名也要共用一个常量；将来两者文字分开时要拆常量。
+- Task 7：拆分前后在五个页面上导出控件树（类名、对象名、无障碍名与说明、提示、启用、文字、图标有无、选中、占位文字、滑杆范围与值、分组标题）逐行比较，差异 0 行（登录 19、主页 51、图库 52、精修 1270、创意 80 行）。导出代码是临时加的，没有提交。
+- Task 7：门禁写成 C++ 测试 `test_shell_sources`（按码点数行宽、跳过注释取字面量），不放进 `cmake -P` 规则。页签点击经控制器换页的检查放在壳层冒烟里（`check_tab_navigation`，退出码 7），因为规则 9 不允许测试目标链接 Qt Widgets。变异：页面写中文文案、页面改显示模型、超长行、`ui` 里重复字面量、少一个页面文件、控制器不转发请求，均失败。
+- Task 7：Q-11 的“快捷键数据来自同一张表”：壳层还没有快捷键，没有可核对的表；架构里写明实现时放进文案表。窗口在页面上方显示当前页的提示（Task 6 的 Qt 一侧）。

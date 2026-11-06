@@ -150,7 +150,32 @@ void test_c46_subgroup_labels_bind_to_kernel_modes() {
          "中间调色相，范围 0 到 359，步进待确认，默认 0");
 }
 
+// Q-11：色彩面板的行、显示名与绑定来自同一张表；后期调色复用其分组标题。
+void test_q11_color_panel_rows_come_from_one_table() {
+  const auto rows = pixcake::ui::panels::refine_color_rows();
+  int bound = 0;
+  int pending = 0;
+  for (const auto& row : rows) {
+    if (row.kind != pixcake::ui::panels::PanelRowKind::Slider) continue;
+    const auto spec = slider_spec(row.label, row.binding);
+    if (spec.bound) {
+      ++bound;
+    } else {
+      ++pending;
+      EXPECT(pixcake::ui::panels::slider_range_pending(spec.accessible_name));
+    }
+    EXPECT(pixcake::ui::panels::slider_label_of(spec.accessible_name) == row.label);
+  }
+  // 顶层影调 14 + 色阶 5 + HSL 24 + 可选颜色 36 + 颜色分级 13 + 色彩编辑器偏移 3。
+  EXPECT(bound == 95);
+  EXPECT(pending > 0);
+  const auto titles = pixcake::ui::panels::refine_post_color_titles();
+  EXPECT(titles.size() == 17 && titles.front() == "全图调整" && titles.back() == "创意色彩");
+  EXPECT(std::string(pixcake::ui::panels::refine_color_panel_name()) == "色彩调节");
+}
+
 int main() {
+  test_q11_color_panel_rows_come_from_one_table();
   test_c46_subgroup_labels_bind_to_kernel_modes();
   test_c38_exposure_spec_comes_from_parameter_mode();
   test_c36_temperature_spec();

@@ -3,6 +3,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace pixcake::ui::panels {
 
@@ -38,6 +39,23 @@ std::optional<SliderBinding> refine_local_binding(std::string_view label);
 
 // 裁剪面板角度滑杆的参数（crop/angle）。
 SliderBinding refine_crop_angle_binding();
+
+// 精修色彩面板的行（显示顺序、显示名、绑定都来自同一张表，代码质量清单 Q-11）。
+enum class PanelRowKind { Title, Slider };
+struct PanelRow {
+  PanelRowKind kind = PanelRowKind::Title;
+  std::string label;
+  std::optional<SliderBinding> binding;  // 只有滑杆有；没有参数模式时为空
+  std::string object_name;               // 冒烟检查要找的几支滑杆
+};
+std::vector<PanelRow> refine_color_rows();
+// 后期调色面板：两项全图/局部，加色彩面板的分组标题。
+std::vector<std::string> refine_post_color_titles();
+const char* refine_color_panel_name();
+const char* refine_local_feather_label();
+// 无障碍名“<显示名>，……”里的显示名；范围待确认的滑杆。
+std::string slider_label_of(const std::string& accessible_name);
+bool slider_range_pending(const std::string& accessible_name);
 
 // 按绑定从内核参数模式解析滑杆规格。绑定为空或参数模式里找不到时返回未绑定的规格。
 SliderSpec slider_spec(std::string label, const std::optional<SliderBinding>& binding);

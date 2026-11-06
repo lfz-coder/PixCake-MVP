@@ -4,6 +4,7 @@
 #include "pixcake/support/session_state.hpp"
 #include "pixcake/support/user_notice.hpp"
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -30,7 +31,7 @@ struct Region {
 };
 
 struct WindowContract {
-  std::string title = "像素蛋糕";
+  std::string title;  // 来自页面文案表
   bool single_instance = true;
   Page page = Page::Login;
   bool in_project = false;
@@ -60,11 +61,28 @@ class ShellDisplay {
   void post_notice(const UserNotice& notice);
   const std::vector<std::string>& notices() const;
 
+  // 图库的显示控制（需求 §6）：只在图库页可改。视图是 grid、single、filter-view；网格每行 1 到 7 张，
+  // 越界夹到两端，只有网格视图可改；show-raw、show-edit、show-export 三种显示状态默认都开。
+  const std::string& library_view() const;
+  std::optional<int> grid_per_row() const;
+  std::optional<bool> shown(const std::string& id) const;
+  std::optional<bool> full_effect() const;
+  ResultCode set_library_view(const std::string& id);
+  ResultCode set_grid_per_row(int count);
+  ResultCode set_shown(const std::string& id, bool on);
+  ResultCode set_full_effect(bool on);
+
  private:
   Page page_ = Page::Login;
   bool in_project_ = false;
   std::vector<Region> regions_;
   std::vector<std::string> notices_;
+  std::string library_view_ = "grid";
+  std::optional<int> grid_per_row_;
+  bool show_raw_ = true;
+  bool show_edit_ = true;
+  bool show_export_ = true;
+  std::optional<bool> full_effect_;
 
   void rebuild_regions();
 };

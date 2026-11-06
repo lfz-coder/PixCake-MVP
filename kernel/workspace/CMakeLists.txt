@@ -1,5 +1,4 @@
 add_library(pixcake_workspace
-  src/workspace_display.cpp
   src/guide_copy.cpp
 )
 target_include_directories(pixcake_workspace PUBLIC include)
