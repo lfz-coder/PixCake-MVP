@@ -134,8 +134,19 @@ std::vector<ParameterMode> make_parameter_modes() {
   add_global("grading_blending", 0.0, 100.0, 1.0, 50.0).step_confirmed = false;
   // 色彩编辑器：色相、饱和度、明亮度偏移 -100 到 100，默认 0（官方《基础调色功能说明》）。
   // 手册没写步进，标待确认。色彩平滑、亮度平滑、色彩均匀度没有官方数字也没有实测，不注册。
+  // 黑白档下色彩编辑器从面板消失（2026-11-06 test 版实测），所以三项偏移在黑白档不可编辑。
   for (const char* item : {"hue", "saturation", "luminance"}) {
-    add_global(std::string("color_editor_") + item + "_shift", -100.0, 100.0, 1.0, 0.0).step_confirmed = false;
+    ParameterMode& shift = add_global(std::string("color_editor_") + item + "_shift", -100.0, 100.0, 1.0, 0.0);
+    shift.step_confirmed = false;
+    shift.disable_rules.push_back({"color.global", "profile", "monochrome", "黑白配置文件下没有色彩编辑器"});
+  }
+  // 黑白组（需求第 419 行“黑白档把 HSL 换成黑白组”）：黑白混合 8 色，-100..100、整数、默认 0
+  // （2026-11-06 test 版数值框实测）。只在黑白档可编辑；禁用规则只支持“等于某值时禁用”，所以对其余三档各写一条。
+  for (const char* color : {"red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta"}) {
+    ParameterMode& mix = add_global(std::string("bw_mix_") + color, -100.0, 100.0, 1.0, 0.0);
+    for (const char* other : {"standard", "texture", "basic"}) {
+      mix.disable_rules.push_back({"color.global", "profile", other, "黑白混合只在黑白配置文件下可用"});
+    }
   }
   // 颗粒：`detail` 的一组参数（契约 §4）。自定义工具栏里的“颗粒”是对这组参数的引用。
   // 各项 0..100 步长 1（2026-11-05 用户给出），默认值取自 test 版画面。

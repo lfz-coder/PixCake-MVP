@@ -305,7 +305,44 @@ void test_c49_color_editor_offsets() {
   EXPECT(pixcake::find_parameter_mode("color.global", "color_editor_color_smoothing") == nullptr);
 }
 
+// C-05：黑白档把 HSL 换成黑白组（需求第 419 行）。黑白混合 8 色 -100..100、整数、默认 0，
+// 色彩编辑器在黑白档下从面板消失（2026-11-06 test 版实测，证据 2026-11-06-monochrome-mixer-measurement.md）。
+void test_c05_monochrome_switches_hsl_to_mixer() {
+  std::string profile = "monochrome";
+  const auto lookup = [&profile](std::string_view capability, std::string_view parameter) -> std::optional<std::string> {
+    if (capability == "color.global" && parameter == "profile") return profile;
+    return std::nullopt;
+  };
+  const char* colors[] = {"red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta"};
+  for (const char* color : colors) {
+    const std::string id = std::string("bw_mix_") + color;
+    const auto* mode = pixcake::find_parameter_mode("color.global", id);
+    EXPECT(mode != nullptr);
+    if (mode == nullptr) continue;
+    EXPECT(mode->minimum == -100.0 && mode->maximum == 100.0 && mode->step == 1.0 && mode->default_value == 0.0);
+    EXPECT(mode->step_confirmed && mode->default_confirmed);
+    for (const char* other : {"standard", "texture", "basic"}) {
+      profile = other;
+      EXPECT(pixcake::parameter_disabled_reason("color.global", id, lookup).has_value());
+    }
+    profile = "monochrome";
+    EXPECT(!pixcake::parameter_disabled_reason("color.global", id, lookup).has_value());
+  }
+  // 没有已提交的配置文件时按默认“标准”判断：黑白混合不可编辑。
+  const auto none = [](std::string_view, std::string_view) -> std::optional<std::string> { return std::nullopt; };
+  EXPECT(pixcake::parameter_disabled_reason("color.global", "bw_mix_red", none).has_value());
+  EXPECT(!pixcake::validate_parameter_display_value("color.global", "bw_mix_red", "101"));
+  EXPECT(!pixcake::validate_parameter_display_value("color.global", "bw_mix_red", "0.5"));
+  for (const char* id : {"color_editor_hue_shift", "color_editor_saturation_shift", "color_editor_luminance_shift"}) {
+    profile = "monochrome";
+    EXPECT(pixcake::parameter_disabled_reason("color.global", id, lookup).has_value());
+    profile = "standard";
+    EXPECT(!pixcake::parameter_disabled_reason("color.global", id, lookup).has_value());
+  }
+}
+
 int main() {
+  test_c05_monochrome_switches_hsl_to_mixer();
   test_c49_color_editor_offsets();
   test_c31_q02_grain_belongs_to_detail();
   test_b33_c48_amount_ranges();
