@@ -34,11 +34,11 @@ void test_parameter_modes() {
   EXPECT(style != nullptr);
   if (style != nullptr) {
     EXPECT(style->minimum == 0.0);
-    EXPECT(style->maximum == 200.0);
+    EXPECT(style->maximum == 100.0);
     EXPECT(style->default_value == 100.0);
   }
-  EXPECT(pixcake::validate_parameter_display_value("color.style", "amount", "200"));
-  EXPECT(!pixcake::validate_parameter_display_value("color.style", "amount", "200.5"));
+  EXPECT(pixcake::validate_parameter_display_value("color.style", "amount", "100"));
+  EXPECT(!pixcake::validate_parameter_display_value("color.style", "amount", "100.5"));
   EXPECT(pixcake::validate_parameter_display_value("mask", "feather", "100"));
   EXPECT(!pixcake::validate_parameter_display_value("mask", "feather", "100.5"));
   EXPECT(pixcake::validate_parameter_display_value("crop", "angle", "-45"));
@@ -109,7 +109,7 @@ void test_pipeline() {
       "detail.geometry", "detail.denoise", "color.match", "color.style", "color.global",
       "color.local", "portrait.blemish", "portrait.skin", "portrait.reshape", "portrait.feature",
       "portrait.body", "image.background", "image.idphoto", "image.sky", "clothes", "pet",
-      "color.post", "manual.liquify", "manual.heal", "manual.edge", "crop"};
+      "color.post", "grain", "manual.liquify", "manual.heal", "manual.edge", "crop"};
   EXPECT(pipeline.size() == expected.size());
   for (std::size_t index = 0; index < expected.size() && index < pipeline.size(); ++index) {
     EXPECT(pipeline[index].step_id == expected[index]);
@@ -252,7 +252,41 @@ void test_c45_color_grading_modes() {
   EXPECT(pixcake::find_parameter_mode("color.global", "grading_balance") == nullptr);
 }
 
+// 来源：2026-11-05 用户裁定“颗粒是独立能力，和白平衡、影调同级”；范围 0..100 步长 1 也是用户给出，
+// 默认值取自 test 版画面。“颗粒效果”为 0 时其余各项不可调（数值条件，禁用规则尚不支持，界面层处理）。
+void test_c47_grain_is_its_own_capability() {
+  const auto registry = pixcake::CapabilityRegistry::phase_one();
+  EXPECT(registry.find("grain") != nullptr);
+  struct Row { const char* id; double default_value; };
+  const Row rows[] = {{"amount", 0}, {"shadows", 30}, {"midtones", 50}, {"highlights", 15},
+                      {"size", 10},  {"roughness", 15}, {"color", 10}};
+  for (const Row& row : rows) {
+    const auto* mode = pixcake::find_parameter_mode("grain", row.id);
+    EXPECT(mode != nullptr);
+    if (mode == nullptr) continue;
+    EXPECT(mode->minimum == 0.0 && mode->maximum == 100.0 && mode->step == 1.0);
+    EXPECT(mode->default_value == row.default_value && mode->step_confirmed && mode->default_confirmed);
+  }
+  EXPECT(!pixcake::validate_parameter_display_value("grain", "amount", "101"));
+  std::string error;
+  EXPECT(pixcake::phase_one_capability_order("grain").has_value());
+  EXPECT(pixcake::validate_phase_one_pipeline(pixcake::phase_one_pipeline(), &error));
+}
+
+// 来源：2026-11-05 用户裁定“创意色彩程度按官方的来”；官方（test 版）实测 0..100，覆盖需求里的 0..200。
+void test_c48_creative_amount_follows_official() {
+  for (const char* id : {"color.style", "color.match"}) {
+    const auto* mode = pixcake::find_parameter_mode(id, "amount");
+    EXPECT(mode != nullptr);
+    if (mode == nullptr) continue;
+    EXPECT(mode->minimum == 0.0 && mode->maximum == 100.0);
+    EXPECT(!pixcake::validate_parameter_display_value(id, "amount", "101"));
+  }
+}
+
 int main() {
+  test_c47_grain_is_its_own_capability();
+  test_c48_creative_amount_follows_official();
   test_c42_levels_rgb_modes();
   test_c43_hsl_modes_and_monochrome_switch();
   test_c44_selective_color_modes();
@@ -261,7 +295,7 @@ int main() {
   const std::vector<pixcake::CapabilityDescriptor> descriptors = registry.descriptors();
 
   const std::vector<std::string> expected_ids = {
-      "color.match", "color.style", "color.global", "color.local", "color.post",
+      "color.match", "color.style", "color.global", "color.local", "color.post", "grain",
       "portrait.blemish", "portrait.skin", "portrait.reshape", "portrait.feature", "portrait.body",
       "image.background", "image.idphoto", "image.sky", "clothes", "pet", "crop",
       "manual.edge", "manual.liquify", "manual.heal"};

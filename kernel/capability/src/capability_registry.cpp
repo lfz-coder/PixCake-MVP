@@ -21,6 +21,7 @@ std::vector<CapabilityDescriptor> phase_one_descriptors() {
       {"color.global", "色彩", "全图色彩工具", true, true, true, ""},
       {"color.local", "色彩", "局部调色", true, true, true, ""},
       {"color.post", "色彩", "后期调色", true, true, true, ""},
+      {"grain", "色彩", "颗粒", true, true, true, ""},
       {"portrait.blemish", "人像", "祛除瑕疵", true, true, true, ""},
       {"portrait.skin", "人像", "皮肤调整", true, true, true, ""},
       {"portrait.reshape", "人像", "面部重塑", true, true, true, ""},
@@ -77,8 +78,9 @@ std::vector<ParameterMode> make_parameter_modes() {
       add(capability, parameter, -100.0, 100.0, 1.0, 0.0, "tone", program, parameter, base_order);
     }
   };
-  add_unconfirmed_step("color.match", "amount", 0.0, 200.0, 100.0, "color", "pixcake.color.match", "amount", 10);
-  add_unconfirmed_step("color.style", "amount", 0.0, 200.0, 100.0, "color", "pixcake.color.style", "amount", 11);
+  // 程度按官方（test 版实测 0..100）；需求原文 0..200 被用户裁定覆盖（2026-11-05）。
+  add_unconfirmed_step("color.match", "amount", 0.0, 100.0, 100.0, "color", "pixcake.color.match", "amount", 10);
+  add_unconfirmed_step("color.style", "amount", 0.0, 100.0, 100.0, "color", "pixcake.color.style", "amount", 11);
   add_color("color.global", "pixcake.color.global", 20);
   add_color("color.local", "pixcake.color.local", 21);
   add_color("color.post", "pixcake.color.post", 70);
@@ -128,6 +130,12 @@ std::vector<ParameterMode> make_parameter_modes() {
     add_global(std::string("grading_") + zone + "_hue", 0.0, 359.0, 1.0, 0.0).step_confirmed = false;
   }
   add_global("grading_blending", 0.0, 100.0, 1.0, 50.0).step_confirmed = false;
+  // 颗粒：独立能力（用户 2026-11-05 裁定），各项 0..100 步长 1，默认值取自 test 版画面。
+  const char* grain_ids[] = {"amount", "shadows", "midtones", "highlights", "size", "roughness", "color"};
+  const double grain_defaults[] = {0, 30, 50, 15, 10, 15, 10};
+  for (int i = 0; i < 7; ++i) {
+    add("grain", grain_ids[i], 0.0, 100.0, 1.0, grain_defaults[i], "color", "pixcake.grain", grain_ids[i], 80 + i);
+  }
   // 黑白档禁用影调里的鲜艳度和饱和度（需求第 10.3 节、第 24 节第 9 条）。
   for (auto& mode : modes) {
     if (mode.capability_id == "color.global" && (mode.parameter_id == "vibrance" || mode.parameter_id == "saturation")) {
@@ -191,7 +199,8 @@ std::vector<PipelineStep> phase_one_pipeline() {
       {"clothes", "clothes", true, {"image.sky"}},
       {"pet", "pet", true, {"clothes"}},
       {"color.post", "color.post", true, {"pet"}},
-      {"manual.liquify", "manual.liquify", true, {"color.post"}},
+      {"grain", "grain", true, {"color.post"}},
+      {"manual.liquify", "manual.liquify", true, {"grain"}},
       {"manual.heal", "manual.heal", true, {"manual.liquify"}},
       {"manual.edge", "manual.edge", true, {"manual.heal"}},
       {"crop", "crop", true, {"manual.edge"}},
