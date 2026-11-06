@@ -1,5 +1,6 @@
 #pragma once
 
+#include "pixcake/capability/capability_registry.hpp"
 #include "pixcake/editdoc/edit_document.hpp"
 #include "pixcake/persist/file_system.hpp"
 #include "pixcake/persist/write_lock.hpp"
@@ -31,8 +32,11 @@ struct CommandResult {
 
 class CommandGate {
  public:
+  // pipeline 是开始编辑前要检查的能力管线，默认是阶段一管线。管线有环或重复时，所有命令都返回
+  // StateConflict，并写一条 event 为 "command.pipeline.invalid" 的日志（契约 C-35、运维 O-04）。
   CommandGate(EditDocument& document, const FastExportLatch& latch, FileSystem& files, std::string path,
-              std::vector<VersionLimit> limits, LogSink* log);
+              std::vector<VersionLimit> limits, LogSink* log,
+              const std::vector<PipelineStep>& pipeline = phase_one_pipeline());
   ~CommandGate();
 
   CommandResult submit(const UserCommand& command);
@@ -44,6 +48,7 @@ class CommandGate {
   std::string path_;
   std::vector<VersionLimit> limits_;
   LogSink* log_ = nullptr;
+  std::string pipeline_error_;
 };
 
 }  // namespace pixcake

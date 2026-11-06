@@ -277,7 +277,48 @@ void test_b60_c23_cross_process_gate_rejects_stale_commit() {
 
 }  // namespace
 
+// C-35 / O-04：已注册能力形成环时拒绝开始编辑，写一条可筛选的日志，不碰用户文件。
+void test_c35_o04_cyclic_pipeline_refuses_editing() {
+  auto document = *pixcake::EditDocument::create("img-1");
+  Latch latch;
+  pixcake::test::FakeFileSystem files;
+  RecordingLog log;
+  std::vector<pixcake::PipelineStep> cyclic = {
+      {"color.global", "color.global", true, {"color.local"}},
+      {"color.local", "color.local", true, {"color.global"}},
+  };
+  pixcake::CommandGate gate(document, latch, files, "docs/img.pxedit", limits(), &log, cyclic);
+  EXPECT(gate.submit(command_with("preview", 0, "1.00")).code == pixcake::ResultCode::StateConflict);
+  EXPECT(gate.submit(command_with("commit", 0, "1.00")).code == pixcake::ResultCode::StateConflict);
+  EXPECT(document.revision() == 0);
+  EXPECT(!document.preview("color.global", "exposure").has_value());
+  EXPECT(files.writes.empty());
+  std::size_t cycle_records = 0;
+  for (const auto& record : log.records) {
+    if (record.event == "command.pipeline.invalid") {
+      ++cycle_records;
+      EXPECT(record.module == "command");
+      EXPECT(record.code == pixcake::ResultCode::StateConflict);
+      EXPECT(record.message.find("环路") != std::string::npos);
+    }
+  }
+  EXPECT(cycle_records == 2);
+}
+
+// 默认管线（phase_one_pipeline）没有环，正常受理。
+void test_c35_default_pipeline_allows_editing() {
+  auto document = *pixcake::EditDocument::create("img-1");
+  Latch latch;
+  pixcake::test::FakeFileSystem files;
+  RecordingLog log;
+  pixcake::CommandGate gate(document, latch, files, "docs/img.pxedit", limits(), &log);
+  EXPECT(gate.submit(command_with("preview", 0, "1.00")).code == pixcake::ResultCode::Ok);
+  for (const auto& record : log.records) EXPECT(record.event != "command.pipeline.invalid");
+}
+
 int main() {
+  test_c35_o04_cyclic_pipeline_refuses_editing();
+  test_c35_default_pipeline_allows_editing();
 #if defined(PIXCAKE_HAVE_FORK)
   test_b60_c23_cross_process_gate_rejects_stale_commit();
 #endif

@@ -10,13 +10,17 @@ std::unordered_map<std::string, std::uint64_t> g_document_revisions;
 namespace pixcake {
 
 CommandGate::CommandGate(EditDocument& document, const FastExportLatch& latch, FileSystem& files,
-                         std::string path, std::vector<VersionLimit> limits, LogSink* log)
+                         std::string path, std::vector<VersionLimit> limits, LogSink* log,
+                         const std::vector<PipelineStep>& pipeline)
     : document_(document),
       latch_(latch),
       files_(files),
       path_(std::move(path)),
       limits_(std::move(limits)),
       log_(log) {
+  if (!validate_phase_one_pipeline(pipeline, &pipeline_error_) && pipeline_error_.empty()) {
+    pipeline_error_ = "能力管线无效";
+  }
   register_fast_export_latch(path_, &latch_);
   std::lock_guard<std::mutex> lock(g_registry_mu);
   if (g_document_revisions.find(path_) == g_document_revisions.end()) {
@@ -49,6 +53,19 @@ CommandResult CommandGate::submit(const UserCommand& command) {
 
   if (!command.name || command.name->empty() || !command.target_id || command.target_id->empty() ||
       !command.revision) {
+    return finish(ResultCode::StateConflict);
+  }
+  // C-35：管线有环或重复时拒绝开始编辑。不碰文档、不写盘，留一条能筛出来的记录（O-04）。
+  if (!pipeline_error_.empty()) {
+    LogRecord record;
+    record.module = "command";
+    record.event = "command.pipeline.invalid";
+    record.code = ResultCode::StateConflict;
+    record.message = pipeline_error_;
+    record.path = path_;
+    record.document_id = path_;
+    record.capability_id = command.capability_id;
+    write_log(log_, record);
     return finish(ResultCode::StateConflict);
   }
   const bool changes_document = *command.name == "preview" || *command.name == "commit";

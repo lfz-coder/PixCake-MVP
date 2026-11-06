@@ -42,3 +42,7 @@
   - 生成落层（O-23 本身未实现，所以没有落层事件）。
 - **调用方还没传日志**：现在只有测试会设置 sink。壳层和服务进程把 `ProcessLog::sink()` 交给各个模块，要等 UI 接入内核以后才做。
 - O-13–O-20（用户能看见的失败）不在这一项的范围内。
+
+## 后续（2026-11-06，第四轮复审条件 4）
+
+O-04 依赖环路已补：`CommandGate` 构造时检查能力管线（默认 `phase_one_pipeline()`，可注入），有环或重复时所有命令返回 `StateConflict`，并写一条 `module=command`、`event=command.pipeline.invalid` 的日志；文档与磁盘都不动（契约 C-35）。测试 `test_command_gate::test_c35_o04_cyclic_pipeline_refuses_editing`、`test_c35_default_pipeline_allows_editing`；变异检查：去掉检查后三条断言失败。
