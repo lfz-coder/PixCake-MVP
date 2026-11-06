@@ -104,7 +104,7 @@ void test_c04_result_written_before_ready() {
   EXPECT(ledger.book->ledger().creative_points() == 50);
 }
 
-void test_t03_remote_bad_return_fails_without_file() {
+void test_t03_b80_remote_bad_return_fails_without_file() {
   Book ledger;
   ledger.queued("task-bad", 30);
   pixcake::test::FakeFileSystem files;
@@ -119,7 +119,7 @@ void test_t03_remote_bad_return_fails_without_file() {
   EXPECT(ledger.book->ledger().task_status("task-bad") == "失败");
 }
 
-void test_t03_remote_timeout_fails_with_network_failed() {
+void test_t03_b50_remote_timeout_fails_with_network_failed() {
   Book ledger;
   ledger.queued("task-slow", 30);
   pixcake::test::FakeFileSystem files;
@@ -135,7 +135,7 @@ void test_t03_remote_timeout_fails_with_network_failed() {
 
 // T-03（测试清单第 67 行“尺寸不符”）：远端回答的像素字节数与宽高不符（RGBA8，每像素 4 字节）时判坏返回；
 // 不写结果文件，已有的好结果不动。
-void test_t03_remote_size_mismatch_fails_and_keeps_previous_result() {
+void test_t03_b80_remote_size_mismatch_fails_and_keeps_previous_result() {
   Book ledger;
   ledger.queued("task-good", 10);
   ledger.queued("task-odd", 10);
@@ -193,7 +193,7 @@ void test_t03_duplicate_submit_runs_once() {
 }
 
 // 架构第 511 行：远程晚到的结果若任务已取消，不留像素文件、不追加就绪事件、不第二次记账；点不退。
-void test_c30_cancel_while_running_discards_late_result() {
+void test_c30_b65_b81_cancel_while_running_discards_late_result() {
   Book ledger;
   ledger.queued("task-cancel", 30);
   pixcake::test::FakeFileSystem files;
@@ -221,6 +221,28 @@ void test_c30_task_not_queued_is_not_sent() {
   EXPECT(tool.calls == 0);
 }
 
+// B-104、B-106：主进程按崩溃折叠时只动“生成中”的任务。排队中的任务不变，取消不扣点；
+// 已成功的任务（结果文件已写、事件已确认）保持成功，结果文件还在。
+void test_b104_b106_crash_folds_only_generating_tasks() {
+  Book ledger;
+  ledger.queued("task-done", 30);
+  pixcake::test::FakeFileSystem files;
+  FakeTool tool;
+  tool.reply = image_reply();
+  pixcake::generated::GenerationService service(*ledger.book, files, kCreative, tool);
+  const auto done = service.run(task_of("task-done"));
+  EXPECT(done.state == pixcake::generate::TaskState::Succeeded);
+  ledger.queued("task-waiting", 20);
+  const auto points = ledger.book->ledger().creative_points();
+  std::vector<std::string> crashed;
+  EXPECT(ledger.book->crash_generating(crashed) == pixcake::ResultCode::Ok);
+  EXPECT(crashed.empty());
+  EXPECT(ledger.book->ledger().task_status("task-done") == "成功");
+  EXPECT(files.files.count(done.pixel_file) == 1);
+  EXPECT(ledger.book->ledger().task_status("task-waiting") == "排队中");
+  EXPECT(ledger.book->ledger().creative_points() == points);
+}
+
 #if defined(PIXCAKE_HAVE_FORK)
 const char* g_self = nullptr;
 
@@ -242,7 +264,7 @@ int crash_child(const std::string& directory) {
 }
 
 // 架构第 307 行：生成进程崩溃视同生成中取消，不退点，任务失败。主进程看到进程退出后折叠。
-void test_c30_t03_generated_crash_fails_without_refund() {
+void test_c30_t03_b105_generated_crash_fails_without_refund() {
   Book ledger;
   ledger.queued("task-crash", 30);
   ledger.book.reset();
@@ -275,16 +297,17 @@ int main(int argc, char** argv) {
   (void)argc;
   (void)argv;
 #endif
-  test_t03_remote_size_mismatch_fails_and_keeps_previous_result();
+  test_t03_b80_remote_size_mismatch_fails_and_keeps_previous_result();
   test_t03_disk_full_while_writing_result_keeps_previous_result();
   test_t03_duplicate_submit_runs_once();
+  test_b104_b106_crash_folds_only_generating_tasks();
   test_c04_result_written_before_ready();
-  test_t03_remote_bad_return_fails_without_file();
-  test_t03_remote_timeout_fails_with_network_failed();
-  test_c30_cancel_while_running_discards_late_result();
+  test_t03_b80_remote_bad_return_fails_without_file();
+  test_t03_b50_remote_timeout_fails_with_network_failed();
+  test_c30_b65_b81_cancel_while_running_discards_late_result();
   test_c30_task_not_queued_is_not_sent();
 #if defined(PIXCAKE_HAVE_FORK)
-  test_c30_t03_generated_crash_fails_without_refund();
+  test_c30_t03_b105_generated_crash_fails_without_refund();
 #endif
   if (g_failures != 0) {
     std::fprintf(stderr, "%d failure(s)\n", g_failures);

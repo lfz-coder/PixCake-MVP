@@ -27,7 +27,7 @@ using pixcake::ui::panels::refine_subgroup_binding;
 using pixcake::ui::panels::slider_spec;
 using pixcake::ui::panels::SliderBinding;
 
-void test_c38_exposure_spec_comes_from_parameter_mode() {
+void test_c38_b27_exposure_spec_comes_from_parameter_mode() {
   const auto spec = slider_spec("曝光", refine_color_binding("曝光"));
   EXPECT(spec.bound);
   EXPECT(spec.minimum == -5.0);
@@ -177,7 +177,7 @@ void test_q11_color_panel_rows_come_from_one_table() {
 int main() {
   test_q11_color_panel_rows_come_from_one_table();
   test_c46_subgroup_labels_bind_to_kernel_modes();
-  test_c38_exposure_spec_comes_from_parameter_mode();
+  test_c38_b27_exposure_spec_comes_from_parameter_mode();
   test_c36_temperature_spec();
   test_c39_all_top_level_labels_match_kernel_modes();
   test_c35_unbound_label_has_no_range();

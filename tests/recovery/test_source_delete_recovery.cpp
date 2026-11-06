@@ -208,7 +208,7 @@ class FailingPresenceStore final : public pixcake::ProjectStore {
 
 }  // namespace
 
-void test_delete_source_file_recovers_when_final_presence_write_fails() {
+void test_b102_delete_source_file_recovers_when_final_presence_write_fails() {
   pixcake::test::TempDir dir;
   std::unique_ptr<pixcake::SqliteProjectStore> sqlite;
   EXPECT(pixcake::SqliteProjectStore::open(dir.path() + "/library.db", sqlite) == pixcake::ResultCode::Ok);
@@ -237,6 +237,6 @@ void test_delete_source_file_recovers_when_final_presence_write_fails() {
 }
 
 int main() {
-  test_delete_source_file_recovers_when_final_presence_write_fails();
+  test_b102_delete_source_file_recovers_when_final_presence_write_fails();
   return g_failures == 0 ? 0 : 1;
 }

@@ -50,7 +50,7 @@ void test_request_round_trip_and_bounds() {
   EXPECT(pixcake::ipc::encode_preview_request(unknown, bytes) == pixcake::ResultCode::StateConflict);
 }
 
-void test_cancel_and_frame_header_reject_bad_values() {
+void test_b48_cancel_and_frame_header_reject_bad_values() {
   pixcake::ipc::PreviewCancelMessage cancel;
   cancel.client_sequence = 3;
   cancel.image_id = "img-1";
@@ -173,6 +173,6 @@ int main() {
   test_c30_process_messages_round_trip();
   test_c30_truncated_newer_or_extended_messages();
   test_request_round_trip_and_bounds();
-  test_cancel_and_frame_header_reject_bad_values();
+  test_b48_cancel_and_frame_header_reject_bad_values();
   return g_failures == 0 ? 0 : 1;
 }

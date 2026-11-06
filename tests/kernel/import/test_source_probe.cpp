@@ -109,7 +109,7 @@ void test_known_headers_and_unknown_content() {
                                            height) == pixcake::ResultCode::UnsupportedFormat);
 }
 
-void test_bad_headers_are_rejected() {
+void test_b40_b90_bad_headers_are_rejected() {
   pixcake::image_import::SourceFormat format = pixcake::image_import::SourceFormat::Jpeg;
   std::uint32_t width = 0;
   std::uint32_t height = 0;
@@ -147,7 +147,7 @@ void test_file_admission_and_identity() {
 
 int main() {
   test_known_headers_and_unknown_content();
-  test_bad_headers_are_rejected();
+  test_b40_b90_bad_headers_are_rejected();
   test_file_admission_and_identity();
   return g_failures == 0 ? 0 : 1;
 }

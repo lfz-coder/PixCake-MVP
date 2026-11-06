@@ -168,7 +168,7 @@ struct Session final : pixcake::SessionState {
   bool signed_in() const override { return on; }
 };
 
-void test_s25_signed_out_document_commands_rejected() {
+void test_s25_b12_signed_out_document_commands_rejected() {
   auto document = *pixcake::EditDocument::create("img-1");
   pixcake::test::FakeFileSystem doc_files;
   Off latch;
@@ -184,7 +184,7 @@ void test_s25_signed_out_document_commands_rejected() {
   EXPECT(gate.submit(command("commit", 0, "1.00")).code == pixcake::ResultCode::Ok);
 }
 
-void test_s25_signed_out_business_commands_rejected() {
+void test_s25_b12_signed_out_business_commands_rejected() {
   World world;
   Session session;
   pixcake::BusinessCommands commands(session);
@@ -218,8 +218,8 @@ void test_s25_signed_out_business_commands_rejected() {
 }
 
 int main() {
-  test_s25_signed_out_document_commands_rejected();
-  test_s25_signed_out_business_commands_rejected();
+  test_s25_b12_signed_out_document_commands_rejected();
+  test_s25_b12_signed_out_business_commands_rejected();
   test_p12_commit_marks_photo_edited();
   test_p12_failed_commit_does_not_mark_edited();
   test_p12_status_write_failure_is_logged();

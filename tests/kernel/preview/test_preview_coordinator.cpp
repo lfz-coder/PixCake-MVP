@@ -30,7 +30,7 @@ pixcake::preview::PreviewRequest request(const pixcake::EditDocument& document, 
   return result;
 }
 
-void test_latest_value_wins_without_writing() {
+void test_b74_latest_value_wins_without_writing() {
   auto document = *pixcake::EditDocument::create("img-preview");
   pixcake::preview::PreviewCoordinator coordinator;
   const auto before = document.encode();
@@ -108,7 +108,7 @@ void test_o06_stale_take_is_logged_with_code() {
 int main() {
   test_o06_replaced_preview_values_are_counted();
   test_o06_stale_take_is_logged_with_code();
-  test_latest_value_wins_without_writing();
+  test_b74_latest_value_wins_without_writing();
   test_rejects_stale_and_fast_export_requests();
   return g_failures == 0 ? 0 : 1;
 }

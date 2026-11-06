@@ -61,7 +61,7 @@ void test_bad_cache_keeps_current_session() {
   EXPECT(session.snapshot().creative_points == 300);
 }
 
-void test_layout_limits_and_logout_scope() {
+void test_b21_layout_limits_and_logout_scope() {
   using pixcake::ResultCode;
   pixcake::account::AccountSession session;
   EXPECT(session.sign_in(snapshot()) == ResultCode::Ok);
@@ -98,14 +98,18 @@ class FakeGateway final : public pixcake::account::LoginGateway {
   pixcake::ResultCode send = pixcake::ResultCode::Ok;
   pixcake::account::VerifyReply reply;
   int sent = 0;
+  int verified = 0;
   pixcake::ResultCode send_code(const std::string&) override {
     ++sent;
     return send;
   }
-  pixcake::account::VerifyReply verify(const std::string&, const std::string&) override { return reply; }
+  pixcake::account::VerifyReply verify(const std::string&, const std::string&) override {
+    ++verified;
+    return reply;
+  }
 };
 
-void test_o13_login_failures_are_distinct_and_stay_on_login() {
+void test_o13_b06_b50_b82_login_failures_are_distinct_and_stay_on_login() {
   using pixcake::account::LoginOutcome;
   pixcake::account::AccountSession session;
   FakeGateway gateway;
@@ -118,7 +122,13 @@ void test_o13_login_failures_are_distinct_and_stay_on_login() {
   EXPECT(offline.outcome == LoginOutcome::NetworkFailed && offline.stays_on_login);
   gateway.send = pixcake::ResultCode::Ok;
   EXPECT(flow.request_code("13800000000").outcome == LoginOutcome::CodeSent);
+  // B-06：验证码为空、不足 6 位、超过 6 位都在本地拒绝，不问远端；手机号为空不发验证码。
   EXPECT(flow.submit("12345").outcome == LoginOutcome::CodeFormatInvalid);
+  EXPECT(flow.submit("").outcome == LoginOutcome::CodeFormatInvalid);
+  EXPECT(flow.submit("1234567").outcome == LoginOutcome::CodeFormatInvalid);
+  EXPECT(gateway.verified == 0);
+  const int sent_before = gateway.sent;
+  EXPECT(flow.request_code("").outcome == LoginOutcome::PhoneInvalid && gateway.sent == sent_before);
 
   gateway.reply.verdict = pixcake::account::VerifyVerdict::Wrong;
   const auto wrong = flow.submit("111111");
@@ -160,11 +170,11 @@ void test_o16_notices_do_not_share_text() {
 }
 
 int main() {
-  test_o13_login_failures_are_distinct_and_stay_on_login();
+  test_o13_b06_b50_b82_login_failures_are_distinct_and_stay_on_login();
   test_o16_notices_do_not_share_text();
   test_s25_account_session_is_the_session_state();
   test_session_and_two_balances();
   test_bad_cache_keeps_current_session();
-  test_layout_limits_and_logout_scope();
+  test_b21_layout_limits_and_logout_scope();
   return g_failures == 0 ? 0 : 1;
 }

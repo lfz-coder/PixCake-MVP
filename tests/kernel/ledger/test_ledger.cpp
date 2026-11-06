@@ -52,7 +52,7 @@ pixcake::CreditLedger charged(pixcake::FreeQueuePolicy policy, std::int64_t poin
   return ledger;
 }
 
-void test_balances_stay_separate_and_queue_cancel_is_free() {
+void test_b103_balances_stay_separate_and_queue_cancel_is_free() {
   auto ledger = charged(version_930(), 100, 4);
   auto quote = quote_of("task-1", "官方", 30);
   EXPECT(ledger.quote(quote) == pixcake::ResultCode::Ok);
@@ -75,7 +75,7 @@ void test_balances_stay_separate_and_queue_cancel_is_free() {
 }
 
 
-void test_accelerate_is_charged_once_and_strokes_dedupe() {
+void test_b64_accelerate_is_charged_once_and_strokes_dedupe() {
   auto ledger = charged(version_930(), 100, 1);
   auto quote = quote_of("task-1", "官方", 30);
   quote.acceleration_points = 40;
@@ -153,7 +153,7 @@ void test_free_queue_switches_and_master_allowance() {
   EXPECT(master.creative_points() == 100);
 }
 
-void test_export_sheets_count_originals_once_per_settlement() {
+void test_b109_b110_export_sheets_count_originals_once_per_settlement() {
   auto ledger = charged(version_930(), 10, 2);
   std::vector<pixcake::ExportProduct> batch = {
       {"exp-a", "orig-1", false, true},
@@ -369,10 +369,10 @@ int main() {
   test_p23_balance_queries_do_not_refold();
   test_o09_cancel_position_and_charge_are_logged();
   test_o12_repeated_success_is_deduplicated();
-  test_balances_stay_separate_and_queue_cancel_is_free();
-  test_accelerate_is_charged_once_and_strokes_dedupe();
+  test_b103_balances_stay_separate_and_queue_cancel_is_free();
+  test_b64_accelerate_is_charged_once_and_strokes_dedupe();
   test_free_queue_switches_and_master_allowance();
-  test_export_sheets_count_originals_once_per_settlement();
+  test_b109_b110_export_sheets_count_originals_once_per_settlement();
   test_export_batch_identity_deduplicates_partial_completion_but_not_new_batch();
   test_sqlite_handles_reject_stale_duplicate_charge();
   test_master_acceleration_does_not_bypass_subscription();

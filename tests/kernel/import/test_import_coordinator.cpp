@@ -151,11 +151,8 @@ void test_c15_missing_file_after_admission_is_not_added() {
 
 }  // namespace
 
-int main() {
-  test_o14_import_reports_each_file();
-  test_s07_admitted_source_is_required_to_add_photo();
-  test_s07_replaced_file_after_admission_is_rejected();
-  test_c15_missing_file_after_admission_is_not_added();
+// B-02：导入列表为空返回状态冲突、不建项目内容；B-34、B-90：批次里损坏、不存在的那张单独拒绝，其余照常进入。
+void test_b02_b34_b90_import_list_and_batch_results() {
   pixcake::test::TempDir directory;
   std::unique_ptr<pixcake::SqliteProjectStore> store;
   EXPECT(pixcake::SqliteProjectStore::open(directory.path() + "/library.db", store) == pixcake::ResultCode::Ok);
@@ -211,5 +208,17 @@ int main() {
   EXPECT(bad_project.accepted_count == 0);
   EXPECT(project.list_photos(std::nullopt, photos) == pixcake::ResultCode::Ok);
   EXPECT(photos.size() == 2);
-  return g_failures == 0 ? 0 : 1;
+}
+
+int main() {
+  test_o14_import_reports_each_file();
+  test_s07_admitted_source_is_required_to_add_photo();
+  test_s07_replaced_file_after_admission_is_rejected();
+  test_c15_missing_file_after_admission_is_not_added();
+  test_b02_b34_b90_import_list_and_batch_results();
+  if (g_failures != 0) {
+    std::fprintf(stderr, "%d failure(s)\n", g_failures);
+    return 1;
+  }
+  return 0;
 }

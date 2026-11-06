@@ -116,7 +116,7 @@ pixcake::SyncTarget target_of(pixcake::EditDocument& document, pixcake::test::Fa
   return target;
 }
 
-void test_checked_sync_copies_only_selected_fragments() {
+void test_b37_checked_sync_copies_only_selected_fragments() {
   auto source = *pixcake::EditDocument::create("source");
   source.store_fragment("portrait.blemish", 1, marked(1));
   source.store_fragment("color.local", 1, marked(2));
@@ -189,7 +189,7 @@ void test_checked_sync_copies_only_selected_fragments() {
   EXPECT(!second.fragment("color.global").has_value());
 }
 
-void test_same_path_skips_only_that_target() {
+void test_b68_same_path_skips_only_that_target() {
   auto source = *pixcake::EditDocument::create("source");
   source.store_fragment("portrait.blemish", 1, marked(1));
   pixcake::test::FakeFileSystem source_files;
@@ -308,8 +308,8 @@ void test_c31_sync_and_paste_validate_through_capability_modules() {
 int main() {
   test_c31_sync_and_paste_validate_through_capability_modules();
   test_tree_reads_attributes_from_owners();
-  test_checked_sync_copies_only_selected_fragments();
-  test_same_path_skips_only_that_target();
+  test_b37_checked_sync_copies_only_selected_fragments();
+  test_b68_same_path_skips_only_that_target();
   test_retry_matches_stable_target_paths();
   test_copy_paste_moves_committed_fragments_without_a_tree();
   if (g_failures != 0) {

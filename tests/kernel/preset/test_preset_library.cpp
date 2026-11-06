@@ -51,7 +51,7 @@ pixcake::Preset portrait_named(std::string id, std::string name) {
   return preset;
 }
 
-void test_c44_name_counts_characters_not_bytes() {
+void test_c44_b04_b20_b21_name_counts_characters_not_bytes() {
   pixcake::PresetLibrary library;
   EXPECT(library.save(portrait_named("p20", han(20)), false) == pixcake::ResultCode::Ok);
   EXPECT(library.save(portrait_named("p7", han(7)), false) == pixcake::ResultCode::Ok);
@@ -211,7 +211,7 @@ void test_c31_preset_apply_validates_through_capability_modules() {
 
 int main() {
   test_c31_preset_apply_validates_through_capability_modules();
-  test_c44_name_counts_characters_not_bytes();
+  test_c44_b04_b20_b21_name_counts_characters_not_bytes();
   test_c43_type_and_module_must_match();
   test_overwrite_and_import_do_not_change_old_rows();
   test_c43_color_replaces_and_ai_color_stacks();

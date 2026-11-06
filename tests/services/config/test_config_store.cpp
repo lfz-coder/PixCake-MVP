@@ -38,7 +38,7 @@ void test_default_policy_and_tables() {
   EXPECT(package->annual_price == 49);
 }
 
-void test_cache_fallback_and_replacement() {
+void test_b07_b86_cache_fallback_and_replacement() {
   pixcake::config::ConfigCache cache;
   EXPECT(cache.used_defaults());
   const auto missing = cache.load(std::nullopt);
@@ -73,7 +73,7 @@ void test_two_policy_flags_are_not_merged() {
 
 int main() {
   test_default_policy_and_tables();
-  test_cache_fallback_and_replacement();
+  test_b07_b86_cache_fallback_and_replacement();
   test_two_policy_flags_are_not_merged();
   return g_failures == 0 ? 0 : 1;
 }

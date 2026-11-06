@@ -161,7 +161,7 @@ void reach_render(pixcake::ExportQueue& queue, const pixcake::ExportJob& job) {
 
 }  // namespace
 
-void test_rename_failure_and_crash_points() {
+void test_b95_b96_b97_rename_failure_and_crash_points() {
   pixcake::test::FakeFileSystem files;
   auto queue = pixcake::ExportQueue::open("/cache/exports");
   reach_render(queue, job_of("exp-1", "orig-1", "/out/a.jpg"));
@@ -207,7 +207,7 @@ void test_rename_failure_and_crash_points() {
   EXPECT(rendering.products().empty());
 }
 
-void test_reopen_repairs_cache_and_finishes_rename() {
+void test_b113_reopen_repairs_cache_and_finishes_rename() {
   pixcake::test::TempDir dir;
   const std::string path = dir.path() + "/export.db";
   pixcake::test::FakeFileSystem files;
@@ -444,8 +444,8 @@ void test_failure_reason_survives_reopen_and_other_jobs_continue() {
 }
 
 int main() {
-  test_rename_failure_and_crash_points();
-  test_reopen_repairs_cache_and_finishes_rename();
+  test_b95_b96_b97_rename_failure_and_crash_points();
+  test_b113_reopen_repairs_cache_and_finishes_rename();
   test_recover_returns_sync_error_after_unlinking_mismatched_destination();
   test_recover_returns_remove_error_when_renamed_destination_cannot_be_deleted();
   test_rejected_fail_is_recorded_when_recover_finds_both_files_gone();

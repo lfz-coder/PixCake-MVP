@@ -200,7 +200,7 @@ std::int64_t trash_time(pixcake::ProjectLibrary& library, const char* subject, s
   return row.has_value() ? row->deleted_at : -1;
 }
 
-void test_under_thirty_days_can_be_restored() {
+void test_b30_under_thirty_days_can_be_restored() {
   Fixture world;
   world.files.files["/pictures/a.png"] = pixcake::test::png_with({1, 2, 3});
   const pixcake::ProjectResult project = world.library->create_project("保留", pixcake::kOriginLocal, false);
@@ -223,7 +223,7 @@ void test_under_thirty_days_can_be_restored() {
   EXPECT(world.deleter.calls == 0);
 }
 
-void test_expired_index_is_removed_without_deleting_the_file() {
+void test_b30_expired_index_is_removed_without_deleting_the_file() {
   Fixture world;
   world.files.files["/pictures/a.png"] = pixcake::test::png_with({4, 5});
   const pixcake::ProjectResult project = world.library->create_project("到期", pixcake::kOriginLocal, false);
@@ -265,7 +265,7 @@ void test_only_the_expired_photo_is_purged() {
   EXPECT(world.deleter.calls == 0);
 }
 
-void test_restore_project_brings_back_its_photos() {
+void test_b112_restore_project_brings_back_its_photos() {
   Fixture world;
   const pixcake::ProjectResult project = world.library->create_project("恢复", pixcake::kOriginLocal, false);
   const pixcake::ProjectResult first =
@@ -289,7 +289,7 @@ void test_restore_project_brings_back_its_photos() {
   EXPECT(!second_trash.has_value());
 }
 
-void test_partial_restore_leaves_the_other_photo() {
+void test_b112_partial_restore_leaves_the_other_photo() {
   Fixture world;
   const pixcake::ProjectResult project = world.library->create_project("挑选", pixcake::kOriginLocal, false);
   const pixcake::ProjectResult first =
@@ -358,7 +358,7 @@ void test_erase_trashed_project_removes_index_only() {
   EXPECT(world.deleter.calls == 0);
 }
 
-void test_delete_source_file() {
+void test_b102_b112_delete_source_file() {
   Fixture world;
   world.files.files["/pictures/gone.png"] = pixcake::test::png_with({1});
   world.files.files["/pictures/keep.png"] = pixcake::test::png_with({2});
@@ -429,15 +429,15 @@ void test_delete_uses_enrolled_file_identity() {
 }  // namespace
 
 int main() {
-  test_under_thirty_days_can_be_restored();
-  test_expired_index_is_removed_without_deleting_the_file();
+  test_b30_under_thirty_days_can_be_restored();
+  test_b30_expired_index_is_removed_without_deleting_the_file();
   test_only_the_expired_photo_is_purged();
-  test_restore_project_brings_back_its_photos();
-  test_partial_restore_leaves_the_other_photo();
+  test_b112_restore_project_brings_back_its_photos();
+  test_b112_partial_restore_leaves_the_other_photo();
   test_restore_photos_fails_while_the_project_is_trashed();
   test_trashing_twice_keeps_the_original_time();
   test_erase_trashed_project_removes_index_only();
-  test_delete_source_file();
+  test_b102_b112_delete_source_file();
   test_file_source_deleter_rejects_relative_paths();
   test_delete_uses_enrolled_file_identity();
   return g_failures == 0 ? 0 : 1;

@@ -229,7 +229,7 @@ void test_q11_regions_take_copy_from_the_page_table() {
 
 // 图库的显示控制（从原 kernel/workspace 显示模型移来）：只在图库页可改；网格每行 1 到 7 张；
 // 只有网格视图能改每行张数；三种显示状态默认都开。
-void test_library_controls() {
+void test_b31_library_controls() {
   using namespace pixcake::ui::shell;
   SignedIn session;
   auto home = ShellDisplay::for_session(session);
@@ -271,7 +271,7 @@ void test_library_controls() {
 
 int main() {
   test_q11_regions_take_copy_from_the_page_table();
-  test_library_controls();
+  test_b31_library_controls();
   test_o13_notice_stays_on_the_page();
   test_s25_session_decides_the_page();
   EXPECT(std::string(pixcake::ui::shell::page_label(pixcake::ui::shell::Page::Login)) == "登录页面");

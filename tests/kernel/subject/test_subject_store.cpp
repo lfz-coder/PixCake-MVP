@@ -35,7 +35,7 @@ pixcake::subject::DetectionSnapshot ready(std::vector<pixcake::subject::FaceReco
   return snapshot;
 }
 
-void test_pending_and_failed_do_not_expose_geometry() {
+void test_b10_pending_and_failed_do_not_expose_geometry() {
   using pixcake::ResultCode;
   using pixcake::subject::DetectionState;
   auto store = pixcake::subject::SubjectStore::open("image-1");
@@ -109,7 +109,7 @@ void test_single_adjustment_lock_and_restore() {
 }  // namespace
 
 int main() {
-  test_pending_and_failed_do_not_expose_geometry();
+  test_b10_pending_and_failed_do_not_expose_geometry();
   test_detection_validation_and_override_persistence();
   test_single_adjustment_lock_and_restore();
   return g_failures == 0 ? 0 : 1;

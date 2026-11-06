@@ -104,7 +104,7 @@ void test_new_photo_has_empty_marks() {
   EXPECT(user_version(world.dir.path() + "/library.db") == 3);
 }
 
-void test_version_two_gains_default_marks() {
+void test_b114_version_two_gains_default_marks() {
   pixcake::test::TempDir dir;
   const std::string path = dir.path() + "/library.db";
   sqlite3* raw = nullptr;
@@ -172,7 +172,7 @@ std::string file_text(const std::filesystem::path& path) {
   return std::string((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
 }
 
-void test_marks_accept_only_the_documented_values() {
+void test_b15_b28_marks_accept_only_the_documented_values() {
   Fixture world;
   const std::vector<std::uint8_t> document_bytes{9, 8, 7};
   world.files.files["edits/a.pxedit"] = document_bytes;
@@ -244,7 +244,7 @@ void test_marks_accept_only_the_documented_values() {
 
 int main() {
   test_new_photo_has_empty_marks();
-  test_version_two_gains_default_marks();
-  test_marks_accept_only_the_documented_values();
+  test_b114_version_two_gains_default_marks();
+  test_b15_b28_marks_accept_only_the_documented_values();
   return g_failures == 0 ? 0 : 1;
 }

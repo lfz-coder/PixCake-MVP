@@ -184,7 +184,7 @@ void test_export_batch_identity_survives_sqlite_reopen() {
   sqlite3_close(raw);
 }
 
-void test_generating_cancel_and_crash_do_not_refund() {
+void test_b103_b105_generating_cancel_and_crash_do_not_refund() {
   auto policy = version_930();
   auto ledger = charged(policy, 100, 1);
   auto quote = quote_of("task-1", "官方", 30);
@@ -228,7 +228,7 @@ void test_o12_replayed_stroke_is_counted_once_charged() {
 int main() {
   test_reopen_replays_events_and_repairs_cache();
   test_export_batch_identity_survives_sqlite_reopen();
-  test_generating_cancel_and_crash_do_not_refund();
+  test_b103_b105_generating_cancel_and_crash_do_not_refund();
   test_o12_replayed_stroke_is_counted_once_charged();
   return 0;
 }

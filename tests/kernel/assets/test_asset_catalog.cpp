@@ -26,7 +26,7 @@ pixcake::assets::AssetRecord sample(const char* id) {
   return value;
 }
 
-void test_types_and_missing_file_semantics() {
+void test_b09_types_and_missing_file_semantics() {
   using pixcake::ResultCode;
   pixcake::assets::AssetCatalog catalog;
   auto cube = sample("cube-1");
@@ -41,7 +41,7 @@ void test_types_and_missing_file_semantics() {
   EXPECT(catalog.set_available("missing", false) == ResultCode::StateConflict);
 }
 
-void test_sample_batch_limits_are_atomic() {
+void test_b22_sample_batch_limits_are_atomic() {
   using pixcake::ResultCode;
   pixcake::assets::AssetCatalog catalog;
   std::vector<pixcake::assets::AssetRecord> batch;
@@ -84,8 +84,8 @@ void test_invalid_batch_and_duplicate_ids_do_not_partially_write() {
 }  // namespace
 
 int main() {
-  test_types_and_missing_file_semantics();
-  test_sample_batch_limits_are_atomic();
+  test_b09_types_and_missing_file_semantics();
+  test_b22_sample_batch_limits_are_atomic();
   test_invalid_batch_and_duplicate_ids_do_not_partially_write();
   return g_failures == 0 ? 0 : 1;
 }

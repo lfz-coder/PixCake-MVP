@@ -175,7 +175,7 @@ void test_rejected_copy_writes_nothing() {
   EXPECT(copies[0].document_id == "doc-1");
 }
 
-void test_version_one_library_keeps_photos_and_gains_copies() {
+void test_b114_version_one_library_keeps_photos_and_gains_copies() {
   pixcake::test::TempDir dir;
   const std::string path = dir.path() + "/library.db";
   sqlite3* raw = nullptr;
@@ -242,7 +242,7 @@ void test_version_one_library_keeps_photos_and_gains_copies() {
   EXPECT(photos[0].access_credential == std::vector<std::uint8_t>({1, 2}));
 }
 
-void test_shares_original_without_a_charge() {
+void test_b110_shares_original_without_a_charge() {
   Fixture world;
   const pixcake::ProjectResult project = world.library->create_project("相册", pixcake::kOriginLocal, false);
   EXPECT(project.code == pixcake::ResultCode::Ok);
@@ -576,8 +576,8 @@ void test_restoring_a_copy_brings_the_original_back() {
 int main() {
   test_copy_points_at_original_and_keeps_its_document_id();
   test_rejected_copy_writes_nothing();
-  test_version_one_library_keeps_photos_and_gains_copies();
-  test_shares_original_without_a_charge();
+  test_b114_version_one_library_keeps_photos_and_gains_copies();
+  test_b110_shares_original_without_a_charge();
   test_trashing_a_copy_leaves_the_original();
   test_trashing_the_original_takes_copies_with_it();
   test_delete_source_file_trashes_copies_without_a_second_path();

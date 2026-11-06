@@ -174,7 +174,7 @@ void test_c31_display_scale_comes_from_parameter_modes() {
 }
 
 // 架构第 623 行：坏片只让全身美型不可用。其余能力不因坏片禁用。
-void test_c31_only_body_reports_broken_image() {
+void test_c31_b108_only_body_reports_broken_image() {
   pixcake::ImageConditions ok;
   pixcake::ImageConditions broken;
   broken.broken = true;
@@ -185,7 +185,7 @@ void test_c31_only_body_reports_broken_image() {
 }
 
 // 架构第 6.7 节：人像能力在检测未完成时不可用，不编造几何。
-void test_c31_portrait_needs_detection() {
+void test_c31_b10_portrait_needs_detection() {
   const std::set<std::string> portrait = {"portrait.blemish", "portrait.skin", "portrait.reshape", "portrait.feature",
                                           "portrait.body"};
   pixcake::ImageConditions pending;
@@ -213,7 +213,7 @@ void test_c31_sky_needs_assets() {
 }
 
 // 需求第 590、905 行：纯色背景功能用在非纯色图上无效果，不报错；能力本身仍可用。
-void test_c31_solid_background_parameter_has_no_effect_on_other_backgrounds() {
+void test_c31_b107_solid_background_parameter_has_no_effect_on_other_backgrounds() {
   const auto& background = module("image.background");
   MapReader reader;
   reader.values[{"image.background", "light_uniform_brightness"}] = "20";
@@ -460,10 +460,10 @@ int main() {
   test_c31_write_back_replaces_or_overlays_and_keeps_unknown_fields();
   test_c31_extract_returns_known_values_and_the_fragment();
   test_c31_display_scale_comes_from_parameter_modes();
-  test_c31_only_body_reports_broken_image();
-  test_c31_portrait_needs_detection();
+  test_c31_b108_only_body_reports_broken_image();
+  test_c31_b10_portrait_needs_detection();
   test_c31_sky_needs_assets();
-  test_c31_solid_background_parameter_has_no_effect_on_other_backgrounds();
+  test_c31_b107_solid_background_parameter_has_no_effect_on_other_backgrounds();
   test_c31_generation_entries_compile_to_jumps();
   test_c31_every_capability_has_its_own_directory();
   test_c31_migrate_keeps_fragment_on_failure();

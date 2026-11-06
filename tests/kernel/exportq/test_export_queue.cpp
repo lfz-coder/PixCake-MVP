@@ -122,7 +122,7 @@ void reach_render(pixcake::ExportQueue& queue, const pixcake::ExportJob& job) {
   EXPECT(queue.start_rendering(job.export_id) == pixcake::ResultCode::Ok);
 }
 
-void test_snapshot_and_fast_export_stay() {
+void test_b66_snapshot_and_fast_export_stay() {
   pixcake::test::FakeFileSystem files;
   auto queue = pixcake::ExportQueue::open("/cache/exports");
   auto job = job_of("exp-1", "orig-1", "/out/a.jpg");
@@ -164,7 +164,7 @@ void test_snapshot_and_fast_export_stay() {
   EXPECT(gate.submit(preview).code == pixcake::ResultCode::Ok);
 }
 
-void test_b32_export_settings_parse_strictly() {
+void test_b32_b47_export_settings_parse_strictly() {
   pixcake::ExportSettings settings;
   for (const char* accepted : {"", "format=jpg;quality=14", "format=jpg;size_limit_kb=500", "copies=2",
                                "format=tiff;srgb=1"}) {
@@ -282,7 +282,7 @@ void test_commit_once_and_reject_a_different_destination() {
   EXPECT(queue.products().empty());
 }
 
-void test_disk_full_then_retry_uses_the_snapshot() {
+void test_b94_disk_full_then_retry_uses_the_snapshot() {
   pixcake::test::FakeFileSystem files;
   auto queue = pixcake::ExportQueue::open("/cache/exports");
   auto job = job_of("exp-1", "orig-1", "/out/a.jpg");
@@ -315,7 +315,7 @@ void test_disk_full_then_retry_uses_the_snapshot() {
 }
 
 
-void test_cancel_removes_temp_and_print_is_unavailable() {
+void test_b11_b53_cancel_removes_temp_and_print_is_unavailable() {
   pixcake::test::FakeFileSystem files;
   auto queue = pixcake::ExportQueue::open("/cache/exports");
   auto job = job_of("exp-1", "orig-1", "/out/layout.jpg");
@@ -351,7 +351,7 @@ void test_cancel_removes_temp_and_print_is_unavailable() {
   EXPECT(printed.request_print("missing", false, unavailable) == pixcake::ResultCode::StateConflict);
 }
 
-void test_product_facts_match_one_settlement() {
+void test_b110_product_facts_match_one_settlement() {
   pixcake::test::FakeFileSystem files;
   auto queue = pixcake::ExportQueue::open("/cache/exports");
   auto normal = job_of("exp-a", "orig-1", "/out/a.jpg");
@@ -414,7 +414,7 @@ void test_commit_returns_sync_error_after_unlinking_mismatched_destination() {
 
 
 
-void test_publish_does_not_overwrite_a_file_that_appears_after_preflight() {
+void test_b99_publish_does_not_overwrite_a_file_that_appears_after_preflight() {
   RaceDestinationFileSystem files;
   files.destination = "/out/race.jpg";
   files.raced_bytes = {9, 9, 9};
@@ -535,24 +535,35 @@ void test_o08_failed_export_records_reason() {
          kept.records.back().phase == "取消" && kept.records.back().task_id == "exp-2");
 }
 
+// B-03：导出时没有选中图片（任务不带原图编号）返回状态冲突，队列和事件都不变。
+void test_b03_export_without_selected_image_is_refused() {
+  auto queue = pixcake::ExportQueue::open("/cache/exports");
+  const auto before = queue.events().size();
+  EXPECT(queue.enqueue(job_of("exp-none", "", "/out/none.jpg")) == pixcake::ResultCode::StateConflict);
+  pixcake::ExportJob stored;
+  EXPECT(!queue.find_job("exp-none", stored));
+  EXPECT(queue.events().size() == before);
+}
+
 int main() {
+  test_b03_export_without_selected_image_is_refused();
   test_o05_export_commit_start_and_finish();
   test_o08_failed_export_records_reason();
-  test_b32_export_settings_parse_strictly();
+  test_b32_b47_export_settings_parse_strictly();
   test_b32_enqueue_rejects_duplicate_quality();
   test_b32_enqueue_stores_canonical_settings();
-  test_snapshot_and_fast_export_stay();
+  test_b66_snapshot_and_fast_export_stay();
   test_quality_is_limited_by_export_contract();
   test_b63_stale_export_handle_cannot_publish_after_cancel();
   test_enqueue_requires_document_snapshot();
   test_commit_once_and_reject_a_different_destination();
-  test_disk_full_then_retry_uses_the_snapshot();
-  test_cancel_removes_temp_and_print_is_unavailable();
-  test_product_facts_match_one_settlement();
+  test_b94_disk_full_then_retry_uses_the_snapshot();
+  test_b11_b53_cancel_removes_temp_and_print_is_unavailable();
+  test_b110_product_facts_match_one_settlement();
   test_commit_returns_remove_error_when_mismatched_destination_cannot_be_deleted();
   test_commit_returns_sync_error_after_unlinking_mismatched_destination();
   test_duplicate_task_cache_key_is_state_conflict_and_one_row_round_trips();
-  test_publish_does_not_overwrite_a_file_that_appears_after_preflight();
+  test_b99_publish_does_not_overwrite_a_file_that_appears_after_preflight();
   test_enqueue_rejects_destination_outside_selected_root();
   if (g_failures != 0) {
     std::fprintf(stderr, "%d failure(s)\n", g_failures);
