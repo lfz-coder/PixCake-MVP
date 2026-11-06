@@ -166,7 +166,7 @@ kernel/
 gpu/
   facade/           pixcake::gl 的公共头
   backend/qt/       本阶段唯一允许包含 QOpenGL 的目录
-  backend/native/   同名纯 OpenGL 类型。本阶段冻结接口，不提供实现
+  backend/native/   同名纯 OpenGL Core 类型。本阶段提供平台原生实现，平台 context 和 GL 函数加载只留在该目录
   render/           绘制描述的执行器
 platform/
   macos/
@@ -489,13 +489,13 @@ AI 点修不是能力。它是壳层的一种选区会话：选区写入 `mask`�
 
 阶段一实现放在 `pixcake::gl::qt`，内部可以使用 `QOpenGLContext`、`QOffscreenSurface`、`QOpenGLFunctions` 以及纹理、缓冲、着色器、帧缓冲这些 Qt 封装。
 
-后一阶段的纯 OpenGL 实现放在 `pixcake::gl::native`。类名和方法与 Qt 后端逐字相同。
+纯 OpenGL Core 实现放在 `pixcake::gl::native`。类名和方法与 Qt 后端逐字相同；平台 context 和 GL 函数加载留在 `gpu/backend/native`。
 
 业务代码只使用 `pixcake::gl` 里的同名类型。`pixcake::gl` 的头文件不包含任何 Qt 头。Qt 类型因此不会进渲染翻译单元。
 
-公共类型用隐藏实现持有后端对象。编译开关 `PIXCAKE_GL_BACKEND` 取值 `qt` 或 `native`，只决定链接哪一个后端库。切换后端时不改 `gpu/render` 的调用点。
+公共类型用隐藏实现持有后端对象：每个后端实现 `pixcake::gl::detail` 里的 `ContextImpl`、`ShaderImpl`、`ProgramImpl` 等接口，并由各自的 `create_context()` 工厂注入。两个后端库可以同时构建，调用方在运行时选择用哪个工厂创建 `Context`，切换后端时不改 `gpu/render` 的调用点。
 
-本阶段不实现 `native` 的函数体。本阶段必须把下面的类名和方法冻结，避免 Qt 后端先长出一套无法同名替换的接口。
+本阶段同时实现 `native` 的函数体，并冻结两边逐字相同的类名和方法。native 后端使用平台原生 Core profile context 和可替换的 OpenGL 函数加载器；业务代码仍只依赖 `pixcake::gl`，不把平台类型带进公共头。
 
 ### 9.2 冻结的类型
 
@@ -668,7 +668,7 @@ AI 点修不是能力。它是壳层的一种选区会话：选区写入 `mask`�
 - 排队取消不产生扣点事件。生成中取消保留扣点事件。同一笔触编号重放只有一笔。
 - 极速导出开关打开时，命令入口拒绝调色；队列清空后仍然拒绝，直到关闭开关。
 - 原图路径失效后文档校验和不变；路径恢复后同一文档继续可编辑。
-- 渲染代码只包含 `pixcake::gl` 公共头。把后端从 `qt` 的编译开关改到不存在的 `native` 实现时，失败点位于后端库，而不是 `gpu/render` 的调用点。本阶段不要求 `native` 能画出图。
+- 渲染代码只包含 `pixcake::gl` 公共头。把编译开关从 `qt` 切到 `native` 时，`gpu/render` 的调用点不变；native 后端在支持的平台创建 Core profile context 并执行同一套资源 API，不支持的平台在 context 创建处返回明确错误。
 
 ## 16. 和需求文档的对应
 
@@ -689,7 +689,7 @@ AI 点修不是能力。它是壳层的一种选区会话：选区写入 `mask`�
 ## 17. 本阶段的架构不做
 
 - 不把内置能力做成可热插拔的动态库。
-- 不实现 `pixcake::gl::native` 的绘制。只冻结同名类型和方法，并保证 Qt 后端被关在 `gpu/backend/qt`。
+- native 后端允许并负责实现平台 OpenGL Core 的资源操作；Qt 类型仍只能出现在 `gpu/backend/qt`，native context 和函数加载不能上移到 facade 或 `gpu/render`。
 - 不把云协同、工作流编排、联机拍摄、芝士交付写进内核协议。壳层可以留入口。
 - 不把撤销全链写入磁盘。重启后折叠为一次保存。
 - 不让导出任务跟随入队之后的新滑杆。任务使用自己的快照。

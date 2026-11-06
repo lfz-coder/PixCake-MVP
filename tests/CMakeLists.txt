@@ -187,6 +187,10 @@ target_link_libraries(test_gpu_shader_path PRIVATE pixcake_gpu_render pixcake_gp
 add_test(NAME test_gpu_shader_path COMMAND test_gpu_shader_path)
 set_tests_properties(test_gpu_shader_path PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(test_gpu_backend_native gpu/test_gpu_backend_native.cpp)
+target_link_libraries(test_gpu_backend_native PRIVATE pixcake_gpu_render pixcake_gpu_backend_native pixcake_warnings)
+add_test(NAME test_gpu_backend_C57_C60 COMMAND test_gpu_backend_native)
+
 add_test(
   NAME arch_dependencies
   COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P ${CMAKE_SOURCE_DIR}/tests/arch/check_dependencies.cmake
