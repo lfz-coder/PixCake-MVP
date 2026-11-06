@@ -62,7 +62,7 @@ void test_c05_profile_is_an_enum_parameter() {
 void test_c31_parameter_modes_use_registered_capabilities() {
   const auto registry = pixcake::CapabilityRegistry::phase_one();
   for (const auto& mode : pixcake::phase_one_parameter_modes()) {
-    if (mode.capability_id == "mask" || mode.capability_id == "export") continue;
+    if (mode.capability_id == "mask" || mode.capability_id == "export" || mode.capability_id == "layer") continue;
     if (registry.find(mode.capability_id) == nullptr) {
       std::fprintf(stderr, "unregistered capability in parameter mode: %s/%s\n", mode.capability_id.c_str(),
                    mode.parameter_id.c_str());
@@ -341,7 +341,24 @@ void test_c05_monochrome_switches_hsl_to_mixer() {
   }
 }
 
+// Q-06：图层不透明度、蒙版羽化、祛路人选区羽化的范围只来自参数模式（契约 C-28、边界 B-33）。
+// `layer` 与 `mask` 是参数模式归属方，不是契约 §4 能力，所以不在描述表里。
+void test_q06_layer_ranges_come_from_parameter_modes() {
+  const auto* opacity = pixcake::find_parameter_mode("layer", "opacity");
+  EXPECT(opacity != nullptr && opacity->minimum == 0.0 && opacity->maximum == 100.0 && opacity->step == 1.0);
+  const auto* selection = pixcake::find_parameter_mode("mask", "selection_feather");
+  EXPECT(selection != nullptr && selection->minimum == 0.0 && selection->maximum == 1000.0 && selection->step == 1.0);
+  const auto* feather = pixcake::find_parameter_mode("mask", "feather");
+  EXPECT(feather != nullptr && feather->minimum == 0.0 && feather->maximum == 100.0);
+  EXPECT(pixcake::validate_parameter_display_value("layer", "opacity", "100"));
+  EXPECT(!pixcake::validate_parameter_display_value("layer", "opacity", "101"));
+  EXPECT(pixcake::validate_parameter_display_value("mask", "selection_feather", "1000"));
+  EXPECT(!pixcake::validate_parameter_display_value("mask", "selection_feather", "1001"));
+  EXPECT(pixcake::CapabilityRegistry::phase_one().find("layer") == nullptr);
+}
+
 int main() {
+  test_q06_layer_ranges_come_from_parameter_modes();
   test_c05_monochrome_switches_hsl_to_mixer();
   test_c49_color_editor_offsets();
   test_c31_q02_grain_belongs_to_detail();

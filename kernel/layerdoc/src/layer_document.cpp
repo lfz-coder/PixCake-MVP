@@ -1,5 +1,6 @@
 #include "pixcake/layerdoc/layer_document.hpp"
 
+#include "pixcake/capability/capability_registry.hpp"
 #include "pixcake/persist/atomic_file.hpp"
 #include "pixcake/persist/write_lock.hpp"
 #include "pixcake/support/checksum.hpp"
@@ -18,6 +19,17 @@ bool safe_id(const std::string& id) {
 }
 
 bool safe_name(const std::string& name) { return !name.empty() && !has_nul(name); }
+
+// 不透明度、蒙版羽化、选区羽化的范围只来自参数模式（质量清单 Q-06）：
+// layer/opacity、mask/feather、mask/selection_feather。
+bool within_mode(const char* owner, const char* parameter, long long value) {
+  return validate_parameter_display_value(owner, parameter, std::to_string(value));
+}
+
+std::uint32_t mode_maximum(const char* owner, const char* parameter) {
+  const ParameterMode* mode = find_parameter_mode(owner, parameter);
+  return mode == nullptr || mode->maximum < 0 ? 0u : static_cast<std::uint32_t>(mode->maximum);
+}
 
 bool known_blend(const std::string& blend) {
   return blend == "正常" || blend == "正片叠底" || blend == "滤色" || blend == "变亮" || blend == "变暗";
@@ -146,7 +158,7 @@ bool decode_layer(const std::vector<std::uint8_t>& payload, LayerView& layer) {
   if (!layer.parent_id.empty() && !safe_id(layer.parent_id)) {
     return false;
   }
-  if (opacity > 100) {
+  if (!within_mode("layer", "opacity", opacity)) {
     return false;
   }
   layer.opacity = static_cast<int>(opacity);
@@ -154,7 +166,7 @@ bool decode_layer(const std::vector<std::uint8_t>& payload, LayerView& layer) {
   // PXLD v1 wrote feather values above the current editor range.  The field
   // is understood, so migrate it to the nearest supported value while
   // keeping the rest of the document readable.
-  layer.mask_feather = static_cast<int>(std::min<std::uint32_t>(feather, 100u));
+  layer.mask_feather = static_cast<int>(std::min<std::uint32_t>(feather, mode_maximum("mask", "feather")));
   layer.group = (flags & 1u) != 0;
   layer.locked = (flags & 2u) != 0;
   layer.hidden = (flags & 4u) != 0;
@@ -282,7 +294,7 @@ ResultCode LayerDocument::set_blend(const std::string& id, const std::string& bl
 }
 
 ResultCode LayerDocument::set_opacity(const std::string& id, int opacity) {
-  if (!editable() || opacity < 0 || opacity > 100) {
+  if (!editable() || !within_mode("layer", "opacity", opacity)) {
     return ResultCode::StateConflict;
   }
   LayerView* layer = find(id);
@@ -489,7 +501,7 @@ ResultCode LayerDocument::set_mask_density(const std::string& id, int density) {
 }
 
 ResultCode LayerDocument::set_mask_feather(const std::string& id, int feather) {
-  if (!editable() || feather < 0 || feather > 100) {
+  if (!editable() || !within_mode("mask", "feather", feather)) {
     return ResultCode::StateConflict;
   }
   LayerView* layer = find(id);
@@ -501,7 +513,7 @@ ResultCode LayerDocument::set_mask_feather(const std::string& id, int feather) {
 }
 
 ResultCode LayerDocument::set_selection(bool inverted, int feather) {
-  if (!editable() || feather < 0 || feather > 1000) {
+  if (!editable() || !within_mode("mask", "selection_feather", feather)) {
     return ResultCode::StateConflict;
   }
   selection_.present = true;

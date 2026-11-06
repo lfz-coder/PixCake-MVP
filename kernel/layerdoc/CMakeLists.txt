@@ -2,4 +2,4 @@ add_library(pixcake_layerdoc
   src/layer_document.cpp
 )
 target_include_directories(pixcake_layerdoc PUBLIC include)
-target_link_libraries(pixcake_layerdoc PUBLIC pixcake_editdoc pixcake_persist pixcake_support pixcake_warnings)
+target_link_libraries(pixcake_layerdoc PUBLIC pixcake_capability pixcake_editdoc pixcake_persist pixcake_support pixcake_warnings)

@@ -166,6 +166,14 @@ std::vector<ParameterMode> make_parameter_modes() {
   }
   // mask 不是能力：这是 kernel/mask 蒙版属性“羽化”的显示刻度，不写入精修文档片段。
   add_unconfirmed_step("mask", "feather", 0.0, 100.0, 0.0, "mask", "pixcake.mask", "feather", 40);
+  // 祛路人选区羽化 0 到 1000（边界 B-33）。选区归 mask（契约 §4 第 76 行），由图层文档保存。
+  ParameterMode& selection_feather =
+      add("mask", "selection_feather", 0.0, 1000.0, 1.0, 0.0, "mask", "pixcake.mask", "selection_feather", 41);
+  selection_feather.default_confirmed = false;
+  // layer 不是能力：图层不透明度 0 到 100（边界 B-33、契约 C-28），由图层文档保存，不写入精修文档片段。
+  // 需求没有写默认值；新图层按 100 处理，标待确认。
+  ParameterMode& opacity = add("layer", "opacity", 0.0, 100.0, 1.0, 100.0, "layer", "", "opacity", 42);
+  opacity.default_confirmed = false;
   ParameterMode& angle = add_unconfirmed_step("crop", "angle", -45.0, 45.0, 0.0, "geometry", "pixcake.crop", "angle", 50);
   angle.default_confirmed = false;
   for (const char* axis : {"vertical", "horizontal", "rotation"}) {
