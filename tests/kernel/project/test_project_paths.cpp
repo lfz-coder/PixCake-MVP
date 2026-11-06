@@ -105,14 +105,12 @@ int main() {
   EXPECT(photos[0].access_credential == credential);
   EXPECT(photos[0].presence == "可编辑");
 
+  // S-10：没有书签或安全范围的原图不进项目库（权限不足），不留下一条无法再读的记录。
   const pixcake::ProjectResult empty_credential =
       library.add_photo(created.id, pixcake::test::admitted_png(files, "/tmp/empty.png"), "empty.png", {});
-  EXPECT(empty_credential.code == pixcake::ResultCode::Ok);
-  std::optional<pixcake::PhotoRow> loaded;
-  EXPECT(library.load_photo(empty_credential.id, loaded) == pixcake::ResultCode::Ok);
-  EXPECT(loaded.has_value());
-  EXPECT(loaded->access_credential.empty());
-  EXPECT(loaded->presence == "可编辑");
+  EXPECT(empty_credential.code == pixcake::ResultCode::PermissionDenied);
+  EXPECT(library.list_photos(std::nullopt, photos) == pixcake::ResultCode::Ok);
+  EXPECT(photos.size() == 1);
 
   store.reset();
   EXPECT(pixcake::SqliteProjectStore::open(db_path, store) == pixcake::ResultCode::Ok);
@@ -122,7 +120,7 @@ int main() {
   EXPECT(projects.size() == 1);
   EXPECT(projects[0].name == "a'b");
   EXPECT(reopened.list_photos(std::nullopt, photos) == pixcake::ResultCode::Ok);
-  EXPECT(photos.size() == 2);
+  EXPECT(photos.size() == 1);
   EXPECT(photos[0].access_credential == credential);
 
   pixcake::test::TempDir alien_dir;

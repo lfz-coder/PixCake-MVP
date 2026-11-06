@@ -169,7 +169,7 @@ gpu/
   backend/native/   同名纯 OpenGL Core 类型。本阶段提供平台原生实现，平台 context 和 GL 函数加载只留在该目录
   render/           绘制描述的执行器
 platform/
-  macos/
+  macos/            书签与安全范围（S-10）等平台适配。只有 platform/ 包含平台框架头（门禁规则 19）
   windows/
   harmony/
 storage/            SQLite 索引。不是参数正文

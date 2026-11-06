@@ -38,7 +38,7 @@
 - [x] **Task 2（C-33）**：追色精准控制。`color.match` 增加枚举参数 `precise`（`off`/`on`，默认 `off`）。精准控制写回的值作为“追色写回”记录写进色彩能力片段（与用户参数记录分开的记录类型），由命令入口写入（架构 394）。编译：`precise=on` 时程度通道不画、写回记录参与；`off` 时写回记录不参与、程度通道画。切换只改 `precise`。上位文档：架构 396 后补记录类型说明。测试 `test_c33_precise_on_draws_written_back_values_only`、`test_c33_precise_off_draws_amount_only`、`test_c33_toggle_keeps_both_sides`。
 - [x] **Task 3（C-30、Q-25）**：`kernel/ipc` 统一消息：预览请求/取消/帧头改用文档记录编码（`fragment_codec` 的记录格式）；新增导出进度、生成进度、取消、心跳；渲染、导出服务只用这些结构。新增 `apps/generated`（无 Qt、无 GL）：读取任务、写结果、追加账本事件；崩溃按不退点失败。门禁：`pixcake_app_generated` 不链接 Qt、GL、`pixcake_layerdoc`。测试 `test_c30_messages_round_trip_through_record_codec`、`test_c30_truncated_or_newer_message_rejected`、`test_q25_services_use_ipc_structs`（门禁）、`test_c30_generated_crash_fails_without_refund`。
 - [x] **Task 4（S-25）**：命令入口与项目、导出、生成、账本的写操作要求已登录会话（接口 `SessionGuard`，由 `services/account` 实现）；未登录返回 `NotSignedIn`。壳层：`--page` 只在 `PIXCAKE_DEV_PAGES` 构建可用；发布构建由会话决定首页（需求 79、103）。测试 `test_s25_signed_out_commands_rejected`、`test_s25_restored_session_enters_home`、门禁检查发布构建没有 `--page`。
-- [ ] **Task 5（S-10）**：原图访问凭据。`kernel/project` 只接受带书签的绝对路径；`SourceAccess` 接口解析书签（失效、过期、路径变化），`platform/macos` 用安全范围书签实现，内核测试用替身。书签失效标“原文件缺失”，参数文档保留（需求 118）。测试 `test_s10_admission_requires_bookmark`、`test_s10_stale_bookmark_marks_missing_and_keeps_document`、`test_s10_resolved_path_change_updates_record`。
+- [x] **Task 5（S-10）**：原图访问凭据。`kernel/project` 只接受带书签的绝对路径；`SourceAccess` 接口解析书签（失效、过期、路径变化），`platform/macos` 用安全范围书签实现，内核测试用替身。书签失效标“原文件缺失”，参数文档保留（需求 118）。测试 `test_s10_admission_requires_bookmark`、`test_s10_stale_bookmark_marks_missing_and_keeps_document`、`test_s10_resolved_path_change_updates_record`。
 - [ ] **Task 6（O-13–O-15）**：结果呈现链路。内核 `kernel/support` 增加 `UserNotice`（结果码 + 场景 → 文案 + 停留页面）；登录流程 `services/account/LoginFlow`（替身远端）区分验证码错误、过期、未收到（可重发）、断网，停留登录页（需求 897、223）；导入逐张结果（O-14）；原图缺失、文档恢复为空、能力需要更新三态分开（O-15）。壳层显示提示。测试 `test_o13_*`、`test_o14_import_reports_each_file`、`test_o15_three_states_distinct`。
 - [ ] **Task 7（Q-11、Q-12）**：拆 `apps/shell/main.cpp`：每页一个文件（登录、主页、图库、精修、创意），控件构建与文档修改分开（页面类只画，动作经控制器调用命令入口）；页面文字单一来源（`ui/shell` 的文案表，壳层与 `kernel/workspace` 不再各写一份）；没有超过 160 字符的行。测试：门禁统计 `apps/shell` 行宽；`test_q11_page_copy_single_source`（同一文案只在文案表出现）。
 - [ ] **Task 8（T-03）**：替身场景：第三方坏返回、超时、生成进程崩溃（与 Task 3、6 共用替身）。测试 `test_t03_*`。
@@ -62,3 +62,7 @@
 - Task 4：`CommandGate::set_session` 是可选设置，不设置时不查会话（现有内核测试大量构造命令入口）。主进程总是设置。代价：内核里漏设会话的调用方会绕过 S-25；`BusinessCommands` 的会话是构造参数，必须给。
 - Task 4：本机会话缓存（需求第 103 行“记住上次登录态”）还没有持久化来源，壳层的账号会话启动时是未登录，首屏是登录页。会话缓存的存放位置先要在上位文档里定。
 - Task 4：发布构建门禁：规则 18 检查 `--page` 与 `dev_preview` 只在 `PIXCAKE_DEV_PAGES` 块里；Release 配置下 CTest 有 `test_s25_release_shell_rejects_page`（本次在 Release 构建里跑过：`Unknown option 'page'`）。默认的 Debug 全量 CTest 不含这一条。
+- Task 5：书签解析到别的路径（被挪走或改名）时按需求第 118 行标“原文件缺失”，不跟着书签改路径；回到原路径后恢复。代价：macOS 书签能追踪移动，这里有意不用这个能力。
+- Task 5：系统不再授予读取（解析失败且不是“文件不在”）时，状态不变、返回权限不足，与已有的 `refresh_source_presence` 对无权读取的处理一致。
+- Task 5：非沙盒构建拿不到安全范围书签，`MacSourceAccess` 退回普通书签（首字节 `B`）；沙盒构建用安全范围书签（首字节 `S`）并在读取期间用 `SourceScope` 打开。代价：普通书签不限制进程对其他路径的读取；限制来自沙盒本身。
+- Task 5：空访问凭证在 `add_photo` 处拒绝（权限不足）。20 处测试调用原来传空凭证，改为非空测试凭证；`test_project_paths` 里“空凭证可以入库”的断言按 S-10 改为拒绝。

@@ -51,6 +51,9 @@ add_subdirectory(gpu/facade)
 add_subdirectory(apps/renderd)
 add_subdirectory(apps/exportd)
 add_subdirectory(apps/generated)
+if(APPLE)
+  add_subdirectory(platform/macos)
+endif()
 add_subdirectory(tests)
 
 # Architecture rules are a build gate as well as a test.  A forbidden kernel

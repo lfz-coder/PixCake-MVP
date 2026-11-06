@@ -213,4 +213,9 @@ foreach(path ${shell_sources})
   endforeach()
 endforeach()
 
+# 19. 平台框架只在 platform/ 里（架构“目录”一节；安全清单 S-10 的书签由 platform/macos 实现）。
+foreach(root "${SOURCE_DIR}/kernel" "${SOURCE_DIR}/ui" "${SOURCE_DIR}/apps" "${SOURCE_DIR}/services" "${SOURCE_DIR}/storage")
+  scan("${root}" "rule 19" "<CoreFoundation/" "<Foundation/" "<AppKit/" "<Security/")
+endforeach()
+
 message(STATUS "arch dependencies ok")

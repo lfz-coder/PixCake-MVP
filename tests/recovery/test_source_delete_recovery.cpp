@@ -106,6 +106,10 @@ class FailingPresenceStore final : public pixcake::ProjectStore {
   pixcake::ResultCode insert_photo(const pixcake::PhotoDraft& draft, std::int64_t& id) override {
     return inner_.insert_photo(draft, id);
   }
+  pixcake::ResultCode update_photo_access_credential(std::int64_t id,
+                                                     const std::vector<std::uint8_t>& credential) override {
+    return inner_.update_photo_access_credential(id, credential);
+  }
   pixcake::ResultCode update_photo_presence(std::int64_t id, const std::string& presence) override {
     ++presence_calls;
     if (fail_on_presence_call != 0 && presence_calls == fail_on_presence_call) {
@@ -217,7 +221,7 @@ void test_delete_source_file_recovers_when_final_presence_write_fails() {
   MemoryLog log;
   pixcake::ProjectLibrary library(store, files, clock, deleter, &log);
   const pixcake::ProjectResult project = library.create_project("恢复删除", pixcake::kOriginLocal, false);
-  const pixcake::ProjectResult photo = library.add_photo(project.id, pixcake::test::admitted_png(files, "/pictures/recover.png"), "recover.png", {});
+  const pixcake::ProjectResult photo = library.add_photo(project.id, pixcake::test::admitted_png(files, "/pictures/recover.png"), "recover.png", {1});
   store.fail_on_presence_call = 2;  // intent succeeds; post-delete state write fails.
   EXPECT(library.delete_source_file(photo.id).code == pixcake::ResultCode::DiskFull);
   std::optional<pixcake::PhotoRow> pending;

@@ -103,7 +103,7 @@ void test_s07_admitted_source_is_required_to_add_photo() {
   EXPECT(admitted.has_value() && admitted->absolute_path() == "/photos/real.png" && admitted->identity().valid);
   EXPECT(details.width == 8 && details.height == 6);
   if (!admitted) return;
-  EXPECT(fixture.project->add_photo(fixture.project_id, *admitted, "real.png", {}).code == pixcake::ResultCode::Ok);
+  EXPECT(fixture.project->add_photo(fixture.project_id, *admitted, "real.png", {1}).code == pixcake::ResultCode::Ok);
   EXPECT(fixture.photo_count() == 1);
 }
 
@@ -114,7 +114,7 @@ void test_s07_replaced_file_after_admission_is_rejected() {
   EXPECT(pixcake::image_import::admit_source(fixture.files, "/photos/swap.png", admitted) == pixcake::ResultCode::Ok);
   fixture.files.files["/photos/swap.png"] = png_header(9, 9);  // different content → different identity
   if (!admitted) return;
-  EXPECT(fixture.project->add_photo(fixture.project_id, *admitted, "swap.png", {}).code ==
+  EXPECT(fixture.project->add_photo(fixture.project_id, *admitted, "swap.png", {1}).code ==
          pixcake::ResultCode::StateConflict);
   EXPECT(fixture.photo_count() == 0);
 }
@@ -126,7 +126,7 @@ void test_c15_missing_file_after_admission_is_not_added() {
   EXPECT(pixcake::image_import::admit_source(fixture.files, "/photos/gone.png", admitted) == pixcake::ResultCode::Ok);
   fixture.files.files.erase("/photos/gone.png");
   if (!admitted) return;
-  EXPECT(fixture.project->add_photo(fixture.project_id, *admitted, "gone.png", {}).code ==
+  EXPECT(fixture.project->add_photo(fixture.project_id, *admitted, "gone.png", {1}).code ==
          pixcake::ResultCode::SourceMissing);
   EXPECT(fixture.photo_count() == 0);
 }
@@ -178,7 +178,7 @@ int main() {
   EXPECT(photos[0].source_identity.valid && photos[1].source_identity.valid);
   EXPECT(files.writes.empty());
 
-  const auto bad_project = coordinator.import_into(999, {{"/photos/ok.png", "again.png", {}}});
+  const auto bad_project = coordinator.import_into(999, {{"/photos/ok.png", "again.png", {1}}});
   EXPECT(bad_project.overall_code == pixcake::ResultCode::StateConflict);
   EXPECT(bad_project.items.size() == 1 && bad_project.items[0].probed);
   EXPECT(bad_project.accepted_count == 0);

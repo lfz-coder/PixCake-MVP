@@ -779,6 +779,23 @@ ResultCode SqliteProjectStore::update_photo_colors(const std::vector<std::int64_
   });
 }
 
+ResultCode SqliteProjectStore::update_photo_access_credential(std::int64_t id,
+                                                              const std::vector<std::uint8_t>& credential) {
+  Statement stmt;
+  const ResultCode prepared = stmt.prepare(impl_->db, "UPDATE photo SET access_credential = ? WHERE id = ?;");
+  if (prepared != ResultCode::Ok) {
+    return prepared;
+  }
+  if (const ResultCode code = bind_blob(stmt.get(), 1, credential); code != ResultCode::Ok) {
+    return code;
+  }
+  if (const ResultCode code = bind_int64(stmt.get(), 2, id); code != ResultCode::Ok) {
+    return code;
+  }
+  const int rc = sqlite3_step(stmt.get());
+  return rc == SQLITE_DONE ? ResultCode::Ok : map_sqlite(rc);
+}
+
 ResultCode SqliteProjectStore::update_photo_presence(std::int64_t id, const std::string& presence) {
   Statement stmt;
   const ResultCode prepared = stmt.prepare(impl_->db, "UPDATE photo SET presence = ? WHERE id = ?;");

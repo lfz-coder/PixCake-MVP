@@ -22,6 +22,7 @@ class SqliteProjectStore : public ProjectStore {
 
   ResultCode insert_photo(const PhotoDraft& draft, std::int64_t& id) override;
   ResultCode update_photo_presence(std::int64_t id, const std::string& presence) override;
+  ResultCode update_photo_access_credential(std::int64_t id, const std::vector<std::uint8_t>& credential) override;
   ResultCode update_photo_rating(std::int64_t id, int rating) override;
   ResultCode update_photo_flag(std::int64_t id, const std::string& flag) override;
   ResultCode update_photo_color(std::int64_t id, const std::string& color) override;

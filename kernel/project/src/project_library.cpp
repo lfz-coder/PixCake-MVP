@@ -157,6 +157,39 @@ ResultCode ProjectLibrary::refresh_source_presence() {
   return probe_error;
 }
 
+ResultCode ProjectLibrary::refresh_source_access(SourceAccess& access) {
+  std::vector<PhotoRow> photos;
+  const ResultCode listed = store_.list_photos(std::nullopt, photos);
+  if (listed != ResultCode::Ok) {
+    return listed;
+  }
+  ResultCode first_error = ResultCode::Ok;
+  const auto set_presence = [&](const PhotoRow& photo, const char* presence) {
+    return photo.presence == presence ? ResultCode::Ok : store_.update_photo_presence(photo.id, presence);
+  };
+  for (const PhotoRow& photo : photos) {
+    if (photo.presence == kPresenceDeletePending) continue;
+    const ResolvedSource resolved = access.resolve(photo.access_credential);
+    if (resolved.code == ResultCode::Ok && resolved.absolute_path == photo.absolute_path) {
+      if (resolved.stale && !resolved.refreshed.empty()) {
+        const ResultCode stored = store_.update_photo_access_credential(photo.id, resolved.refreshed);
+        if (stored != ResultCode::Ok) return stored;
+      }
+      if (const ResultCode updated = set_presence(photo, kPresenceEditable); updated != ResultCode::Ok) return updated;
+      continue;
+    }
+    if (resolved.code == ResultCode::Ok || resolved.code == ResultCode::SourceMissing) {
+      // 指向别处（被挪走或改名）或文件不在：都是“原文件缺失”，路径和参数文档不动。
+      if (const ResultCode updated = set_presence(photo, kPresenceMissing); updated != ResultCode::Ok) return updated;
+      note(ResultCode::SourceMissing, photo.absolute_path);
+      continue;
+    }
+    note(resolved.code, photo.absolute_path);
+    if (first_error == ResultCode::Ok) first_error = resolved.code;
+  }
+  return first_error;
+}
+
 ResultCode ProjectLibrary::source_status(std::int64_t photo_id) const {
   std::optional<PhotoRow> photo;
   const ResultCode loaded = store_.load_photo(photo_id, photo);
@@ -602,6 +635,9 @@ ProjectResult ProjectLibrary::add_photo(std::int64_t project_id, const AdmittedS
                                         std::string file_name, std::vector<std::uint8_t> access_credential) {
   if (!absolute_posix_path(source.absolute_path()) || file_name.empty() || !source.identity().valid) {
     return failed(ResultCode::StateConflict);
+  }
+  if (access_credential.empty()) {
+    return failed(ResultCode::PermissionDenied);
   }
   std::optional<ProjectRow> project;
   const ResultCode loaded = store_.load_project(project_id, project);

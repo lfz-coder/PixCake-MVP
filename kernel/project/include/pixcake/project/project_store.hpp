@@ -21,6 +21,7 @@ class ProjectStore {
 
   virtual ResultCode insert_photo(const PhotoDraft& draft, std::int64_t& id) = 0;
   virtual ResultCode update_photo_presence(std::int64_t id, const std::string& presence) = 0;
+  virtual ResultCode update_photo_access_credential(std::int64_t id, const std::vector<std::uint8_t>& credential) = 0;
   virtual ResultCode update_photo_rating(std::int64_t id, int rating) = 0;
   virtual ResultCode update_photo_flag(std::int64_t id, const std::string& flag) = 0;
   virtual ResultCode update_photo_color(std::int64_t id, const std::string& color) = 0;

@@ -3,6 +3,7 @@
 #include "pixcake/project/admitted_source.hpp"
 #include "pixcake/persist/file_system.hpp"
 #include "pixcake/project/project_store.hpp"
+#include "pixcake/project/source_access.hpp"
 #include "pixcake/project/source_deleter.hpp"
 #include "pixcake/support/clock.hpp"
 #include "pixcake/support/log_sink.hpp"
@@ -24,7 +25,7 @@ class ProjectLibrary {
                  LogSink* log);
 
   ProjectResult create_project(std::string name, std::string origin, bool cloud_marked);
-  // 只接受导入准入签发的凭证。写入前重新识别文件：文件已不存在返回原文件缺失，
+  // 只接受导入准入签发的凭证。访问凭证（书签或安全范围）为空返回权限不足（S-10）。写入前重新识别文件：文件已不存在返回原文件缺失，
   // 身份（设备、inode、大小）与准入时不同返回状态冲突，均不写入。
   ProjectResult add_photo(std::int64_t project_id, const AdmittedSource& source, std::string file_name,
                           std::vector<std::uint8_t> access_credential);
@@ -38,6 +39,10 @@ class ProjectLibrary {
 
   ResultCode startup();
   ResultCode refresh_source_presence();
+  // 按书签重新解析每张原图（S-10，需求第 118 行）：书签换新时存新书签；书签指向别的路径（被挪走或改名）
+  // 或文件不在时标“原文件缺失”，不改路径、不动参数文档；回到原路径时恢复“可编辑”。
+  // 系统不再授予读取时状态不变，返回权限不足。
+  ResultCode refresh_source_access(SourceAccess& access);
   ResultCode source_status(std::int64_t photo_id) const;
   ResultCode purge_expired_trash();
 

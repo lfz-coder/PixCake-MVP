@@ -234,6 +234,13 @@ target_include_directories(test_generated PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 target_link_libraries(test_generated PRIVATE pixcake_generated_service pixcake_storage pixcake_warnings)
 add_test(NAME test_generated COMMAND test_generated)
 
+if(APPLE)
+  add_executable(test_mac_source_access platform/test_mac_source_access.cpp)
+  target_include_directories(test_mac_source_access PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+  target_link_libraries(test_mac_source_access PRIVATE pixcake_platform_macos pixcake_warnings)
+  add_test(NAME test_mac_source_access COMMAND test_mac_source_access)
+endif()
+
 add_executable(test_exportd_image_io apps/test_exportd_image_io.cpp)
 target_link_libraries(test_exportd_image_io PRIVATE pixcake_exportd_service pixcake_warnings)
 add_test(NAME test_exportd_image_io COMMAND test_exportd_image_io)
