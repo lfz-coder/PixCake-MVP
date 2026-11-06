@@ -161,3 +161,17 @@ git diff --check
 7. **用户给出的范围写进附录 B**（C-02）。
 
 1、2、3、4 关闭后，重跑全量构建、CTest、本轮两个探针，再做第五轮复审。
+
+## 后续修复（2026-11-06，本记录发布后；关闭与否在第五轮确认）
+
+用户裁决：AI 追色程度恢复需求原文 0–200；颗粒归属按契约。用户截图中的“自定义工具栏”把颗粒与白平衡并列，按需求 §8.2 与架构第 633 行，工具栏保存的是能力参数的引用，不构成能力划分。
+
+| 复审条件 | 提交 | 内容 |
+| --- | --- | --- |
+| 1 能力标识回到 §4 | `4fcfc2b` | 注册表补 `detail` 描述（同步树仍 22 项）；颗粒参数改为 `detail` 的 `grain_*`；撤回 `grain`；`test_c31_q02_grain_belongs_to_detail`。 |
+| 2 程度范围 | `4fcfc2b` | `color.match` 恢复 0–200，`color.style` 0–100；需求文档三处追色描述还原；契约清单第 99 行、边界清单 B-33 按用户裁决区分两者；参考实现程度按 `amount/100` 夹到 0–2；`test_b33_c48_amount_ranges`。 |
+| 3 黑白组 | `a6cae0b` | test 版实测黑白混合 8 色 -100..100 整数默认 0（`evidence/2026-11-06-monochrome-mixer-measurement.md`）；只在黑白档可编辑；黑白档下色彩编辑器偏移不可编辑；`test_c05_monochrome_switches_hsl_to_mixer`。壳层是标准档的静态展示，不随配置文件切换。 |
+| 4 依赖环路 | `bad9861` | `CommandGate` 遇环拒绝全部命令并写 `command.pipeline.invalid`；`test_c35_o04_cyclic_pipeline_refuses_editing`（变异检查通过）。 |
+
+修复后：全量 CTest 58/58；本轮两个否决探针重跑，跨句柄 B 仍为“状态冲突”，跨进程 20/20。
+未处理：条件 5（Glad，需要联网授权）、6（2 秒写盘判定、`tests/recovery` 归集）、7（用户给出的范围写进附录 B）；新观察：这张 PNG 的配置文件下拉没有需求写的“质感”。
