@@ -1,0 +1,1 @@
+add_capability_module(manual_heal)

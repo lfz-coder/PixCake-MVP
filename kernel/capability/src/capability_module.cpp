@@ -32,7 +32,8 @@ DrawStep make_step(const ParameterMode& mode) {
 
 }  // namespace
 
-ParameterBackedModule::ParameterBackedModule(CapabilityDescriptor descriptor) : descriptor_(std::move(descriptor)) {}
+ParameterBackedModule::ParameterBackedModule(CapabilityDescriptor descriptor, ModuleTraits traits)
+    : descriptor_(std::move(descriptor)), traits_(std::move(traits)) {}
 
 const std::string& ParameterBackedModule::id() const { return descriptor_.id; }
 
@@ -128,12 +129,19 @@ FragmentResult ParameterBackedModule::write_back(const std::optional<FragmentByt
   return result;
 }
 
-bool ParameterBackedModule::draws_parameter(const ParameterReader&, const ParameterMode&) const { return true; }
+bool ParameterBackedModule::draws_parameter(const ParameterReader& reader, const ParameterMode& mode) const {
+  return parameter_disabled_reason(reader, mode.parameter_id).empty();
+}
 
 ModuleCompile ParameterBackedModule::compile_modes(const ParameterReader& reader,
                                                    const std::vector<const ParameterMode*>& modes,
                                                    const std::string& only) const {
   ModuleCompile result;
+  const std::string unavailable = disabled_reason(reader.conditions());
+  if (!unavailable.empty()) {
+    result.diagnostics.push_back({descriptor_.id, unavailable + "，保留片段但跳过绘制", false});
+    return result;
+  }
   const std::uint32_t version = reader.fragment_version(descriptor_.id);
   for (const auto* mode : modes) {
     if (version > mode->schema_version) {
@@ -209,7 +217,10 @@ std::optional<DisplayScale> ParameterBackedModule::display_scale(const std::stri
 }
 
 std::string ParameterBackedModule::disabled_reason(const ImageConditions& conditions) const {
-  return conditions.broken ? "坏片" : "";
+  if (traits_.may_break_image && conditions.broken) return "坏片";
+  if (traits_.needs_detection && conditions.detection_pending) return "检测未完成";
+  if (traits_.needs_assets && conditions.assets_missing) return "缺少素材";
+  return "";
 }
 
 std::string ParameterBackedModule::parameter_disabled_reason(const ParameterReader& reader,
@@ -218,7 +229,12 @@ std::string ParameterBackedModule::parameter_disabled_reason(const ParameterRead
       descriptor_.id, parameter_id, [&reader](std::string_view capability, std::string_view parameter) {
         return reader.value(std::string(capability), std::string(parameter));
       });
-  return reason.value_or("");
+  if (reason) return *reason;
+  const auto& solid = traits_.solid_background_parameters;
+  if (reader.conditions().not_solid_color && std::find(solid.begin(), solid.end(), parameter_id) != solid.end()) {
+    return "非纯色背景，无效果";
+  }
+  return "";
 }
 
 FragmentResult ParameterBackedModule::migrate(const FragmentBytes& fragment) const {
@@ -228,6 +244,17 @@ FragmentResult ParameterBackedModule::migrate(const FragmentBytes& fragment) con
   // 第一阶段只有版本 1，没有可升级的旧版本；更低的版本号不是本能力写出的片段。
   result.code = fragment.version > current_version() ? ResultCode::CapabilityTooNew : ResultCode::StateConflict;
   return result;
+}
+
+std::vector<GenerationEntry> ParameterBackedModule::generation_entries() const { return traits_.generation_entries; }
+
+std::optional<GenerationJump> ParameterBackedModule::compile_jump(const std::string& tool_id,
+                                                                   const JumpSource& source) const {
+  const auto& entries = traits_.generation_entries;
+  const bool declared = std::any_of(entries.begin(), entries.end(),
+                                    [&tool_id](const GenerationEntry& entry) { return entry.tool_id == tool_id; });
+  if (!declared || source.image_id.empty()) return std::nullopt;
+  return GenerationJump{descriptor_.id, tool_id, source.image_id, source.revision, source.suggested_mask_ids};
 }
 
 }  // namespace pixcake

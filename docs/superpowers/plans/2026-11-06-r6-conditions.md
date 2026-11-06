@@ -34,12 +34,17 @@
 ## Tasks
 
 - [x] **Task 1**：Q-06 收尾（`layer_document.cpp:711`）+ 账本移动语义。测试 `test_p23_moved_from_ledger_is_empty`；Q-06 用变异验证（把 `mask/selection_feather` 上限改成 900，解码 1000 的用例应失败）。
-- [ ] **Task 2**：模块声明与图片条件。测试 `test_c31_only_body_reports_broken_image`、`test_c31_portrait_needs_detection`、`test_c31_sky_needs_assets`、`test_c31_solid_background_parameter_has_no_effect_on_other_backgrounds`、`test_c31_generation_entries_compile_to_jumps`。
-- [ ] **Task 3**：20 个能力目录与工厂表。测试 `test_c31_every_capability_has_its_own_directory`；门禁对能力目录的链接检查改到工厂函数。
+- [x] **Task 2**：模块声明与图片条件。测试 `test_c31_only_body_reports_broken_image`、`test_c31_portrait_needs_detection`、`test_c31_sky_needs_assets`、`test_c31_solid_background_parameter_has_no_effect_on_other_backgrounds`、`test_c31_generation_entries_compile_to_jumps`。
+- [x] **Task 3**：20 个能力目录与工厂表。测试 `test_c31_every_capability_has_its_own_directory`；门禁对能力目录的链接检查改到工厂函数。
 - [ ] **Task 4**：预设、同步、粘贴经模块写回。测试 `test_c31_transfer_keeps_target_unknown_fields`、`test_c31_transfer_copies_too_new_source`、`test_c31_transfer_leaves_too_new_target`，以及预设、同步模块里的对应集成测试。
 - [ ] **Task 5**：状态接线。测试 `test_p12_commit_marks_photo_edited`、`test_p12_failed_commit_does_not_mark_edited`、`test_p12_exported_products_mark_photos_exported`。
 - [ ] **Task 6**：第七轮复审。
 
 ## Rulings
 
-（执行中记录）
+- 18 个能力的写法：每个能力一个目录、一个工厂函数，能力的特殊之处写成声明（`ModuleTraits`：需要检测、需要素材、可能坏片、纯色参数、生成入口），由 `ParameterBackedModule` 统一执行；只有行为确实不同的 `detail`（按阶段编译）在自己目录里派生，类不出目录。理由：可读——打开一个能力目录就能看到它的全部规则和来源行号；可扩展——新能力是“建目录、写工厂、表里加一行”，某个能力以后需要特殊行为时只在它自己的目录里派生，不动别的能力。代价：如果以后很多能力都需要特殊行为，`ModuleTraits` 不应继续加字段，而应让这些能力各自派生。
+- `color.global` 不再派生：配置文件切换已由参数模式的禁用规则表达（架构 7.4 节末），基类的“当前不可编辑的参数不画”就是它的行为。代价：无行为变化（`test_c31_color_global_draws_by_profile` 不变）。
+- 第六轮实现里所有能力在坏片时都返回“坏片”，与架构第 623 行不符；改为只有 `portrait.body`。
+- 参数模式仍集中在 `kernel/capability/src/capability_registry.cpp`：`editdoc`、`layerdoc`、界面都要查参数模式，而能力目录链接 `pixcake_capability`，把参数模式移进能力目录会形成环。代价：加参数时要改两处（参数模式表、必要时能力声明）。
+- 图片条件（检测是否完成、背景是否纯色、素材是否在本机）在渲染里还没有来源，`render::compile` 的读取方返回“全部满足”。代价：在接上检测与素材模块之前，渲染端不会因这些条件跳过能力；模块与测试已就绪。
+- 拍摄时间不在本计划：内核不读 EXIF（依赖记录第二节只允许读文件头固定位置），解码适配器（libvips）还没有接入。

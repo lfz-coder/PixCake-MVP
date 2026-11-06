@@ -91,6 +91,7 @@ target_link_libraries(test_capability_registry PRIVATE pixcake_capability pixcak
 add_test(NAME test_capability_registry COMMAND test_capability_registry)
 add_executable(test_capability_modules kernel/capability/test_capability_modules.cpp)
 target_link_libraries(test_capability_modules PRIVATE pixcake_capability_modules pixcake_warnings)
+target_compile_definitions(test_capability_modules PRIVATE PIXCAKE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 add_test(NAME test_capability_modules COMMAND test_capability_modules)
 
 add_executable(test_render_description kernel/render/test_render_description.cpp)

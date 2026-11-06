@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <set>
 #include <map>
 #include <optional>
 #include <string>
@@ -29,6 +31,7 @@ class MapReader : public pixcake::ParameterReader {
  public:
   std::map<std::pair<std::string, std::string>, std::string> values;
   std::map<std::string, std::uint32_t> versions;
+  pixcake::ImageConditions image;
 
   std::optional<std::string> value(const std::string& capability_id, const std::string& parameter_id) const override {
     const auto found = values.find({capability_id, parameter_id});
@@ -39,6 +42,7 @@ class MapReader : public pixcake::ParameterReader {
     const auto found = versions.find(capability_id);
     return found == versions.end() ? 1u : found->second;
   }
+  pixcake::ImageConditions conditions() const override { return image; }
 };
 
 pixcake::FragmentBytes fragment_of(std::vector<pixcake::ParameterValue> parameters,
@@ -169,13 +173,112 @@ void test_c31_display_scale_comes_from_parameter_modes() {
   EXPECT(!module("color.global").display_scale("grain_amount"));
 }
 
-void test_c31_disabled_reason() {
+// 架构第 623 行：坏片只让全身美型不可用。其余能力不因坏片禁用。
+void test_c31_only_body_reports_broken_image() {
   pixcake::ImageConditions ok;
-  EXPECT(module("color.global").disabled_reason(ok).empty());
   pixcake::ImageConditions broken;
   broken.broken = true;
-  EXPECT(module("color.global").disabled_reason(broken) == "坏片");
-  EXPECT(module("detail").disabled_reason(broken) == "坏片");
+  for (const auto* found : pixcake::phase_one_capability_modules()) {
+    EXPECT(found->disabled_reason(ok).empty());
+    EXPECT(found->disabled_reason(broken) == (found->id() == "portrait.body" ? "坏片" : ""));
+  }
+}
+
+// 架构第 6.7 节：人像能力在检测未完成时不可用，不编造几何。
+void test_c31_portrait_needs_detection() {
+  const std::set<std::string> portrait = {"portrait.blemish", "portrait.skin", "portrait.reshape", "portrait.feature",
+                                          "portrait.body"};
+  pixcake::ImageConditions pending;
+  pending.detection_pending = true;
+  for (const auto* found : pixcake::phase_one_capability_modules()) {
+    EXPECT(found->disabled_reason(pending) == (portrait.count(found->id()) ? "检测未完成" : ""));
+  }
+  MapReader reader;
+  reader.values[{"portrait.feature", "eye_glint_vertical"}] = "10";
+  EXPECT(module("portrait.feature").compile(reader).steps.size() == 1);
+  reader.image = pending;
+  const auto skipped = module("portrait.feature").compile(reader);
+  EXPECT(skipped.steps.empty());
+  EXPECT(skipped.diagnostics.size() == 1 && !skipped.diagnostics[0].blocking &&
+         skipped.diagnostics[0].message.find("检测未完成") != std::string::npos);
+}
+
+// 需求第 12.3 节：换天空用内置素材或上传的素材；没有素材时不可用。
+void test_c31_sky_needs_assets() {
+  pixcake::ImageConditions missing;
+  missing.assets_missing = true;
+  for (const auto* found : pixcake::phase_one_capability_modules()) {
+    EXPECT(found->disabled_reason(missing) == (found->id() == "image.sky" ? "缺少素材" : ""));
+  }
+}
+
+// 需求第 590、905 行：纯色背景功能用在非纯色图上无效果，不报错；能力本身仍可用。
+void test_c31_solid_background_parameter_has_no_effect_on_other_backgrounds() {
+  const auto& background = module("image.background");
+  MapReader reader;
+  reader.values[{"image.background", "light_uniform_brightness"}] = "20";
+  EXPECT(background.compile(reader).steps.size() == 1);
+  reader.image.not_solid_color = true;
+  EXPECT(background.disabled_reason(reader.image).empty());
+  EXPECT(!background.parameter_disabled_reason(reader, "light_uniform_brightness").empty());
+  const auto compiled = background.compile(reader);
+  EXPECT(compiled.steps.empty());
+  for (const auto& diagnostic : compiled.diagnostics) EXPECT(!diagnostic.blocking);
+}
+
+// 架构第 7.5 节：跳到创意的入口声明在能力上，编译成跳转；能力不实现生成。
+void test_c31_generation_entries_compile_to_jumps() {
+  const std::map<std::string, std::vector<std::string>> expected = {
+      {"portrait.skin", {"creative.face_redraw"}},
+      {"portrait.body", {"creative.slim_belly", "creative.add_abs"}},
+      {"image.background",
+       {"creative.remove_passerby", "creative.fill_grass", "creative.backdrop", "creative.winter_snow"}},
+      {"image.idphoto", {"creative.idphoto_clothes"}},
+      {"crop", {"creative.outpaint"}},
+  };
+  for (const auto* found : pixcake::phase_one_capability_modules()) {
+    std::vector<std::string> tools;
+    for (const auto& entry : found->generation_entries()) {
+      tools.push_back(entry.tool_id);
+      EXPECT(!entry.label.empty());
+    }
+    const auto wanted = expected.find(found->id());
+    EXPECT(tools == (wanted == expected.end() ? std::vector<std::string>{} : wanted->second));
+  }
+  const auto jump =
+      module("image.background").compile_jump("creative.remove_passerby", {"img-1", 7, {"mask-1"}});
+  EXPECT(jump && jump->capability_id == "image.background" && jump->tool_id == "creative.remove_passerby" &&
+         jump->image_id == "img-1" && jump->revision == 7 &&
+         jump->suggested_mask_ids == std::vector<std::string>({"mask-1"}));
+  EXPECT(!module("image.background").compile_jump("creative.face_redraw", {"img-1", 7, {}}));
+  EXPECT(!module("color.global").compile_jump("creative.outpaint", {"img-1", 7, {}}));
+}
+
+// 架构第 154 行：每个精修能力一个子目录，目录里有自己的模块工厂。
+void test_c31_every_capability_has_its_own_directory() {
+  namespace fs = std::filesystem;
+  const fs::path root = fs::path(PIXCAKE_SOURCE_DIR) / "kernel" / "capabilities";
+  std::set<std::string> wanted;
+  const auto registry = pixcake::CapabilityRegistry::phase_one();
+  for (const auto& descriptor : registry.descriptors()) {
+    std::string dir = descriptor.id;
+    std::replace(dir.begin(), dir.end(), '.', '_');
+    wanted.insert(dir);
+    EXPECT(fs::exists(root / dir / "src" / (dir + "_module.cpp")));
+    EXPECT(fs::exists(root / dir / "include" / "pixcake" / "capabilities" / dir / (dir + "_module.hpp")));
+    EXPECT(fs::exists(root / dir / "CMakeLists.txt"));
+  }
+  std::set<std::string> present;
+  for (const auto& entry : fs::directory_iterator(root)) {
+    if (entry.is_directory() && entry.path().filename() != "include") present.insert(entry.path().filename().string());
+  }
+  for (const auto& name : present) {
+    if (wanted.count(name) == 0) std::fprintf(stderr, "extra capability directory: %s\n", name.c_str());
+  }
+  for (const auto& name : wanted) {
+    if (present.count(name) == 0) std::fprintf(stderr, "missing capability directory: %s\n", name.c_str());
+  }
+  EXPECT(present == wanted);
 }
 
 void test_c31_migrate_keeps_fragment_on_failure() {
@@ -264,7 +367,12 @@ int main() {
   test_c31_write_back_replaces_or_overlays_and_keeps_unknown_fields();
   test_c31_extract_returns_known_values_and_the_fragment();
   test_c31_display_scale_comes_from_parameter_modes();
-  test_c31_disabled_reason();
+  test_c31_only_body_reports_broken_image();
+  test_c31_portrait_needs_detection();
+  test_c31_sky_needs_assets();
+  test_c31_solid_background_parameter_has_no_effect_on_other_backgrounds();
+  test_c31_generation_entries_compile_to_jumps();
+  test_c31_every_capability_has_its_own_directory();
   test_c31_migrate_keeps_fragment_on_failure();
   test_c31_detail_draws_grain_only_when_amount_is_nonzero();
   test_c31_color_global_draws_by_profile();

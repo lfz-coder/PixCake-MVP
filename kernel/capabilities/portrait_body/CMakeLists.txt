@@ -1,0 +1,1 @@
+add_capability_module(portrait_body)

@@ -29,6 +29,14 @@ struct ParameterValue {
   }
 };
 
+// 能力可用性取决于的图片条件（架构 7.2 “禁用原因”）。哪个能力看哪一项见架构 7.2 的禁用条件表。
+struct ImageConditions {
+  bool broken = false;             // 全身美型判断会坏片
+  bool not_solid_color = false;    // 背景不是纯色
+  bool assets_missing = false;     // 所需素材不在本机
+  bool detection_pending = false;  // 人脸、人物检测还没完成
+};
+
 // 编译时读取参数：拖动中的预览值优先，其次是已提交值。
 class ParameterReader {
  public:
@@ -36,6 +44,38 @@ class ParameterReader {
   virtual std::optional<std::string> value(const std::string& capability_id, const std::string& parameter_id) const = 0;
   // 没有片段时为 1。
   virtual std::uint32_t fragment_version(const std::string& capability_id) const = 0;
+  // 读取方不知道的条件按“满足”处理（全为假）。
+  virtual ImageConditions conditions() const { return {}; }
+};
+
+// 从精修跳到创意的入口（架构 7.5）。能力只声明和编译跳转，不实现生成，也不扣点。
+struct GenerationEntry {
+  std::string tool_id;
+  std::string label;
+};
+
+struct JumpSource {
+  std::string image_id;
+  std::uint64_t revision = 0;
+  std::vector<std::string> suggested_mask_ids;
+};
+
+// 生成式入口的编译结果：工具编号、当前图片、当前修订、建议选区（架构 7.2）。
+struct GenerationJump {
+  std::string capability_id;
+  std::string tool_id;
+  std::string image_id;
+  std::uint64_t revision = 0;
+  std::vector<std::string> suggested_mask_ids;
+};
+
+// 一个能力的声明。写在该能力自己的目录里（kernel/capabilities/<能力>/），由 ParameterBackedModule 执行。
+struct ModuleTraits {
+  bool needs_detection = false;   // 检测未完成时不可用
+  bool needs_assets = false;      // 缺少素材时不可用
+  bool may_break_image = false;   // 坏片时不可用
+  std::vector<std::string> solid_background_parameters;  // 只对纯色背景生效的参数
+  std::vector<GenerationEntry> generation_entries;
 };
 
 // 绘制描述是数据：通道编号、程序名、从哪段参数取值、使用哪块蒙版、混合方式、顺序。没有 OpenGL 对象。
@@ -89,14 +129,6 @@ struct DisplayScale {
   bool center_line = false;
 };
 
-// 能力可用性取决于的图片条件（架构 7.2 “禁用原因”）。
-struct ImageConditions {
-  bool broken = false;
-  bool not_solid_color = false;
-  bool assets_missing = false;
-  bool detection_pending = false;
-};
-
 enum class WriteMode { Replace, Overlay };
 
 struct ExtractResult {
@@ -141,12 +173,16 @@ class CapabilityModule {
   virtual std::string parameter_disabled_reason(const ParameterReader& reader, const std::string& parameter_id) const = 0;
   // 迁移到当前版本。失败时 fragment 是原片段，不变。
   virtual FragmentResult migrate(const FragmentBytes& fragment) const = 0;
+  // 本能力声明的生成入口；tool_id 不是本能力声明的入口时没有跳转。
+  virtual std::vector<GenerationEntry> generation_entries() const = 0;
+  virtual std::optional<GenerationJump> compile_jump(const std::string& tool_id, const JumpSource& source) const = 0;
 };
 
-// 按描述表和参数模式实现全部操作。专门的能力（color.global、detail）在 kernel/capabilities/ 下派生。
+// 按描述表、参数模式和能力声明实现全部操作。每个能力在自己的目录里给出声明；
+// 行为与此不同的能力（例如 detail 按阶段编译）在自己的目录里派生。
 class ParameterBackedModule : public CapabilityModule {
  public:
-  explicit ParameterBackedModule(CapabilityDescriptor descriptor);
+  ParameterBackedModule(CapabilityDescriptor descriptor, ModuleTraits traits);
 
   const std::string& id() const override;
   const std::string& module_label() const override;
@@ -162,9 +198,12 @@ class ParameterBackedModule : public CapabilityModule {
   std::string disabled_reason(const ImageConditions& conditions) const override;
   std::string parameter_disabled_reason(const ParameterReader& reader, const std::string& parameter_id) const override;
   FragmentResult migrate(const FragmentBytes& fragment) const override;
+  std::vector<GenerationEntry> generation_entries() const override;
+  std::optional<GenerationJump> compile_jump(const std::string& tool_id, const JumpSource& source) const override;
 
  protected:
-  // 派生能力用来决定某个参数这一帧是否参与绘制（例如黑白配置文件下不画 HSL）。默认全部参与。
+  // 某个参数这一帧是否参与绘制。默认：当前不可编辑的参数不画（黑白配置文件下的 HSL、
+  // 颗粒效果为 0 时的其余颗粒参数、非纯色背景下的纯色参数），数据不删。
   virtual bool draws_parameter(const ParameterReader& reader, const ParameterMode& mode) const;
   // 按参数模式把读到的值编成一条绘制描述；only 非空时只取这一个参数。
   ModuleCompile compile_modes(const ParameterReader& reader, const std::vector<const ParameterMode*>& modes,
@@ -172,6 +211,7 @@ class ParameterBackedModule : public CapabilityModule {
 
  private:
   CapabilityDescriptor descriptor_;
+  ModuleTraits traits_;
 };
 
 }  // namespace pixcake
