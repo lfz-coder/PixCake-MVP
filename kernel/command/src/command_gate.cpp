@@ -110,4 +110,78 @@ CommandResult CommandGate::submit(const UserCommand& command) {
   return finish(ResultCode::StateConflict);
 }
 
+CommandResult CommandGate::run_document_command(const char* name, std::uint64_t revision,
+                                                const std::function<ResultCode()>& change) {
+  const auto finish = [&](ResultCode code) {
+    CommandResult result;
+    result.code = code;
+    result.revision = document_.revision();
+    LogRecord record;
+    record.module = "command";
+    record.event = std::string("command.") + name;
+    record.code = code;
+    record.message = result_code_label(code);
+    record.path = path_;
+    record.revision = result.revision;
+    write_log(log_, record);
+    return result;
+  };
+  if (!pipeline_error_.empty()) return finish(ResultCode::StateConflict);
+  if (latch_.enabled()) return finish(ResultCode::FastExportBusy);
+  WriteScope scope(files_, path_, &latch_);
+  if (!scope) return finish(scope.code());
+  {
+    std::lock_guard<std::mutex> registry_lock(g_registry_mu);
+    const auto found = g_document_revisions.find(path_);
+    if (found != g_document_revisions.end() && found->second != document_.revision()) {
+      return finish(ResultCode::StateConflict);
+    }
+  }
+  if (revision != document_.revision()) return finish(ResultCode::StateConflict);
+  const std::uint64_t before = document_.revision();
+  const ResultCode code = change();
+  const CommandResult result = finish(code);
+  if (code == ResultCode::Ok && document_.revision() != before) {
+    {
+      std::lock_guard<std::mutex> registry_lock(g_registry_mu);
+      g_document_revisions[path_] = document_.revision();
+    }
+    if (listener_ != nullptr) listener_->committed(document_.image_id(), document_.revision());
+  }
+  return result;
+}
+
+CommandResult CommandGate::apply_preset(PresetLibrary& library, const Preset& preset, std::uint64_t revision) {
+  return run_document_command("preset.apply", revision, [&] {
+    return library.apply(document_, preset, revision, files_, path_, latch_);
+  });
+}
+
+CommandResult CommandGate::paste(const EffectClipboard& clipboard, std::uint64_t revision) {
+  return run_document_command("paste", revision, [&] {
+    return paste_committed(document_, clipboard, revision, files_, path_, &latch_);
+  });
+}
+
+CommandResult CommandGate::sync_from(const EditDocument& source, const std::string& source_path,
+                                     const std::vector<std::string>& checked_ids, std::uint64_t revision) {
+  return run_document_command("sync", revision, [&] {
+    SyncTarget target;
+    target.id = document_.image_id();
+    target.document = &document_;
+    target.expected_revision = revision;
+    target.files = &files_;
+    target.path = path_;
+    target.latch = &latch_;
+    const auto results = apply_checked(source, source_path, checked_ids, {target});
+    return results.empty() ? ResultCode::StateConflict : results.front().code;
+  });
+}
+
+CommandResult CommandGate::apply_layers(const LayerDocument& layers, std::uint64_t revision) {
+  return run_document_command("apply_layers", revision, [&] {
+    return apply_to_original(layers, document_, revision, files_, path_);
+  });
+}
+
 }  // namespace pixcake

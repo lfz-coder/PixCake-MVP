@@ -175,4 +175,11 @@ scan("${SOURCE_DIR}/kernel" "rule 16"
      "<png.h>" "\"png.h\"" "<jpeglib.h>" "\"jpeglib.h\"" "<turbojpeg.h>" "<tiffio.h>" "<tiff.h>"
      "<webp/" "<vips/" "<libraw/" "<OpenImageIO/" "<libheif/" "<exiv2/")
 
+# 17. 用户发起的修改都从命令入口进入（架构 6.2、第七轮条件 2）。壳层和界面不直接调用文档提交、
+#     预设应用、粘贴、同步或应用至精修，只调用 CommandGate。
+foreach(root "${SOURCE_DIR}/apps/shell" "${SOURCE_DIR}/ui")
+  scan("${root}" "rule 17" "commit_preview(" "commit_fragment_replacement(" "commit_baked_reset("
+       "paste_committed(" "apply_checked(" "retry_failed(" "apply_to_original(" "PresetLibrary")
+endforeach()
+
 message(STATUS "arch dependencies ok")

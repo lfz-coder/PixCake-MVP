@@ -1,4 +1,8 @@
+#include "pixcake/capability/fragment_codec.hpp"
 #include "pixcake/command/command_gate.hpp"
+#include "pixcake/layerdoc/layer_document.hpp"
+#include "pixcake/preset/preset_library.hpp"
+#include "pixcake/sync/sync_batch.hpp"
 #include "support/fake_file_system.hpp"
 #include "support/temp_dir.hpp"
 
@@ -316,7 +320,124 @@ void test_c35_default_pipeline_allows_editing() {
   for (const auto& record : log.records) EXPECT(record.event != "command.pipeline.invalid");
 }
 
+// 第七轮条件 2（架构 6.2、契约 C-23）：预设、粘贴、批量同步、应用至精修都从命令入口进入，
+// 提交成功后和滑杆提交一样通知 CommitListener；失败时不通知、文档不变。
+class RecordingListener final : public pixcake::CommitListener {
+ public:
+  std::vector<std::pair<std::string, std::uint64_t>> commits;
+  void committed(const std::string& image_id, std::uint64_t revision) override { commits.emplace_back(image_id, revision); }
+};
+
+std::vector<std::uint8_t> marked(std::uint8_t n) { return pixcake::encode_fragment_records({{77, {n}}}); }
+
+pixcake::Preset ai_preset() {
+  pixcake::Preset preset;
+  preset.id = "ai";
+  preset.name = "\xE4\xB8\x80";
+  preset.type = pixcake::kPresetAiColor;
+  preset.fragments.push_back(pixcake::PresetFragment{"color.style", 1, marked(8)});
+  return preset;
+}
+
+void test_c23_preset_apply_goes_through_the_gate() {
+  pixcake::test::FakeFileSystem files;
+  Latch latch;
+  auto document = *pixcake::EditDocument::create("img-1");
+  pixcake::CommandGate gate(document, latch, files, "docs/c23-preset.pxedit", limits(), nullptr);
+  RecordingListener listener;
+  gate.set_commit_listener(&listener);
+  pixcake::PresetLibrary library;
+  const auto result = gate.apply_preset(library, ai_preset(), 0);
+  EXPECT(result.code == pixcake::ResultCode::Ok);
+  EXPECT(result.revision == 1);
+  EXPECT(document.fragment("color.style").has_value());
+  EXPECT(listener.commits.size() == 1 && listener.commits[0].first == "img-1" && listener.commits[0].second == 1);
+  // 命令入口记下新修订：接着按修订 1 提交滑杆不算过期。
+  EXPECT(gate.submit(command_with("preview", 1, "1.00")).code == pixcake::ResultCode::Ok);
+  EXPECT(gate.submit(command_with("commit", 1, "1.00")).code == pixcake::ResultCode::Ok);
+}
+
+void test_c23_paste_goes_through_the_gate() {
+  pixcake::test::FakeFileSystem files;
+  Latch latch;
+  auto source = *pixcake::EditDocument::create("img-src");
+  source.store_fragment("detail", 1, marked(3));
+  auto document = *pixcake::EditDocument::create("img-1");
+  pixcake::CommandGate gate(document, latch, files, "docs/c23-paste.pxedit", limits(), nullptr);
+  RecordingListener listener;
+  gate.set_commit_listener(&listener);
+  const auto result = gate.paste(pixcake::copy_committed(source), 0);
+  EXPECT(result.code == pixcake::ResultCode::Ok);
+  EXPECT(document.fragment("detail").has_value() && document.fragment("detail")->inner == marked(3));
+  EXPECT(listener.commits.size() == 1 && listener.commits[0].second == document.revision());
+}
+
+void test_c23_sync_goes_through_each_target_gate() {
+  pixcake::test::FakeFileSystem files;
+  Latch latch;
+  auto source = *pixcake::EditDocument::create("img-src");
+  source.store_fragment("detail", 1, marked(3));
+  auto first = *pixcake::EditDocument::create("img-1");
+  auto second = *pixcake::EditDocument::create("img-2");
+  pixcake::CommandGate first_gate(first, latch, files, "docs/c23-sync-1.pxedit", limits(), nullptr);
+  pixcake::CommandGate second_gate(second, latch, files, "docs/c23-sync-2.pxedit", limits(), nullptr);
+  RecordingListener listener;
+  first_gate.set_commit_listener(&listener);
+  second_gate.set_commit_listener(&listener);
+  EXPECT(first_gate.sync_from(source, "docs/c23-source.pxedit", {"detail"}, 0).code == pixcake::ResultCode::Ok);
+  EXPECT(second_gate.sync_from(source, "docs/c23-source.pxedit", {"detail"}, 0).code == pixcake::ResultCode::Ok);
+  EXPECT(first.fragment("detail").has_value() && second.fragment("detail").has_value());
+  EXPECT(listener.commits.size() == 2);
+  EXPECT(listener.commits.size() == 2 && listener.commits[0].first == "img-1" && listener.commits[1].first == "img-2");
+}
+
+void test_c23_apply_to_original_goes_through_the_gate() {
+  pixcake::test::FakeFileSystem files;
+  Latch latch;
+  auto document = *pixcake::EditDocument::create("img-1");
+  document.store_fragment("detail", 1, marked(3));
+  pixcake::CommandGate gate(document, latch, files, "docs/c23-bake.pxedit", limits(), nullptr);
+  RecordingListener listener;
+  gate.set_commit_listener(&listener);
+  const auto layers = *pixcake::LayerDocument::create("img-1", document.revision());
+  const auto result = gate.apply_layers(layers, document.revision());
+  EXPECT(result.code == pixcake::ResultCode::Ok);
+  EXPECT(document.effects_baked());
+  EXPECT(listener.commits.size() == 1 && listener.commits[0].second == document.revision());
+  // 已经烘焙过：没有新修订，不再通知。
+  EXPECT(gate.apply_layers(layers, document.revision()).code == pixcake::ResultCode::Ok);
+  EXPECT(listener.commits.size() == 1);
+}
+
+void test_c23_b73_failed_document_commands_do_not_notify() {
+  pixcake::test::FakeFileSystem files;
+  Latch latch;
+  RecordingLog log;
+  auto document = *pixcake::EditDocument::create("img-1");
+  pixcake::CommandGate gate(document, latch, files, "docs/c23-fail.pxedit", limits(), &log);
+  RecordingListener listener;
+  gate.set_commit_listener(&listener);
+  pixcake::PresetLibrary library;
+  EXPECT(gate.apply_preset(library, ai_preset(), 5).code == pixcake::ResultCode::StateConflict);
+  latch.on = true;
+  EXPECT(gate.apply_preset(library, ai_preset(), 0).code == pixcake::ResultCode::FastExportBusy);
+  latch.on = false;
+  files.write_error = pixcake::ResultCode::DiskFull;
+  EXPECT(gate.apply_preset(library, ai_preset(), 0).code == pixcake::ResultCode::DiskFull);
+  files.write_error = pixcake::ResultCode::Ok;
+  EXPECT(document.revision() == 0);
+  EXPECT(!document.fragment("color.style").has_value());
+  EXPECT(listener.commits.empty());
+  EXPECT(log.records.size() == 3);
+  EXPECT(!log.records.empty() && log.records.back().code == pixcake::ResultCode::DiskFull);
+}
+
 int main() {
+  test_c23_preset_apply_goes_through_the_gate();
+  test_c23_paste_goes_through_the_gate();
+  test_c23_sync_goes_through_each_target_gate();
+  test_c23_apply_to_original_goes_through_the_gate();
+  test_c23_b73_failed_document_commands_do_not_notify();
   test_c35_o04_cyclic_pipeline_refuses_editing();
   test_c35_default_pipeline_allows_editing();
 #if defined(PIXCAKE_HAVE_FORK)

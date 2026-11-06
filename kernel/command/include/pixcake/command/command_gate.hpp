@@ -2,13 +2,17 @@
 
 #include "pixcake/capability/capability_registry.hpp"
 #include "pixcake/editdoc/edit_document.hpp"
+#include "pixcake/layerdoc/layer_document.hpp"
 #include "pixcake/persist/file_system.hpp"
 #include "pixcake/persist/write_lock.hpp"
+#include "pixcake/preset/preset_library.hpp"
 #include "pixcake/support/fast_export_latch.hpp"
 #include "pixcake/support/log_sink.hpp"
 #include "pixcake/support/result_code.hpp"
+#include "pixcake/sync/sync_batch.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -48,10 +52,22 @@ class CommandGate {
   ~CommandGate();
 
   CommandResult submit(const UserCommand& command);
+  // 整段替换类命令（架构 6.2：用户发起的修改都从命令入口进入）。和 submit 一样检查管线、极速导出、
+  // 写锁与修订号；成功产生新修订时通知 CommitListener。实际修改交给所属模块。
+  CommandResult apply_preset(PresetLibrary& library, const Preset& preset, std::uint64_t revision);
+  CommandResult paste(const EffectClipboard& clipboard, std::uint64_t revision);
+  // 批量同步：每张目标图各有一个命令入口，逐个调用。
+  CommandResult sync_from(const EditDocument& source, const std::string& source_path,
+                          const std::vector<std::string>& checked_ids, std::uint64_t revision);
+  // 创意“应用至精修”：把图层结果烘焙回精修文档。
+  CommandResult apply_layers(const LayerDocument& layers, std::uint64_t revision);
   // 可以为空。不由命令入口持有。
   void set_commit_listener(CommitListener* listener) { listener_ = listener; }
 
  private:
+  CommandResult run_document_command(const char* name, std::uint64_t revision,
+                                     const std::function<ResultCode()>& change);
+
   EditDocument& document_;
   const FastExportLatch& latch_;
   FileSystem& files_;
