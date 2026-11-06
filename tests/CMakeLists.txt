@@ -224,3 +224,13 @@ add_test(NAME test_exportd_health_writes_log
          COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:pixcake_app_exportd>
                  -DLOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/process-logs/exportd -DPROCESS=exportd
                  -P ${CMAKE_SOURCE_DIR}/tests/apps/check_process_log.cmake)
+
+add_executable(test_sqlite_fast_export_latch storage/test_sqlite_fast_export_latch.cpp)
+target_include_directories(test_sqlite_fast_export_latch PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+target_link_libraries(test_sqlite_fast_export_latch PRIVATE pixcake_storage pixcake_command pixcake_warnings)
+add_test(NAME test_sqlite_fast_export_latch COMMAND test_sqlite_fast_export_latch)
+
+add_executable(test_single_instance services/instance/test_single_instance.cpp)
+target_include_directories(test_single_instance PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+target_link_libraries(test_single_instance PRIVATE pixcake_instance pixcake_warnings)
+add_test(NAME test_single_instance COMMAND test_single_instance)

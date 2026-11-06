@@ -1,3 +1,4 @@
+#include "pixcake/instance/single_instance.hpp"
 #include "pixcake/ui/panels/slider_spec.hpp"
 #include "pixcake/ui/shell/shell_display.hpp"
 #include "pixcake_theme.hpp"
@@ -17,9 +18,12 @@
 #include <QMainWindow>
 #include <QPushButton>
 #include <QSlider>
+#include <QSocketNotifier>
 #include <QStringList>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <cstdio>
+#include <memory>
 #include <optional>
 
 namespace {
@@ -594,5 +598,39 @@ int check_refine_sliders(const QWidget& window) {
 }
 
 int main(int argc, char** argv) {
-  QApplication app(argc, argv); pixcake::shell::PixCakeTheme::apply(app); QCoreApplication::setApplicationName(QStringLiteral("PixCake")); QCoreApplication::setApplicationVersion(QStringLiteral("0.1")); QCommandLineParser parser; parser.setApplicationDescription(QStringLiteral("PixCake desktop shell")); parser.addHelpOption(); QString default_page = QStringLiteral("login"); const auto executable = QFileInfo(QString::fromLocal8Bit(argv[0])).baseName(); for (const auto& page : {QStringLiteral("home"), QStringLiteral("library"), QStringLiteral("refine"), QStringLiteral("creative")}) if (executable.endsWith(QStringLiteral("-") + page)) default_page = page; QCommandLineOption page_option(QStringList() << QStringLiteral("page"), QStringLiteral("Display a read-only shell page: login, home, library, refine, creative."), QStringLiteral("page"), default_page); QCommandLineOption smoke_option(QStringList() << QStringLiteral("smoke"), QStringLiteral("Construct the selected page and exit without showing a window.")); parser.addOption(page_option); parser.addOption(smoke_option); parser.process(app); ShellWindow window(parse_page(parser.value(page_option))); if (parser.isSet(smoke_option)) { const auto bundled = QCoreApplication::applicationDirPath() + QStringLiteral("/../Resources/assets/"); for (const auto& relative : pixcake::shell::uploadedShellAssets()) { if (!QFileInfo::exists(bundled + relative) || pixcake::shell::loadAssetPixmap(relative, 16).isNull()) { qCritical("missing shell asset: %s", qPrintable(relative)); return 2; } } if (parse_page(parser.value(page_option)) == Page::Refine) { auto* crop = window.findChild<QWidget*>(QStringLiteral("refine-crop-labels")); const QStringList expected = {QStringLiteral("裁剪"), QStringLiteral("原始尺寸"), QStringLiteral("原照设置"), QStringLiteral("固定比例"), QStringLiteral("长*宽*分辨率"), QStringLiteral("自由尺寸"), QStringLiteral("证件照尺寸"), QStringLiteral("我的裁剪预设"), QStringLiteral("AI智能裁剪"), QStringLiteral("网格线"), QStringLiteral("分格数"), QStringLiteral("几何中心十字线"), QStringLiteral("旋转"), QStringLiteral("逆时针"), QStringLiteral("顺时针"), QStringLiteral("水平翻转"), QStringLiteral("垂直翻转"), QStringLiteral("角度滑杆"), QStringLiteral("AI水平矫正")}; QStringList found; if (crop != nullptr) { for (auto* label : crop->findChildren<QLabel*>()) { found.append(label->text()); if (label->isEnabled()) { qCritical("refine crop label enabled"); return 3; } } } if (crop == nullptr || found != expected) { qCritical("missing refine crop labels"); return 3; } auto* history = window.findChild<QWidget*>(QStringLiteral("refine-history-labels")); const QStringList history_expected = {QStringLiteral("历史记录"), QStringLiteral("暂无已加载照片")}; QStringList history_found; if (history != nullptr) { for (auto* label : history->findChildren<QLabel*>()) { history_found.append(label->text()); if (label->isEnabled()) { qCritical("refine history label enabled"); return 3; } } } if (history == nullptr || history_found != history_expected) { qCritical("missing refine history labels"); return 3; } if (const int sliders = check_refine_sliders(window); sliders != 0) return sliders; } return 0; } window.show(); return app.exec();
+  QApplication app(argc, argv); pixcake::shell::PixCakeTheme::apply(app); QCoreApplication::setApplicationName(QStringLiteral("PixCake")); QCoreApplication::setApplicationVersion(QStringLiteral("0.1")); QCommandLineParser parser; parser.setApplicationDescription(QStringLiteral("PixCake desktop shell")); parser.addHelpOption(); QString default_page = QStringLiteral("login"); const auto executable = QFileInfo(QString::fromLocal8Bit(argv[0])).baseName(); for (const auto& page : {QStringLiteral("home"), QStringLiteral("library"), QStringLiteral("refine"), QStringLiteral("creative")}) if (executable.endsWith(QStringLiteral("-") + page)) default_page = page; QCommandLineOption page_option(QStringList() << QStringLiteral("page"), QStringLiteral("Display a read-only shell page: login, home, library, refine, creative."), QStringLiteral("page"), default_page); QCommandLineOption smoke_option(QStringList() << QStringLiteral("smoke"), QStringLiteral("Construct the selected page and exit without showing a window.")); parser.addOption(page_option); parser.addOption(smoke_option); QCommandLineOption instance_option(QStringList() << QStringLiteral("instance-dir"), QStringLiteral("Directory holding the single-instance lock and socket (default: the application support directory)."), QStringLiteral("dir")); parser.addOption(instance_option); parser.process(app);
+  // 需求 §3.2：同一用户只跑一个主实例。抢锁必须在打开任何数据库之前；冒烟检查不抢锁，以便并行运行。
+  std::unique_ptr<pixcake::instance::PrimaryInstance> primary;
+  if (!parser.isSet(smoke_option)) {
+    const std::string instance_dir = parser.isSet(instance_option) ? parser.value(instance_option).toStdString()
+                                                                   : pixcake::instance::default_instance_directory();
+    auto claim = pixcake::instance::claim_instance(instance_dir);
+    if (claim.another_running) {
+      const auto notified = pixcake::instance::notify_primary(instance_dir, "activate");
+      if (notified != pixcake::ResultCode::Ok) {
+        std::fprintf(stderr, "PixCake is already running but did not answer: %s\n", pixcake::result_code_label(notified));
+        return 5;
+      }
+      std::printf("PixCake is already running; activated the existing window.\n");
+      return 0;
+    }
+    if (claim.code != pixcake::ResultCode::Ok || !claim.primary) {
+      std::fprintf(stderr, "PixCake could not take the single-instance lock in %s: %s\n", instance_dir.c_str(),
+                   pixcake::result_code_label(claim.code));
+      return 4;
+    }
+    primary = std::move(claim.primary);
+  }
+  ShellWindow window(parse_page(parser.value(page_option))); if (parser.isSet(smoke_option)) { const auto bundled = QCoreApplication::applicationDirPath() + QStringLiteral("/../Resources/assets/"); for (const auto& relative : pixcake::shell::uploadedShellAssets()) { if (!QFileInfo::exists(bundled + relative) || pixcake::shell::loadAssetPixmap(relative, 16).isNull()) { qCritical("missing shell asset: %s", qPrintable(relative)); return 2; } } if (parse_page(parser.value(page_option)) == Page::Refine) { auto* crop = window.findChild<QWidget*>(QStringLiteral("refine-crop-labels")); const QStringList expected = {QStringLiteral("裁剪"), QStringLiteral("原始尺寸"), QStringLiteral("原照设置"), QStringLiteral("固定比例"), QStringLiteral("长*宽*分辨率"), QStringLiteral("自由尺寸"), QStringLiteral("证件照尺寸"), QStringLiteral("我的裁剪预设"), QStringLiteral("AI智能裁剪"), QStringLiteral("网格线"), QStringLiteral("分格数"), QStringLiteral("几何中心十字线"), QStringLiteral("旋转"), QStringLiteral("逆时针"), QStringLiteral("顺时针"), QStringLiteral("水平翻转"), QStringLiteral("垂直翻转"), QStringLiteral("角度滑杆"), QStringLiteral("AI水平矫正")}; QStringList found; if (crop != nullptr) { for (auto* label : crop->findChildren<QLabel*>()) { found.append(label->text()); if (label->isEnabled()) { qCritical("refine crop label enabled"); return 3; } } } if (crop == nullptr || found != expected) { qCritical("missing refine crop labels"); return 3; } auto* history = window.findChild<QWidget*>(QStringLiteral("refine-history-labels")); const QStringList history_expected = {QStringLiteral("历史记录"), QStringLiteral("暂无已加载照片")}; QStringList history_found; if (history != nullptr) { for (auto* label : history->findChildren<QLabel*>()) { history_found.append(label->text()); if (label->isEnabled()) { qCritical("refine history label enabled"); return 3; } } } if (history == nullptr || history_found != history_expected) { qCritical("missing refine history labels"); return 3; } if (const int sliders = check_refine_sliders(window); sliders != 0) return sliders; } return 0; } window.show();
+  QSocketNotifier activation(primary->listen_fd(), QSocketNotifier::Read);
+  QObject::connect(&activation, &QSocketNotifier::activated, &window, [&window, &primary]() {
+    while (const auto message = primary->take_message()) {
+      if (*message != "activate") continue;
+      window.showNormal();
+      window.raise();
+      window.activateWindow();
+      qInfo("activated by another launch");
+    }
+  });
+  return app.exec();
 }

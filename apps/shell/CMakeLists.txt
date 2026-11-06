@@ -29,6 +29,7 @@ set_target_properties(pixcake_app_shell PROPERTIES
   MACOSX_BUNDLE_BUNDLE_VERSION "0.1"
 )
 target_link_libraries(pixcake_app_shell PRIVATE
+  pixcake_instance
   pixcake_ui_shell
   pixcake_ui_panels
   pixcake_warnings
@@ -48,3 +49,7 @@ foreach(shell_page IN ITEMS login home library refine creative)
   set_tests_properties(test_shell_app_smoke_${shell_page}
                        PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endforeach()
+
+add_test(NAME test_shell_single_instance_T21
+         COMMAND ${CMAKE_SOURCE_DIR}/tests/apps/check_shell_single_instance.sh $<TARGET_FILE:pixcake_app_shell>)
+set_tests_properties(test_shell_single_instance_T21 PROPERTIES TIMEOUT 60)
