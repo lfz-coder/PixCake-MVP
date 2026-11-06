@@ -3,6 +3,7 @@
 #include "pixcake/storage/sqlite_project_store.hpp"
 #include "pixcake/support/clock.hpp"
 #include "pixcake/support/log_sink.hpp"
+#include "support/admitted_photo.hpp"
 #include "support/fake_file_system.hpp"
 #include "support/temp_dir.hpp"
 
@@ -187,10 +188,10 @@ std::int64_t trash_time(pixcake::ProjectLibrary& library, const char* subject, s
 
 void test_under_thirty_days_can_be_restored() {
   Fixture world;
-  world.files.files["/pictures/a.png"] = {1, 2, 3};
+  world.files.files["/pictures/a.png"] = pixcake::test::png_with({1, 2, 3});
   const pixcake::ProjectResult project = world.library->create_project("保留", pixcake::kOriginLocal, false);
   const pixcake::ProjectResult photo =
-      world.library->add_photo(project.id, "/pictures/a.png", "a.png", {});
+      world.library->add_photo(project.id, pixcake::test::admitted_png(world.files, "/pictures/a.png"), "a.png", {});
   EXPECT(world.library->trash_project(project.id).code == pixcake::ResultCode::Ok);
   EXPECT(world.deleter.calls == 0);
   world.clock.now += 2592000 - 1;
@@ -204,16 +205,16 @@ void test_under_thirty_days_can_be_restored() {
   std::optional<pixcake::TrashRow> gone;
   EXPECT(world.library->load_trash(pixcake::kTrashPhoto, photo.id, gone) == pixcake::ResultCode::Ok);
   EXPECT(!gone.has_value());
-  EXPECT(world.files.files["/pictures/a.png"] == std::vector<std::uint8_t>({1, 2, 3}));
+  EXPECT(world.files.files["/pictures/a.png"] == pixcake::test::png_with({1, 2, 3}));
   EXPECT(world.deleter.calls == 0);
 }
 
 void test_expired_index_is_removed_without_deleting_the_file() {
   Fixture world;
-  world.files.files["/pictures/a.png"] = {4, 5};
+  world.files.files["/pictures/a.png"] = pixcake::test::png_with({4, 5});
   const pixcake::ProjectResult project = world.library->create_project("到期", pixcake::kOriginLocal, false);
   const pixcake::ProjectResult photo =
-      world.library->add_photo(project.id, "/pictures/a.png", "a.png", {});
+      world.library->add_photo(project.id, pixcake::test::admitted_png(world.files, "/pictures/a.png"), "a.png", {});
   EXPECT(world.library->trash_project(project.id).code == pixcake::ResultCode::Ok);
   world.clock.now += 2592000;
   EXPECT(world.library->startup() == pixcake::ResultCode::Ok);
@@ -226,7 +227,7 @@ void test_expired_index_is_removed_without_deleting_the_file() {
   std::vector<pixcake::TrashRow> trash;
   EXPECT(world.library->list_trash(trash) == pixcake::ResultCode::Ok);
   EXPECT(trash.empty());
-  EXPECT(world.files.files["/pictures/a.png"] == std::vector<std::uint8_t>({4, 5}));
+  EXPECT(world.files.files["/pictures/a.png"] == pixcake::test::png_with({4, 5}));
   EXPECT(world.deleter.calls == 0);
 }
 
@@ -234,12 +235,12 @@ void test_only_the_expired_photo_is_purged() {
   Fixture world;
   const pixcake::ProjectResult project = world.library->create_project("部分", pixcake::kOriginLocal, false);
   const pixcake::ProjectResult older =
-      world.library->add_photo(project.id, "/pictures/old.png", "old.png", {});
+      world.library->add_photo(project.id, pixcake::test::admitted_png(world.files, "/pictures/old.png"), "old.png", {});
   EXPECT(world.library->trash_photo(older.id).code == pixcake::ResultCode::Ok);
   const std::int64_t older_time = trash_time(*world.library, pixcake::kTrashPhoto, older.id);
   world.clock.now = older_time + 2592000;
   const pixcake::ProjectResult newer =
-      world.library->add_photo(project.id, "/pictures/new.png", "new.png", {});
+      world.library->add_photo(project.id, pixcake::test::admitted_png(world.files, "/pictures/new.png"), "new.png", {});
   EXPECT(world.library->trash_photo(newer.id).code == pixcake::ResultCode::Ok);
   const std::int64_t newer_time = trash_time(*world.library, pixcake::kTrashPhoto, newer.id);
   EXPECT(world.library->startup() == pixcake::ResultCode::Ok);
@@ -254,9 +255,9 @@ void test_restore_project_brings_back_its_photos() {
   Fixture world;
   const pixcake::ProjectResult project = world.library->create_project("恢复", pixcake::kOriginLocal, false);
   const pixcake::ProjectResult first =
-      world.library->add_photo(project.id, "/pictures/1.png", "1.png", {});
+      world.library->add_photo(project.id, pixcake::test::admitted_png(world.files, "/pictures/1.png"), "1.png", {});
   const pixcake::ProjectResult second =
-      world.library->add_photo(project.id, "/pictures/2.png", "2.png", {});
+      world.library->add_photo(project.id, pixcake::test::admitted_png(world.files, "/pictures/2.png"), "2.png", {});
   world.clock.now = 10;
   EXPECT(world.library->trash_photo(first.id).code == pixcake::ResultCode::Ok);
   world.clock.now = 20;
@@ -278,9 +279,9 @@ void test_partial_restore_leaves_the_other_photo() {
   Fixture world;
   const pixcake::ProjectResult project = world.library->create_project("挑选", pixcake::kOriginLocal, false);
   const pixcake::ProjectResult first =
-      world.library->add_photo(project.id, "/pictures/1.png", "1.png", {});
+      world.library->add_photo(project.id, pixcake::test::admitted_png(world.files, "/pictures/1.png"), "1.png", {});
   const pixcake::ProjectResult second =
-      world.library->add_photo(project.id, "/pictures/2.png", "2.png", {});
+      world.library->add_photo(project.id, pixcake::test::admitted_png(world.files, "/pictures/2.png"), "2.png", {});
   world.clock.now = 30;
   EXPECT(world.library->trash_photo(first.id).code == pixcake::ResultCode::Ok);
   world.clock.now = 40;
@@ -301,7 +302,7 @@ void test_restore_photos_fails_while_the_project_is_trashed() {
   Fixture world;
   const pixcake::ProjectResult project = world.library->create_project("整项", pixcake::kOriginLocal, false);
   const pixcake::ProjectResult photo =
-      world.library->add_photo(project.id, "/pictures/1.png", "1.png", {});
+      world.library->add_photo(project.id, pixcake::test::admitted_png(world.files, "/pictures/1.png"), "1.png", {});
   EXPECT(world.library->trash_project(project.id).code == pixcake::ResultCode::Ok);
   const std::int64_t project_time = trash_time(*world.library, pixcake::kTrashProject, project.id);
   const std::int64_t photo_time = trash_time(*world.library, pixcake::kTrashPhoto, photo.id);
@@ -314,7 +315,7 @@ void test_trashing_twice_keeps_the_original_time() {
   Fixture world;
   const pixcake::ProjectResult project = world.library->create_project("重复", pixcake::kOriginLocal, false);
   const pixcake::ProjectResult photo =
-      world.library->add_photo(project.id, "/pictures/1.png", "1.png", {});
+      world.library->add_photo(project.id, pixcake::test::admitted_png(world.files, "/pictures/1.png"), "1.png", {});
   world.clock.now = 70;
   EXPECT(world.library->trash_photo(photo.id).code == pixcake::ResultCode::Ok);
   world.clock.now = 80;
@@ -324,10 +325,10 @@ void test_trashing_twice_keeps_the_original_time() {
 
 void test_erase_trashed_project_removes_index_only() {
   Fixture world;
-  world.files.files["/pictures/a.png"] = {8};
+  world.files.files["/pictures/a.png"] = pixcake::test::png_with({8});
   const pixcake::ProjectResult project = world.library->create_project("彻底", pixcake::kOriginLocal, false);
   const pixcake::ProjectResult photo =
-      world.library->add_photo(project.id, "/pictures/a.png", "a.png", {});
+      world.library->add_photo(project.id, pixcake::test::admitted_png(world.files, "/pictures/a.png"), "a.png", {});
   EXPECT(world.library->erase_trashed_project(project.id).code == pixcake::ResultCode::StateConflict);
   std::optional<pixcake::ProjectRow> still;
   EXPECT(world.library->load_project(project.id, still) == pixcake::ResultCode::Ok);
@@ -339,17 +340,17 @@ void test_erase_trashed_project_removes_index_only() {
   std::optional<pixcake::PhotoRow> photo_row;
   EXPECT(world.library->load_photo(photo.id, photo_row) == pixcake::ResultCode::Ok);
   EXPECT(!photo_row.has_value());
-  EXPECT(world.files.files["/pictures/a.png"] == std::vector<std::uint8_t>({8}));
+  EXPECT(world.files.files["/pictures/a.png"] == pixcake::test::png_with({8}));
   EXPECT(world.deleter.calls == 0);
 }
 
 void test_delete_source_file() {
   Fixture world;
-  world.files.files["/pictures/gone.png"] = {1};
-  world.files.files["/pictures/keep.png"] = {2};
+  world.files.files["/pictures/gone.png"] = pixcake::test::png_with({1});
+  world.files.files["/pictures/keep.png"] = pixcake::test::png_with({2});
   const pixcake::ProjectResult project = world.library->create_project("磁盘", pixcake::kOriginLocal, false);
   const pixcake::ProjectResult photo =
-      world.library->add_photo(project.id, "/pictures/gone.png", "gone.png", {});
+      world.library->add_photo(project.id, pixcake::test::admitted_png(world.files, "/pictures/gone.png"), "gone.png", {});
   EXPECT(world.library->delete_source_file(999).code == pixcake::ResultCode::StateConflict);
   EXPECT(world.deleter.calls == 0);
 
@@ -358,7 +359,7 @@ void test_delete_source_file() {
   EXPECT(removed.notice.empty());
   EXPECT(world.deleter.calls == 1);
   EXPECT(world.deleter.last == "/pictures/gone.png");
-  EXPECT(world.files.files["/pictures/keep.png"] == std::vector<std::uint8_t>({2}));
+  EXPECT(world.files.files["/pictures/keep.png"] == pixcake::test::png_with({2}));
   EXPECT(!world.files.files.count("/pictures/gone.png"));
   std::optional<pixcake::PhotoRow> row;
   EXPECT(world.library->load_photo(photo.id, row) == pixcake::ResultCode::Ok);
@@ -367,7 +368,7 @@ void test_delete_source_file() {
 
   world.deleter.next = pixcake::ResultCode::PermissionDenied;
   const pixcake::ProjectResult sibling =
-      world.library->add_photo(project.id, "/pictures/keep.png", "keep.png", {});
+      world.library->add_photo(project.id, pixcake::test::admitted_png(world.files, "/pictures/keep.png"), "keep.png", {});
   const std::vector<std::uint8_t> before = world.files.files["/pictures/keep.png"];
   const pixcake::ProjectResult denied = world.library->delete_source_file(sibling.id);
   EXPECT(denied.code == pixcake::ResultCode::PermissionDenied);
@@ -393,13 +394,13 @@ void test_delete_source_file_recovers_when_final_presence_write_fails() {
   FailingPresenceStore store(*sqlite);
   FixedClock clock;
   pixcake::test::FakeFileSystem files;
-  files.files["/pictures/recover.png"] = {1, 2, 3};
+  files.files["/pictures/recover.png"] = pixcake::test::png_with({1, 2, 3});
   FakeDeleter deleter;
   deleter.files = &files;
   MemoryLog log;
   pixcake::ProjectLibrary library(store, files, clock, deleter, &log);
   const pixcake::ProjectResult project = library.create_project("恢复删除", pixcake::kOriginLocal, false);
-  const pixcake::ProjectResult photo = library.add_photo(project.id, "/pictures/recover.png", "recover.png", {});
+  const pixcake::ProjectResult photo = library.add_photo(project.id, pixcake::test::admitted_png(files, "/pictures/recover.png"), "recover.png", {});
   store.fail_on_presence_call = 2;  // intent succeeds; post-delete state write fails.
   EXPECT(library.delete_source_file(photo.id).code == pixcake::ResultCode::DiskFull);
   std::optional<pixcake::PhotoRow> pending;
@@ -416,26 +417,26 @@ void test_delete_source_file_recovers_when_final_presence_write_fails() {
 
 void test_file_source_deleter_rejects_relative_paths() {
   pixcake::test::FakeFileSystem files;
-  files.files["/pictures/one.png"] = {1};
-  files.files["/pictures/two.png"] = {2};
+  files.files["/pictures/one.png"] = pixcake::test::png_with({1});
+  files.files["/pictures/two.png"] = pixcake::test::png_with({2});
   files.files["relative.png"] = {3};
   pixcake::FileSourceDeleter deleter(files);
   EXPECT(deleter.remove_source("relative.png") == pixcake::ResultCode::StateConflict);
   EXPECT(files.files["relative.png"] == std::vector<std::uint8_t>({3}));
   EXPECT(deleter.remove_source("/pictures/one.png") == pixcake::ResultCode::Ok);
   EXPECT(files.files.count("/pictures/one.png") == 0);
-  EXPECT(files.files["/pictures/two.png"] == std::vector<std::uint8_t>({2}));
+  EXPECT(files.files["/pictures/two.png"] == pixcake::test::png_with({2}));
 }
 
 void test_delete_uses_enrolled_file_identity() {
   Fixture world;
-  world.files.files["/pictures/orig.png"] = {1, 2, 3};
+  world.files.files["/pictures/orig.png"] = pixcake::test::png_with({1, 2, 3});
   const pixcake::ProjectResult project = world.library->create_project("身份", pixcake::kOriginLocal, false);
-  const pixcake::ProjectResult photo = world.library->add_photo(project.id, "/pictures/orig.png", "orig.png", {});
+  const pixcake::ProjectResult photo = world.library->add_photo(project.id, pixcake::test::admitted_png(world.files, "/pictures/orig.png"), "orig.png", {});
   EXPECT(photo.code == pixcake::ResultCode::Ok);
-  world.files.files["/pictures/orig.png"] = {9, 9, 9};
+  world.files.files["/pictures/orig.png"] = pixcake::test::png_with({9, 9, 9});
   EXPECT(world.library->delete_source_file(photo.id).code == pixcake::ResultCode::StateConflict);
-  EXPECT(world.files.files["/pictures/orig.png"] == std::vector<std::uint8_t>({9, 9, 9}));
+  EXPECT(world.files.files["/pictures/orig.png"] == pixcake::test::png_with({9, 9, 9}));
 }
 
 }  // namespace

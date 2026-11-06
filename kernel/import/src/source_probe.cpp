@@ -319,4 +319,25 @@ ResultCode probe_source(FileSystem& files, const std::string& absolute_path, Sou
   return ResultCode::Ok;
 }
 
+// 唯一能构造 AdmittedSource 的类型（见 pixcake/project/admitted_source.hpp）。
+class SourceAdmission {
+ public:
+  static AdmittedSource issue(const SourceProbe& probe) { return AdmittedSource(probe.absolute_path, probe.identity); }
+};
+
+ResultCode admit_source(FileSystem& files, const std::string& absolute_path, std::optional<AdmittedSource>& out,
+                        SourceProbe* details) {
+  out.reset();
+  SourceProbe probe;
+  const ResultCode probed = probe_source(files, absolute_path, probe);
+  if (probed != ResultCode::Ok) {
+    return probed;
+  }
+  out = SourceAdmission::issue(probe);
+  if (details != nullptr) {
+    *details = probe;
+  }
+  return ResultCode::Ok;
+}
+
 }  // namespace pixcake::image_import

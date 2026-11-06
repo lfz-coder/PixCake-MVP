@@ -1,4 +1,5 @@
 #include "pixcake/image_import/import_coordinator.hpp"
+#include "pixcake/image_import/source_probe.hpp"
 #include "pixcake/storage/sqlite_project_store.hpp"
 #include "pixcake/support/clock.hpp"
 #include "pixcake/support/log_sink.hpp"
@@ -59,9 +60,83 @@ std::vector<std::uint8_t> png_header(std::uint32_t width, std::uint32_t height) 
   return bytes;
 }
 
+struct AdmissionFixture {
+  pixcake::test::TempDir directory;
+  std::unique_ptr<pixcake::SqliteProjectStore> store;
+  FixedClock clock;
+  SilentLog log;
+  UnusedDeleter deleter;
+  pixcake::test::FakeFileSystem files;
+  std::unique_ptr<pixcake::ProjectLibrary> project;
+  std::int64_t project_id = 0;
+
+  AdmissionFixture() {
+    EXPECT(pixcake::SqliteProjectStore::open(directory.path() + "/library.db", store) == pixcake::ResultCode::Ok);
+    project = std::make_unique<pixcake::ProjectLibrary>(*store, files, clock, deleter, &log);
+    project_id = project->create_project("准入", pixcake::kOriginLocal, false).id;
+  }
+
+  std::size_t photo_count() {
+    std::vector<pixcake::PhotoRow> photos;
+    EXPECT(project->list_photos(std::nullopt, photos) == pixcake::ResultCode::Ok);
+    return photos.size();
+  }
+};
+
+void test_s07_admitted_source_is_required_to_add_photo() {
+  AdmissionFixture fixture;
+  fixture.files.files["/photos/fake.png"] = {1, 2, 3};
+  std::optional<pixcake::AdmittedSource> rejected;
+  EXPECT(pixcake::image_import::admit_source(fixture.files, "/photos/fake.png", rejected) ==
+         pixcake::ResultCode::UnsupportedFormat);
+  EXPECT(!rejected.has_value());
+  std::optional<pixcake::AdmittedSource> relative;
+  EXPECT(pixcake::image_import::admit_source(fixture.files, "photos/fake.png", relative) ==
+         pixcake::ResultCode::StateConflict);
+  EXPECT(!relative.has_value());
+
+  fixture.files.files["/photos/real.png"] = png_header(8, 6);
+  std::optional<pixcake::AdmittedSource> admitted;
+  pixcake::image_import::SourceProbe details;
+  EXPECT(pixcake::image_import::admit_source(fixture.files, "/photos/real.png", admitted, &details) ==
+         pixcake::ResultCode::Ok);
+  EXPECT(admitted.has_value() && admitted->absolute_path() == "/photos/real.png" && admitted->identity().valid);
+  EXPECT(details.width == 8 && details.height == 6);
+  if (!admitted) return;
+  EXPECT(fixture.project->add_photo(fixture.project_id, *admitted, "real.png", {}).code == pixcake::ResultCode::Ok);
+  EXPECT(fixture.photo_count() == 1);
+}
+
+void test_s07_replaced_file_after_admission_is_rejected() {
+  AdmissionFixture fixture;
+  fixture.files.files["/photos/swap.png"] = png_header(8, 6);
+  std::optional<pixcake::AdmittedSource> admitted;
+  EXPECT(pixcake::image_import::admit_source(fixture.files, "/photos/swap.png", admitted) == pixcake::ResultCode::Ok);
+  fixture.files.files["/photos/swap.png"] = png_header(9, 9);  // different content → different identity
+  if (!admitted) return;
+  EXPECT(fixture.project->add_photo(fixture.project_id, *admitted, "swap.png", {}).code ==
+         pixcake::ResultCode::StateConflict);
+  EXPECT(fixture.photo_count() == 0);
+}
+
+void test_c15_missing_file_after_admission_is_not_added() {
+  AdmissionFixture fixture;
+  fixture.files.files["/photos/gone.png"] = png_header(8, 6);
+  std::optional<pixcake::AdmittedSource> admitted;
+  EXPECT(pixcake::image_import::admit_source(fixture.files, "/photos/gone.png", admitted) == pixcake::ResultCode::Ok);
+  fixture.files.files.erase("/photos/gone.png");
+  if (!admitted) return;
+  EXPECT(fixture.project->add_photo(fixture.project_id, *admitted, "gone.png", {}).code ==
+         pixcake::ResultCode::SourceMissing);
+  EXPECT(fixture.photo_count() == 0);
+}
+
 }  // namespace
 
 int main() {
+  test_s07_admitted_source_is_required_to_add_photo();
+  test_s07_replaced_file_after_admission_is_rejected();
+  test_c15_missing_file_after_admission_is_not_added();
   pixcake::test::TempDir directory;
   std::unique_ptr<pixcake::SqliteProjectStore> store;
   EXPECT(pixcake::SqliteProjectStore::open(directory.path() + "/library.db", store) == pixcake::ResultCode::Ok);

@@ -598,9 +598,9 @@ ProjectResult ProjectLibrary::create_project(std::string name, std::string origi
   return result;
 }
 
-ProjectResult ProjectLibrary::add_photo(std::int64_t project_id, std::string absolute_path,
+ProjectResult ProjectLibrary::add_photo(std::int64_t project_id, const AdmittedSource& source,
                                         std::string file_name, std::vector<std::uint8_t> access_credential) {
-  if (!absolute_posix_path(absolute_path) || file_name.empty()) {
+  if (!absolute_posix_path(source.absolute_path()) || file_name.empty() || !source.identity().valid) {
     return failed(ResultCode::StateConflict);
   }
   std::optional<ProjectRow> project;
@@ -622,13 +622,21 @@ ProjectResult ProjectLibrary::add_photo(std::int64_t project_id, std::string abs
 
   PhotoDraft draft;
   draft.project_id = project_id;
-  draft.absolute_path = std::move(absolute_path);
+  draft.absolute_path = source.absolute_path();
   draft.file_name = std::move(file_name);
   draft.access_credential = std::move(access_credential);
   draft.presence = kPresenceEditable;
   const IoResult identity = files_.identify(draft.absolute_path, draft.source_identity);
-  if (!identity.ok && !identity.not_found) {
+  if (identity.not_found) {
+    return failed(ResultCode::SourceMissing);
+  }
+  if (!identity.ok) {
     return failed(identity.code);
+  }
+  const FileIdentity& admitted = source.identity();
+  if (!draft.source_identity.valid || draft.source_identity.device != admitted.device ||
+      draft.source_identity.inode != admitted.inode || draft.source_identity.size != admitted.size) {
+    return failed(ResultCode::StateConflict);
   }
   ProjectResult result;
   result.code = store_.insert_photo(draft, result.id);

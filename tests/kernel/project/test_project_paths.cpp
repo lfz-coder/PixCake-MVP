@@ -3,6 +3,7 @@
 #include "pixcake/storage/sqlite_project_store.hpp"
 #include "pixcake/support/clock.hpp"
 #include "pixcake/support/log_sink.hpp"
+#include "support/admitted_photo.hpp"
 #include "support/fake_file_system.hpp"
 #include "support/temp_dir.hpp"
 
@@ -80,19 +81,21 @@ int main() {
   EXPECT(library.list_projects(projects) == pixcake::ResultCode::Ok);
   EXPECT(projects.size() == 1);
 
-  const pixcake::ProjectResult relative =
-      library.add_photo(created.id, "photos/a.jpg", "a.jpg", {});
-  EXPECT(relative.code == pixcake::ResultCode::StateConflict);
+  // 相对路径在准入阶段就被拒绝，项目库收不到凭证。
+  std::optional<pixcake::AdmittedSource> relative;
+  files.files["photos/a.jpg"] = pixcake::test::tiny_png();
+  EXPECT(pixcake::image_import::admit_source(files, "photos/a.jpg", relative) == pixcake::ResultCode::StateConflict);
+  EXPECT(!relative.has_value());
   std::vector<pixcake::PhotoRow> photos;
   EXPECT(library.list_photos(std::nullopt, photos) == pixcake::ResultCode::Ok);
   EXPECT(photos.empty());
 
-  const pixcake::ProjectResult nameless = library.add_photo(created.id, "/tmp/pic.png", "", {1});
+  const pixcake::ProjectResult nameless = library.add_photo(created.id, pixcake::test::admitted_png(files, "/tmp/pic.png"), "", {1});
   EXPECT(nameless.code == pixcake::ResultCode::StateConflict);
 
   const std::vector<std::uint8_t> credential{1, 2, 0, 255};
   const pixcake::ProjectResult added =
-      library.add_photo(created.id, "/tmp/pic.png", "pic.png", credential);
+      library.add_photo(created.id, pixcake::test::admitted_png(files, "/tmp/pic.png"), "pic.png", credential);
   EXPECT(added.code == pixcake::ResultCode::Ok);
   EXPECT(added.code != pixcake::ResultCode::SourceMissing);
   EXPECT(library.list_photos(std::nullopt, photos) == pixcake::ResultCode::Ok);
@@ -103,7 +106,7 @@ int main() {
   EXPECT(photos[0].presence == "可编辑");
 
   const pixcake::ProjectResult empty_credential =
-      library.add_photo(created.id, "/tmp/empty.png", "empty.png", {});
+      library.add_photo(created.id, pixcake::test::admitted_png(files, "/tmp/empty.png"), "empty.png", {});
   EXPECT(empty_credential.code == pixcake::ResultCode::Ok);
   std::optional<pixcake::PhotoRow> loaded;
   EXPECT(library.load_photo(empty_credential.id, loaded) == pixcake::ResultCode::Ok);

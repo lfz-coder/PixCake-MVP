@@ -3,6 +3,7 @@
 #include "pixcake/storage/sqlite_project_store.hpp"
 #include "pixcake/support/clock.hpp"
 #include "pixcake/support/log_sink.hpp"
+#include "support/admitted_photo.hpp"
 #include "support/fake_file_system.hpp"
 #include "support/temp_dir.hpp"
 
@@ -91,7 +92,7 @@ void test_new_photo_has_empty_marks() {
   const pixcake::ProjectResult project = world.library->create_project("相册", pixcake::kOriginLocal, false);
   EXPECT(project.code == pixcake::ResultCode::Ok);
   const pixcake::ProjectResult photo =
-      world.library->add_photo(project.id, "/pictures/a.png", "a.png", {1, 2, 0, 255});
+      world.library->add_photo(project.id, pixcake::test::admitted_png(world.files, "/pictures/a.png"), "a.png", {1, 2, 0, 255});
   EXPECT(photo.code == pixcake::ResultCode::Ok);
   std::optional<pixcake::PhotoRow> loaded;
   EXPECT(world.library->load_photo(photo.id, loaded) == pixcake::ResultCode::Ok);
@@ -178,11 +179,11 @@ void test_marks_accept_only_the_documented_values() {
   const pixcake::ProjectResult project = world.library->create_project("相册", pixcake::kOriginLocal, false);
   EXPECT(project.code == pixcake::ResultCode::Ok);
   const pixcake::ProjectResult first =
-      world.library->add_photo(project.id, "/pictures/a.png", "a.png", {1});
+      world.library->add_photo(project.id, pixcake::test::admitted_png(world.files, "/pictures/a.png"), "a.png", {1});
   const pixcake::ProjectResult second =
-      world.library->add_photo(project.id, "/pictures/b.png", "b.png", {2});
+      world.library->add_photo(project.id, pixcake::test::admitted_png(world.files, "/pictures/b.png"), "b.png", {2});
   const pixcake::ProjectResult other =
-      world.library->add_photo(project.id, "/pictures/c.png", "c.png", {3});
+      world.library->add_photo(project.id, pixcake::test::admitted_png(world.files, "/pictures/c.png"), "c.png", {3});
   EXPECT(first.code == pixcake::ResultCode::Ok);
   EXPECT(second.code == pixcake::ResultCode::Ok);
   EXPECT(other.code == pixcake::ResultCode::Ok);

@@ -4,6 +4,7 @@
 #include "pixcake/storage/sqlite_project_store.hpp"
 #include "pixcake/support/clock.hpp"
 #include "pixcake/support/log_sink.hpp"
+#include "support/admitted_photo.hpp"
 #include "support/fake_file_system.hpp"
 #include "support/temp_dir.hpp"
 
@@ -65,12 +66,12 @@ int main() {
   MemoryLog log;
   UnusedDeleter deleter;
   pixcake::test::FakeFileSystem files;
-  files.files[kSource] = {9, 9, 9};
+  files.files[kSource] = pixcake::test::tiny_png();
   pixcake::ProjectLibrary library(*store, files, clock, deleter, &log);
 
   const pixcake::ProjectResult project = library.create_project("路径", pixcake::kOriginLocal, false);
   EXPECT(project.code == pixcake::ResultCode::Ok);
-  const pixcake::ProjectResult photo = library.add_photo(project.id, kSource, "a.png", credential_bytes());
+  const pixcake::ProjectResult photo = library.add_photo(project.id, pixcake::test::admitted_png(files, kSource), "a.png", credential_bytes());
   EXPECT(photo.code == pixcake::ResultCode::Ok);
 
   auto created = pixcake::EditDocument::create(std::to_string(photo.id));
@@ -109,7 +110,7 @@ int main() {
   }
   EXPECT(saw_missing);
 
-  files.files[kSource] = {9, 9, 9};
+  files.files[kSource] = pixcake::test::tiny_png();
   EXPECT(library.startup() == pixcake::ResultCode::Ok);
   EXPECT(library.source_status(photo.id) == pixcake::ResultCode::Ok);
   EXPECT(library.load_photo(photo.id, row) == pixcake::ResultCode::Ok);
@@ -119,11 +120,13 @@ int main() {
          pixcake::ResultCode::Ok);
 
   const pixcake::ProjectResult denied_photo =
-      library.add_photo(project.id, "/pictures/denied.png", "denied.png", credential_bytes());
+      library.add_photo(project.id, pixcake::test::admitted_png(files, "/pictures/denied.png"), "denied.png", credential_bytes());
   const pixcake::ProjectResult gone_photo =
-      library.add_photo(project.id, "/pictures/gone.png", "gone.png", {});
+      library.add_photo(project.id, pixcake::test::admitted_png(files, "/pictures/gone.png"), "gone.png", {});
   EXPECT(denied_photo.code == pixcake::ResultCode::Ok);
   EXPECT(gone_photo.code == pixcake::ResultCode::Ok);
+  // 两张图都经准入加入项目；之后一张变成无权读取，一张被移走。
+  files.files.erase("/pictures/gone.png");
   files.files["/pictures/denied.png"] = {1};
   files.probe_errors["/pictures/denied.png"] = pixcake::ResultCode::PermissionDenied;
   EXPECT(library.refresh_source_presence() == pixcake::ResultCode::PermissionDenied);

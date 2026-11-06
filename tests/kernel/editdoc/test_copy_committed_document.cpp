@@ -4,6 +4,7 @@
 #include "pixcake/storage/sqlite_project_store.hpp"
 #include "pixcake/support/clock.hpp"
 #include "pixcake/support/log_sink.hpp"
+#include "support/admitted_photo.hpp"
 #include "support/fake_file_system.hpp"
 #include "support/temp_dir.hpp"
 
@@ -118,7 +119,7 @@ void test_sources_stay_in_their_modules() {
 
 void test_creating_a_copy_duplicates_the_committed_document() {
   pixcake::test::FakeFileSystem files;
-  const std::vector<std::uint8_t> photo_bytes{9, 8, 7};
+  const std::vector<std::uint8_t> photo_bytes = pixcake::test::png_with({9, 8, 7});
   files.files[kPhoto] = photo_bytes;
   LibraryFixture world(files);
 
@@ -169,7 +170,7 @@ void test_creating_a_copy_duplicates_the_committed_document() {
 
   const pixcake::ProjectResult project = world.library->create_project("相册", pixcake::kOriginLocal, false);
   EXPECT(project.code == pixcake::ResultCode::Ok);
-  const pixcake::ProjectResult photo = world.library->add_photo(project.id, kPhoto, "a.png", {1, 2, 0, 255});
+  const pixcake::ProjectResult photo = world.library->add_photo(project.id, pixcake::test::admitted_png(files, kPhoto), "a.png", {1, 2, 0, 255});
   EXPECT(photo.code == pixcake::ResultCode::Ok);
   const pixcake::ProjectResult created = world.library->create_virtual_copy(photo.id, kCopyDoc);
   EXPECT(created.code == pixcake::ResultCode::Ok);

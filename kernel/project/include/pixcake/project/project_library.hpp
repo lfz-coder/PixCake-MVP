@@ -1,5 +1,6 @@
 #pragma once
 
+#include "pixcake/project/admitted_source.hpp"
 #include "pixcake/persist/file_system.hpp"
 #include "pixcake/project/project_store.hpp"
 #include "pixcake/project/source_deleter.hpp"
@@ -13,7 +14,7 @@ namespace pixcake {
 
 // 回收站按删除时间加 2592000 秒到期。到期只删索引，不删原图。
 // 只有 delete_source_file 调用 SourceDeleter。
-// 原图只记绝对路径和调用方交来的访问凭证。add_photo 不探测文件，因此不返回原文件缺失。
+// 原图只记绝对路径和调用方交来的访问凭证。add_photo 只接受经过内容准入的 AdmittedSource。
 // 虚拟副本指向原图，并保存调用方交来的参数文档编号。编号是不透明字符串，这里不打开参数文档。
 // 项目库只回答这些条目是否共用一张原图。张数在账本里计算，这里不减张数，也没有余额。
 // 星级、旗标和色标记在图片上。虚拟副本不另存这三列。
@@ -23,7 +24,9 @@ class ProjectLibrary {
                  LogSink* log);
 
   ProjectResult create_project(std::string name, std::string origin, bool cloud_marked);
-  ProjectResult add_photo(std::int64_t project_id, std::string absolute_path, std::string file_name,
+  // 只接受导入准入签发的凭证。写入前重新识别文件：文件已不存在返回原文件缺失，
+  // 身份（设备、inode、大小）与准入时不同返回状态冲突，均不写入。
+  ProjectResult add_photo(std::int64_t project_id, const AdmittedSource& source, std::string file_name,
                           std::vector<std::uint8_t> access_credential);
   ProjectResult create_virtual_copy(std::int64_t photo_id, std::string document_id);
   ProjectResult set_photo_ratings(std::vector<std::int64_t> photo_ids, int rating);

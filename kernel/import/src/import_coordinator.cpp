@@ -17,8 +17,9 @@ ImportBatchResult ImportCoordinator::import_into(std::int64_t project_id,
     ImportItemResult item;
     item.absolute_path = candidate.absolute_path;
     SourceProbe source;
-    const ResultCode admitted = probe_source(files_, candidate.absolute_path, source);
-    if (admitted != ResultCode::Ok) {
+    std::optional<AdmittedSource> admission;
+    const ResultCode admitted = admit_source(files_, candidate.absolute_path, admission, &source);
+    if (admitted != ResultCode::Ok || !admission.has_value()) {
       item.code = admitted;
       if (result.overall_code == ResultCode::Ok) {
         result.overall_code = admitted;
@@ -29,7 +30,7 @@ ImportBatchResult ImportCoordinator::import_into(std::int64_t project_id,
     item.probed = true;
     item.source = source;
     const ProjectResult added =
-        project_.add_photo(project_id, candidate.absolute_path, candidate.file_name, candidate.access_credential);
+        project_.add_photo(project_id, *admission, candidate.file_name, candidate.access_credential);
     item.code = added.code;
     item.photo_id = added.id;
     if (added.code == ResultCode::Ok) {
