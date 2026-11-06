@@ -155,8 +155,10 @@ std::vector<ParameterMode> make_parameter_modes() {
                              "grain_size", "grain_roughness", "grain_color"};
   const double grain_defaults[] = {0, 30, 50, 15, 10, 15, 10};
   for (int i = 0; i < 7; ++i) {
-    add("detail", grain_ids[i], 0.0, 100.0, 1.0, grain_defaults[i], "detail.grain", "pixcake.detail", grain_ids[i],
-        80 + i);
+    ParameterMode& grain = add("detail", grain_ids[i], 0.0, 100.0, 1.0, grain_defaults[i], "detail.grain",
+                               "pixcake.detail", grain_ids[i], 80 + i);
+    // 只有颗粒效果不为 0 时，下面各项才可以调节（2026-11-05 用户给出）。
+    if (i > 0) grain.disable_rules.push_back({"detail", "grain_amount", "", "颗粒效果为 0 时不可调节", true});
   }
   // 黑白档禁用影调里的鲜艳度和饱和度（需求第 10.3 节、第 24 节第 9 条）。
   for (auto& mode : modes) {
@@ -367,10 +369,18 @@ std::optional<std::string> parameter_disabled_reason(
   for (const auto& rule : mode->disable_rules) {
     std::optional<std::string> current = committed_value ? committed_value(rule.when_capability_id, rule.when_parameter_id)
                                                          : std::nullopt;
-    if (!current) {
-      const ParameterMode* condition = find_parameter_mode(rule.when_capability_id, rule.when_parameter_id);
-      if (condition != nullptr && !condition->default_choice.empty()) current = condition->default_choice;
+    const ParameterMode* condition = find_parameter_mode(rule.when_capability_id, rule.when_parameter_id);
+    if (rule.when_zero) {
+      double number = condition != nullptr ? condition->default_value : 0.0;
+      if (current) {
+        char* end = nullptr;
+        const double parsed = std::strtod(current->c_str(), &end);
+        if (end != current->c_str() && *end == '\0') number = parsed;
+      }
+      if (number == 0.0) return rule.reason;
+      continue;
     }
+    if (!current && condition != nullptr && !condition->default_choice.empty()) current = condition->default_choice;
     if (current && *current == rule.when_choice) return rule.reason;
   }
   return std::nullopt;

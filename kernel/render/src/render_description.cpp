@@ -1,5 +1,6 @@
 #include "pixcake/render/render_description.hpp"
 
+#include "pixcake/capabilities/module_set.hpp"
 #include "pixcake/layerdoc/layer_document.hpp"
 
 #include <algorithm>
@@ -14,23 +15,41 @@
 namespace pixcake::render {
 namespace {
 
-bool parse_number(const std::string& text, double& value) {
-  if (text.empty()) {
-    return false;
-  }
-  char* end = nullptr;
-  errno = 0;
-  value = std::strtod(text.c_str(), &end);
-  return errno == 0 && end == text.c_str() + text.size() && std::isfinite(value);
-}
+// 能力模块按读取接口取值：拖动中的预览值优先，其次已提交值。
+class DocumentReader final : public ParameterReader {
+ public:
+  explicit DocumentReader(const EditDocument& document) : document_(document) {}
 
-RenderOperation make_operation(const ParameterMode& mode) {
+  std::optional<std::string> value(const std::string& capability_id, const std::string& parameter_id) const override {
+    auto found = document_.preview(capability_id, parameter_id);
+    if (!found) found = document_.committed_parameter(capability_id, parameter_id);
+    return found;
+  }
+
+  std::uint32_t fragment_version(const std::string& capability_id) const override {
+    const auto fragment = document_.fragment(capability_id);
+    return fragment ? fragment->version : 1u;
+  }
+
+ private:
+  const EditDocument& document_;
+};
+
+RenderOperation operation_of(DrawStep step) {
   RenderOperation operation;
-  operation.capability_id = mode.capability_id;
-  operation.stage = mode.render_stage;
-  operation.program = mode.render_program;
-  const auto pipeline_order = phase_one_capability_order(mode.capability_id);
-  operation.order = pipeline_order ? *pipeline_order : mode.order;
+  operation.capability_id = std::move(step.capability_id);
+  operation.stage = std::move(step.stage);
+  operation.program = std::move(step.program);
+  operation.order = step.order;
+  for (auto& value : step.values) {
+    operation.values.push_back(
+        RenderValue{std::move(value.parameter_id), std::move(value.channel), std::move(value.display_value),
+                    value.numeric_value});
+  }
+  operation.mask_ids = std::move(step.mask_ids);
+  operation.blend_mode = std::move(step.blend_mode);
+  operation.enabled = step.enabled;
+  operation.disabled_reason = std::move(step.disabled_reason);
   return operation;
 }
 
@@ -84,6 +103,7 @@ CompileResult compile(const EditDocument& document, const CapabilityRegistry& re
     }
   }
 
+  const DocumentReader reader(document);
   for (const auto& capability_id : capability_ids) {
     const auto* descriptor = registry.find(capability_id);
     if (descriptor == nullptr) {
@@ -97,74 +117,18 @@ CompileResult compile(const EditDocument& document, const CapabilityRegistry& re
       continue;
     }
 
-    const auto fragment = document.fragment(capability_id);
-    const std::uint32_t fragment_version = fragment ? fragment->version : 1;
-    RenderOperation operation;
-    bool operation_created = false;
-    std::set<std::string> channels;
-    bool too_new = false;
-    for (const auto& mode : modes) {
-      if (mode.capability_id == capability_id && fragment_version > mode.schema_version) {
-        too_new = true;
-        break;
-      }
-    }
-    if (too_new) {
-      result.description.diagnostics.push_back(
-          {capability_id, "能力片段版本过新，保留片段但跳过绘制", false});
+    // 编译交给能力自己的模块（架构 7.2、契约 C-31）；渲染只把绘制描述换成渲染描述并排序。
+    const CapabilityModule* module = find_capability_module(capability_id);
+    if (module == nullptr) {
+      result.description.diagnostics.push_back({capability_id, "能力没有模块，保留片段但跳过绘制", false});
       continue;
     }
-    for (const auto& mode : modes) {
-      if (mode.capability_id != capability_id) {
-        continue;
-      }
-      auto value = document.preview(capability_id, mode.parameter_id);
-      if (!value) {
-        value = document.committed_parameter(capability_id, mode.parameter_id);
-      }
-      if (!value.has_value()) {
-        continue;
-      }
-      double numeric = 0.0;
-      bool numeric_ok = false;
-      if (!mode.choices.empty()) {
-        // 枚举参数：数值是可选值在参数模式里的序号，显示值保留稳定标识。
-        for (std::size_t index = 0; index < mode.choices.size(); ++index) {
-          if (mode.choices[index] == *value) {
-            numeric = static_cast<double>(index);
-            numeric_ok = true;
-            break;
-          }
-        }
-      } else {
-        numeric_ok = parse_number(*value, numeric);
-      }
-      if (!numeric_ok || !validate_parameter_display_value(capability_id, mode.parameter_id, *value)) {
-        operation = make_operation(mode);
-        operation.enabled = false;
-        operation.disabled_reason = "参数值不符合参数模式";
-        result.description.diagnostics.push_back(
-            {capability_id, operation.disabled_reason, true});
-        operation_created = true;
-        break;
-      }
-      if (!operation_created) {
-        operation = make_operation(mode);
-        operation_created = true;
-      }
-      if (!channels.insert(mode.render_channel).second) {
-        continue;
-      }
-      operation.values.push_back(RenderValue{mode.parameter_id, mode.render_channel, *value, numeric});
+    ModuleCompile compiled = module->compile(reader);
+    for (auto& diagnostic : compiled.diagnostics) {
+      result.description.diagnostics.push_back(
+          {std::move(diagnostic.capability_id), std::move(diagnostic.message), diagnostic.blocking});
     }
-    if (operation_created) {
-      if (operation.values.empty() && operation.enabled) {
-        result.description.diagnostics.push_back(
-            {capability_id, "片段没有可编译的参数值", false});
-        continue;
-      }
-      result.description.operations.push_back(std::move(operation));
-    }
+    for (auto& step : compiled.steps) result.description.operations.push_back(operation_of(std::move(step)));
   }
 
   std::sort(result.description.operations.begin(), result.description.operations.end(),

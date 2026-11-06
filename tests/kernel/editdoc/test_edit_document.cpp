@@ -420,7 +420,15 @@ void test_b52_commit_slower_than_two_seconds_is_not_success() {
   EXPECT(document.revision() == 1);
 }
 
+void test_q02_grain_sub_parameter_preview_needs_nonzero_amount() {
+  auto document = *pixcake::EditDocument::create("img-grain");
+  EXPECT(document.set_preview("detail", "grain_size", "20") == pixcake::ResultCode::StateConflict);
+  EXPECT(document.set_preview("detail", "grain_amount", "30") == pixcake::ResultCode::Ok);
+  EXPECT(document.set_preview("detail", "grain_size", "20") == pixcake::ResultCode::Ok);
+}
+
 int main() {
+  test_q02_grain_sub_parameter_preview_needs_nonzero_amount();
   test_b52_commit_slower_than_two_seconds_is_not_success();
   test_o07_commit_logs_revision_and_code();
   test_c05_monochrome_profile_blocks_vibrance_edits();

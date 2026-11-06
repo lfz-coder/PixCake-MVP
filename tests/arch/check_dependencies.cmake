@@ -30,12 +30,16 @@ endfunction()
 # 1. kernel 不包含 Qt 或 QOpenGL。
 scan("${SOURCE_DIR}/kernel" "rule 1" "#include <Q" "#include <Qt" "QOpenGL" "#include \"Q")
 
-# 2. 能力目录不包含另一个能力目录。
-file(GLOB capability_dirs LIST_DIRECTORIES true "${SOURCE_DIR}/kernel/capability/*")
+# 2. 能力目录不包含另一个能力目录（架构第 154、646 行：kernel/capabilities/ 下每个能力一个子目录）。
+#    kernel/capabilities/include 与本层的 module_set 是能力集合，不是能力目录。
+file(GLOB capability_dirs LIST_DIRECTORIES true "${SOURCE_DIR}/kernel/capabilities/*")
+list(FILTER capability_dirs EXCLUDE REGEX "/kernel/capabilities/include$")
+set(capability_dir_count 0)
 foreach(dir ${capability_dirs})
   if(NOT IS_DIRECTORY "${dir}")
     continue()
   endif()
+  math(EXPR capability_dir_count "${capability_dir_count} + 1")
   get_filename_component(own "${dir}" NAME)
   file(GLOB_RECURSE capability_files "${dir}/*")
   foreach(path ${capability_files})
@@ -56,8 +60,29 @@ foreach(dir ${capability_dirs})
         message(FATAL_ERROR "rule 2: ${path} includes capabilities/${other_name}")
       endif()
     endforeach()
+    # 2b. 架构第 196 行规则 4：普通能力只用 kernel/capability、editdoc 只读视图、mask 编号、subject 只读视图、
+    #     support。源文件只包含这些头，CMake 只链接这些库。
+    string(REGEX MATCHALL "#include \"pixcake/[a-z_]+/" included "${text}")
+    foreach(include ${included})
+      string(REGEX REPLACE "#include \"pixcake/([a-z_]+)/" "\\1" module "${include}")
+      if(NOT module MATCHES "^(capability|capabilities|editdoc|mask|subject|support)$")
+        message(FATAL_ERROR "rule 2b: ${path} includes pixcake/${module}/")
+      endif()
+    endforeach()
+    get_filename_component(file_name "${path}" NAME)
+    if(file_name STREQUAL "CMakeLists.txt")
+      string(REGEX MATCHALL "pixcake_[a-z_]+" linked "${text}")
+      foreach(target ${linked})
+        if(NOT target MATCHES "^pixcake_(capability|capability_${own}|editdoc|mask|subject|support|warnings)$")
+          message(FATAL_ERROR "rule 2b: ${path} links ${target}")
+        endif()
+      endforeach()
+    endif()
   endforeach()
 endforeach()
+if(capability_dir_count EQUAL 0)
+  message(FATAL_ERROR "rule 2: kernel/capabilities/ has no capability directory")
+endif()
 
 # 3. 渲染和公共外观不包含 Qt。
 scan("${SOURCE_DIR}/gpu/render" "rule 3" "#include <Q" "#include <Qt" "QOpenGL")

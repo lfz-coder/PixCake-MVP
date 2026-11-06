@@ -357,7 +357,28 @@ void test_q06_layer_ranges_come_from_parameter_modes() {
   EXPECT(pixcake::CapabilityRegistry::phase_one().find("layer") == nullptr);
 }
 
+// 2026-11-05 用户给出：只有颗粒效果不为 0，下面各项才可以调节。没有值时按默认值 0 判断。
+void test_q02_grain_sub_parameters_need_nonzero_amount() {
+  std::optional<std::string> amount;
+  const auto lookup = [&amount](std::string_view capability, std::string_view parameter) -> std::optional<std::string> {
+    if (capability == "detail" && parameter == "grain_amount") return amount;
+    return std::nullopt;
+  };
+  for (const char* id : {"grain_shadows", "grain_midtones", "grain_highlights", "grain_size", "grain_roughness",
+                         "grain_color"}) {
+    amount.reset();
+    EXPECT(pixcake::parameter_disabled_reason("detail", id, lookup).has_value());
+    amount = "0";
+    EXPECT(pixcake::parameter_disabled_reason("detail", id, lookup).has_value());
+    amount = "1";
+    EXPECT(!pixcake::parameter_disabled_reason("detail", id, lookup).has_value());
+  }
+  amount.reset();
+  EXPECT(!pixcake::parameter_disabled_reason("detail", "grain_amount", lookup).has_value());
+}
+
 int main() {
+  test_q02_grain_sub_parameters_need_nonzero_amount();
   test_q06_layer_ranges_come_from_parameter_modes();
   test_c05_monochrome_switches_hsl_to_mixer();
   test_c49_color_editor_offsets();

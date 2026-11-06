@@ -48,12 +48,14 @@ struct PipelineStep {
         dependencies(std::move(deps)) {}
 };
 
-// 条件参数取某个枚举值时，目标参数不可编辑。
+// 条件参数取某个枚举值时，目标参数不可编辑。when_zero 为真时改为：条件参数（数值）为 0 时不可编辑，
+// 不看 when_choice；没有值时按条件参数的默认值判断。
 struct ParameterDisableRule {
   std::string when_capability_id;
   std::string when_parameter_id;
   std::string when_choice;
   std::string reason;
+  bool when_zero = false;
 };
 
 struct ParameterMode {

@@ -151,7 +151,33 @@ void test_layer_and_mask_inputs_are_descriptive() {
 
 }  // namespace
 
+// C-31：渲染把编译交给能力模块。黑白配置文件预览时鲜艳度不画（color.global 模块），
+// 颗粒按 detail 模块的阶段出一条绘制描述。
+void test_c31_render_compiles_through_capability_modules() {
+  auto document = *pixcake::EditDocument::create("img-modules");
+  EXPECT(document.set_preview("color.global", "vibrance", "10") == pixcake::ResultCode::Ok);
+  EXPECT(document.set_preview("color.global", "profile", "monochrome") == pixcake::ResultCode::Ok);
+  EXPECT(document.set_preview("detail", "grain_amount", "25") == pixcake::ResultCode::Ok);
+  EXPECT(document.set_preview("detail", "grain_size", "20") == pixcake::ResultCode::Ok);
+  const auto result = pixcake::render::compile(document);
+  EXPECT(result.code == pixcake::ResultCode::Ok);
+  bool saw_global = false;
+  bool saw_grain = false;
+  for (const auto& operation : result.description.operations) {
+    if (operation.capability_id == "color.global") {
+      saw_global = true;
+      for (const auto& value : operation.values) EXPECT(value.parameter_id != "vibrance");
+    }
+    if (operation.capability_id == "detail") {
+      saw_grain = operation.stage == "detail.grain" && operation.values.size() == 2;
+    }
+  }
+  EXPECT(saw_global);
+  EXPECT(saw_grain);
+}
+
 int main() {
+  test_c31_render_compiles_through_capability_modules();
   test_compile_is_read_only_and_uses_stable_fields();
   test_preview_without_committed_fragment_is_renderable();
   test_c05_profile_choice_is_rendered_as_choice_index();

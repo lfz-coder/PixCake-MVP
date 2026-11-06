@@ -5,6 +5,7 @@
 #include "pixcake/persist/atomic_file.hpp"
 #include "pixcake/persist/write_lock.hpp"
 #include "pixcake/capability/capability_registry.hpp"
+#include "pixcake/capability/fragment_codec.hpp"
 #include "pixcake/support/checksum.hpp"
 
 #include <algorithm>
@@ -24,7 +25,7 @@ constexpr std::uint32_t kRecordPreset = 8;
 constexpr std::uint32_t kRecordRecovered = 9;
 constexpr std::uint32_t kRecordBaked = 10;
 constexpr std::uint32_t kRecordEditingInstance = 11;
-constexpr std::uint32_t kInnerParameter = 1;
+constexpr std::uint32_t kInnerParameter = kFragmentParameterRecord;
 constexpr std::uint32_t kFormatVersion = 1;
 
 void append_u32(std::vector<std::uint8_t>& out, std::uint32_t value) {
@@ -70,70 +71,23 @@ std::string text_of(const std::vector<std::uint8_t>& bytes) {
   return std::string(bytes.begin(), bytes.end());
 }
 
-struct InnerRecord {
-  std::uint32_t type = 0;
-  std::vector<std::uint8_t> payload;
-};
+// 能力片段正文的编码只在 kernel/capability/fragment_codec 定义一次（契约 C-30）。
+using InnerRecord = FragmentRecord;
 
 bool parse_tlv(const std::vector<std::uint8_t>& in, std::vector<InnerRecord>& out) {
-  std::size_t offset = 0;
-  while (offset < in.size()) {
-    std::uint32_t type = 0;
-    std::uint32_t size = 0;
-    if (!read_u32(in, offset, type) || !read_u32(in, offset + 4, size)) {
-      return false;
-    }
-    if (size > in.size() - (offset + 8)) {
-      return false;
-    }
-    InnerRecord record;
-    record.type = type;
-    record.payload.assign(in.begin() + static_cast<std::ptrdiff_t>(offset + 8),
-                          in.begin() + static_cast<std::ptrdiff_t>(offset + 8 + size));
-    out.push_back(std::move(record));
-    offset += 8 + size;
-  }
-  return true;
+  return decode_fragment_records(in, out);
 }
 
 std::vector<std::uint8_t> serialize_tlv(const std::vector<InnerRecord>& records) {
-  std::vector<std::uint8_t> out;
-  for (const auto& record : records) {
-    append_u32(out, record.type);
-    append_u32(out, static_cast<std::uint32_t>(record.payload.size()));
-    out.insert(out.end(), record.payload.begin(), record.payload.end());
-  }
-  return out;
+  return encode_fragment_records(records);
 }
 
 bool parse_parameter(const std::vector<std::uint8_t>& payload, std::string& id, std::string& value) {
-  std::uint32_t id_len = 0;
-  if (!read_u32(payload, 0, id_len) || id_len > payload.size() - 4) {
-    return false;
-  }
-  const std::size_t value_len_at = 4 + static_cast<std::size_t>(id_len);
-  if (value_len_at > payload.size() || payload.size() - value_len_at < 4) {
-    return false;
-  }
-  std::uint32_t value_len = 0;
-  if (!read_u32(payload, value_len_at, value_len)) {
-    return false;
-  }
-  if (static_cast<std::size_t>(value_len) != payload.size() - (value_len_at + 4)) {
-    return false;
-  }
-  id.assign(payload.begin() + 4, payload.begin() + static_cast<std::ptrdiff_t>(4 + id_len));
-  value.assign(payload.begin() + static_cast<std::ptrdiff_t>(value_len_at + 4), payload.end());
-  return true;
+  return decode_parameter_record(payload, id, value);
 }
 
 std::vector<std::uint8_t> serialize_parameter(const std::string& id, const std::string& value) {
-  std::vector<std::uint8_t> out;
-  append_u32(out, static_cast<std::uint32_t>(id.size()));
-  out.insert(out.end(), id.begin(), id.end());
-  append_u32(out, static_cast<std::uint32_t>(value.size()));
-  out.insert(out.end(), value.begin(), value.end());
-  return out;
+  return encode_parameter_record(id, value);
 }
 
 struct ParsedFragment {
@@ -327,8 +281,13 @@ bool parameter_disabled_in(const EditDocument& document, const std::string& capa
                            const std::string& parameter_id) {
   return parameter_disabled_reason(capability_id, parameter_id,
                                    [&document](std::string_view capability, std::string_view parameter) {
-                                     return document.committed_parameter(std::string(capability),
-                                                                         std::string(parameter));
+                                     // 与能力模块编译时一样：预览值优先，其次已提交值。
+                                     auto value = document.preview(std::string(capability), std::string(parameter));
+                                     if (!value) {
+                                       value = document.committed_parameter(std::string(capability),
+                                                                            std::string(parameter));
+                                     }
+                                     return value;
                                    })
       .has_value();
 }

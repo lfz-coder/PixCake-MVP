@@ -1,0 +1,3 @@
+add_library(pixcake_capability_color_global src/color_global_module.cpp)
+target_include_directories(pixcake_capability_color_global PUBLIC include)
+target_link_libraries(pixcake_capability_color_global PUBLIC pixcake_capability PRIVATE pixcake_warnings)

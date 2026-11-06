@@ -1,0 +1,3 @@
+add_library(pixcake_capability_detail src/detail_module.cpp)
+target_include_directories(pixcake_capability_detail PUBLIC include)
+target_link_libraries(pixcake_capability_detail PUBLIC pixcake_capability PRIVATE pixcake_warnings)
