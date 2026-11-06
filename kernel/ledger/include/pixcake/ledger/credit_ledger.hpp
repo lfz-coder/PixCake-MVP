@@ -1,5 +1,6 @@
 #pragma once
 
+#include "pixcake/support/log_sink.hpp"
 #include "pixcake/support/result_code.hpp"
 
 #include <cstdint>
@@ -68,6 +69,11 @@ class CreditLedger {
  public:
   static CreditLedger open(FreeQueuePolicy policy, std::vector<LedgerEvent> events);
 
+  // 日志可以为空。不为空时：生成任务成功、失败、取消写 ledger.task.terminal（phase 为转换前状态，
+  // message 为终态，charged 为这个任务是否扣过点）；崩溃写 ledger.task.crash；同一任务编号、
+  // 笔触编号或导出编号的重复记账被挡住时写 ledger.dedup（phase 为 task/stroke/export）。
+  void set_log(LogSink* log) { log_ = log; }
+
   ResultCode credit_points(std::int64_t amount);
   ResultCode credit_sheets(std::int64_t amount);
   ResultCode quote(const TaskQuote& quote);
@@ -92,6 +98,12 @@ class CreditLedger {
 
   FreeQueuePolicy policy_;
   std::vector<LedgerEvent> events_;
+  LogSink* log_ = nullptr;
+
+  bool task_charged(const std::string& task_id) const;
+  void note_terminal(const char* event, const std::string& task_id, const std::string& before,
+                     const char* after) const;
+  void note_dedup(const std::string& id, const char* kind) const;
 };
 
 }  // namespace pixcake

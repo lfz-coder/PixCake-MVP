@@ -2,6 +2,7 @@
 
 #include "pixcake/persist/file_system.hpp"
 #include "pixcake/support/fast_export_latch.hpp"
+#include "pixcake/support/log_sink.hpp"
 #include "pixcake/support/result_code.hpp"
 
 #include <cstdint>
@@ -36,6 +37,12 @@ struct LoadResult {
 class EditDocument {
  public:
   static std::optional<EditDocument> create(std::string image_id);
+
+  // 日志可以为空。不为空时，每次写盘（提交、片段替换、烘焙复位、快照）结束写一条 editdoc.commit，
+  // 带文档路径、修订号、结果码和耗时；写盘和恢复的细节由 persist 记。load 和 copy_committed
+  // 沿用目标对象上已经设置的日志。日志指针不写进文档，也不随 encode 复制。
+  void set_log(LogSink* log) { log_ = log; }
+  LogSink* log() const { return log_; }
   static LoadResult load(EditDocument& destination, FileSystem& files, const std::string& path,
                          const std::vector<VersionLimit>& limits);
 
@@ -99,6 +106,17 @@ class EditDocument {
 
  private:
   friend class HistoryLog;
+  ResultCode write_snapshot_steps(FileSystem& files, const std::string& path, const FastExportLatch* latch) const;
+  ResultCode commit_preview_steps(std::uint64_t expected_revision, const std::string& capability_id,
+                                  const std::string& parameter_id, const std::vector<VersionLimit>& limits,
+                                  FileSystem& files, const std::string& path);
+  ResultCode commit_fragment_replacement_steps(std::uint64_t expected_revision,
+                                               const std::vector<std::string>& remove_capability_ids,
+                                               const std::vector<FragmentView>& replacements, FileSystem& files,
+                                               const std::string& path);
+  ResultCode commit_baked_reset_steps(std::uint64_t expected_revision, FileSystem& files, const std::string& path);
+  void note_commit(const std::string& path, ResultCode code, std::uint64_t duration_ms) const;
+  LogSink* log_ = nullptr;
   struct Record {
     std::uint32_t type = 0;
     std::vector<std::uint8_t> payload;

@@ -2,6 +2,7 @@
 
 #include "pixcake/persist/write_lock.hpp"
 
+#include <chrono>
 #include <filesystem>
 
 namespace pixcake {
@@ -20,7 +21,21 @@ std::string file_name(const std::string& path) {
   return std::filesystem::path(path).filename().string();
 }
 
-ResultCode quarantine_file(FileSystem& files, const std::string& formal_path) {
+void note(LogSink* log, const char* event, ResultCode code, const std::string& path,
+          std::uint64_t duration_ms = 0) {
+  if (log == nullptr) return;
+  LogRecord record;
+  record.module = "persist";
+  record.event = event;
+  record.code = code;
+  record.message = result_code_label(code);
+  record.path = path;
+  record.document_id = path;
+  record.duration_ms = duration_ms;
+  log->write(record);
+}
+
+ResultCode quarantine_file(FileSystem& files, const std::string& formal_path, LogSink* log) {
   if (!files.exists(formal_path)) {
     return ResultCode::Ok;
   }
@@ -47,6 +62,7 @@ ResultCode quarantine_file(FileSystem& files, const std::string& formal_path) {
   if (!renamed.ok) {
     return renamed.code;
   }
+  note(log, "persist.quarantine", ResultCode::Ok, formal_path);
   return ResultCode::Ok;
 }
 
@@ -84,10 +100,8 @@ bool restore_backup(FileSystem& files, const std::string& formal, const std::str
   return synced.ok;
 }
 
-}  // namespace
-
-ResultCode atomic_replace(FileSystem& files, const std::string& formal_path,
-                          const std::vector<std::uint8_t>& bytes) {
+ResultCode replace_in_five_steps(FileSystem& files, const std::string& formal_path,
+                                 const std::vector<std::uint8_t>& bytes) {
   WriteScope scope(files, formal_path);
   if (!scope) {
     return scope.code();
@@ -145,8 +159,8 @@ ResultCode atomic_replace(FileSystem& files, const std::string& formal_path,
   return ResultCode::Ok;
 }
 
-DurableLoad open_durable_file(FileSystem& files, const std::string& formal_path,
-                              const std::function<bool(const std::vector<std::uint8_t>&)>& valid) {
+DurableLoad open_durable_steps(FileSystem& files, const std::string& formal_path,
+                               const std::function<bool(const std::vector<std::uint8_t>&)>& valid, LogSink* log) {
   DurableLoad loaded;
   WriteScope scope(files, formal_path);
   if (!scope) {
@@ -180,7 +194,7 @@ DurableLoad open_durable_file(FileSystem& files, const std::string& formal_path,
       loaded.bytes = std::move(bytes);
       return loaded;
     } else {
-      const ResultCode quarantined = quarantine_file(files, formal_path);
+      const ResultCode quarantined = quarantine_file(files, formal_path, log);
       if (quarantined != ResultCode::Ok) {
         loaded.code = quarantined;
         return loaded;
@@ -207,7 +221,7 @@ DurableLoad open_durable_file(FileSystem& files, const std::string& formal_path,
       loaded.bytes = std::move(bytes);
       return loaded;
     } else {
-      const ResultCode quarantined = quarantine_file(files, backup);
+      const ResultCode quarantined = quarantine_file(files, backup, log);
       if (quarantined != ResultCode::Ok) {
         loaded.code = quarantined;
         return loaded;
@@ -222,6 +236,32 @@ DurableLoad open_durable_file(FileSystem& files, const std::string& formal_path,
     loaded.code = marked.code;
   } else {
     loaded.recovery_marker = true;
+  }
+  // 只在这一次真正恢复为空时记；之后再打开已标记的空文档不重复计数。
+  note(log, "persist.recover.empty", loaded.code, formal_path);
+  return loaded;
+}
+
+}  // namespace
+
+ResultCode atomic_replace(FileSystem& files, const std::string& formal_path,
+                          const std::vector<std::uint8_t>& bytes, LogSink* log) {
+  note(log, "persist.write.start", ResultCode::Ok, formal_path);
+  const auto began = std::chrono::steady_clock::now();
+  const ResultCode code = replace_in_five_steps(files, formal_path, bytes);
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - began);
+  note(log, code == ResultCode::Ok ? "persist.write.finish" : "persist.write.failed", code, formal_path,
+       static_cast<std::uint64_t>(elapsed.count()));
+  return code;
+}
+
+DurableLoad open_durable_file(FileSystem& files, const std::string& formal_path,
+                              const std::function<bool(const std::vector<std::uint8_t>&)>& valid, LogSink* log) {
+  DurableLoad loaded = open_durable_steps(files, formal_path, valid, log);
+  if (loaded.used_backup) {
+    note(log, "persist.recover.backup", loaded.code, formal_path);
+  } else if (!loaded.absent && !loaded.recovered_empty && loaded.code != ResultCode::Ok) {
+    note(log, "persist.open.failed", loaded.code, formal_path);
   }
   return loaded;
 }

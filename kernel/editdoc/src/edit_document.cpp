@@ -1,5 +1,7 @@
 #include "pixcake/editdoc/edit_document.hpp"
 
+#include <chrono>
+
 #include "pixcake/persist/atomic_file.hpp"
 #include "pixcake/persist/write_lock.hpp"
 #include "pixcake/capability/capability_registry.hpp"
@@ -336,9 +338,10 @@ bool parameter_disabled_in(const EditDocument& document, const std::string& capa
 LoadResult EditDocument::load(EditDocument& destination, FileSystem& files, const std::string& path,
                               const std::vector<VersionLimit>& limits) {
   LoadResult result;
+  LogSink* const log = destination.log_;
   const DurableLoad opened = open_durable_file(files, path, [](const std::vector<std::uint8_t>& bytes) {
     return decode(bytes).has_value();
-  });
+  }, log);
   if (opened.absent) {
     result.absent = true;
     return result;
@@ -346,6 +349,7 @@ LoadResult EditDocument::load(EditDocument& destination, FileSystem& files, cons
   if (opened.recovered_empty) {
     destination = make_recovered_empty();
     destination.limits_ = limits;
+    destination.log_ = log;
     result.code = ResultCode::DocumentCorrupt;
     result.recovered_empty = true;
     return result;
@@ -358,6 +362,7 @@ LoadResult EditDocument::load(EditDocument& destination, FileSystem& files, cons
   if (!decoded) {
     destination = make_recovered_empty();
     destination.limits_ = limits;
+    destination.log_ = log;
     result.code = ResultCode::DocumentCorrupt;
     result.recovered_empty = true;
     return result;
@@ -368,6 +373,7 @@ LoadResult EditDocument::load(EditDocument& destination, FileSystem& files, cons
   // original image id while getting a distinct document path.
   decoded->editing_instance_id_ = path;
   destination = std::move(*decoded);
+  destination.log_ = log;
   result.code = ResultCode::Ok;
   result.used_backup = opened.used_backup;
   return result;
@@ -383,6 +389,7 @@ LoadResult EditDocument::copy_committed(FileSystem& files, const std::string& so
     return rejected;
   }
   EditDocument loaded;
+  loaded.log_ = copy.log_;
   const LoadResult opened = load(loaded, files, source_path, limits);
   if (opened.absent || !opened.code.has_value() || *opened.code != ResultCode::Ok || opened.recovered_empty) {
     return opened;
@@ -400,7 +407,7 @@ LoadResult EditDocument::copy_committed(FileSystem& files, const std::string& so
   return result;
 }
 
-ResultCode EditDocument::write_snapshot(FileSystem& files, const std::string& path,
+ResultCode EditDocument::write_snapshot_steps(FileSystem& files, const std::string& path,
                                         const FastExportLatch* latch) const {
   WriteScope scope(files, path, latch);
   if (!scope) {
@@ -410,7 +417,7 @@ ResultCode EditDocument::write_snapshot(FileSystem& files, const std::string& pa
   if (durable != ResultCode::Ok) {
     return durable;
   }
-  return atomic_replace(files, path, encode());
+  return atomic_replace(files, path, encode(), log_);
 }
 
 std::string EditDocument::image_id() const {
@@ -675,7 +682,7 @@ void EditDocument::set_editing_instance_id(std::string value) {
   editing_instance_id_ = std::move(value);
 }
 
-ResultCode EditDocument::commit_preview(std::uint64_t expected_revision, const std::string& capability_id,
+ResultCode EditDocument::commit_preview_steps(std::uint64_t expected_revision, const std::string& capability_id,
                                         const std::string& parameter_id,
                                         const std::vector<VersionLimit>& limits, FileSystem& files,
                                         const std::string& path) {
@@ -746,7 +753,7 @@ ResultCode EditDocument::commit_preview(std::uint64_t expected_revision, const s
   next.clear_recovered_flag();
   next.store_fragment(capability_id, version, serialize_tlv(inner_records));
   next.set_revision(revision() + 1);
-  const ResultCode saved = atomic_replace(files, path, next.encode());
+  const ResultCode saved = atomic_replace(files, path, next.encode(), log_);
   if (saved != ResultCode::Ok) {
     return saved;
   }
@@ -754,7 +761,7 @@ ResultCode EditDocument::commit_preview(std::uint64_t expected_revision, const s
   return ResultCode::Ok;
 }
 
-ResultCode EditDocument::commit_fragment_replacement(
+ResultCode EditDocument::commit_fragment_replacement_steps(
     std::uint64_t expected_revision, const std::vector<std::string>& remove_capability_ids,
     const std::vector<FragmentView>& replacements, FileSystem& files, const std::string& path) {
   WriteScope scope(files, path);
@@ -812,7 +819,7 @@ ResultCode EditDocument::commit_fragment_replacement(
     next.store_fragment(fragment.capability_id, fragment.version, fragment.inner);
   }
   next.set_revision(revision() + 1);
-  const ResultCode saved = atomic_replace(files, path, next.encode());
+  const ResultCode saved = atomic_replace(files, path, next.encode(), log_);
   if (saved != ResultCode::Ok) {
     return saved;
   }
@@ -829,7 +836,7 @@ bool EditDocument::effects_baked() const {
   return false;
 }
 
-ResultCode EditDocument::commit_baked_reset(std::uint64_t expected_revision, FileSystem& files,
+ResultCode EditDocument::commit_baked_reset_steps(std::uint64_t expected_revision, FileSystem& files,
                                             const std::string& path) {
   WriteScope scope(files, path);
   if (!scope) {
@@ -871,12 +878,71 @@ ResultCode EditDocument::commit_baked_reset(std::uint64_t expected_revision, Fil
   }
   next.preview_.clear();
   next.set_revision(revision() + 1);
-  const ResultCode saved = atomic_replace(files, path, next.encode());
+  const ResultCode saved = atomic_replace(files, path, next.encode(), log_);
   if (saved != ResultCode::Ok) {
     return saved;
   }
   *this = std::move(next);
   return ResultCode::Ok;
+}
+
+namespace {
+
+std::uint64_t elapsed_ms(std::chrono::steady_clock::time_point began) {
+  return static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - began).count());
+}
+
+}  // namespace
+
+void EditDocument::note_commit(const std::string& path, ResultCode code, std::uint64_t duration_ms) const {
+  if (log_ == nullptr) return;
+  LogRecord record;
+  record.module = "editdoc";
+  record.event = "editdoc.commit";
+  record.code = code;
+  record.message = result_code_label(code);
+  record.path = path;
+  record.document_id = path;
+  record.revision = revision();
+  record.duration_ms = duration_ms;
+  log_->write(record);
+}
+
+ResultCode EditDocument::write_snapshot(FileSystem& files, const std::string& path,
+                                        const FastExportLatch* latch) const {
+  const auto began = std::chrono::steady_clock::now();
+  const ResultCode code = write_snapshot_steps(files, path, latch);
+  note_commit(path, code, elapsed_ms(began));
+  return code;
+}
+
+ResultCode EditDocument::commit_preview(std::uint64_t expected_revision, const std::string& capability_id,
+                                        const std::string& parameter_id, const std::vector<VersionLimit>& limits,
+                                        FileSystem& files, const std::string& path) {
+  const auto began = std::chrono::steady_clock::now();
+  const ResultCode code = commit_preview_steps(expected_revision, capability_id, parameter_id, limits, files, path);
+  note_commit(path, code, elapsed_ms(began));
+  return code;
+}
+
+ResultCode EditDocument::commit_fragment_replacement(std::uint64_t expected_revision,
+                                                     const std::vector<std::string>& remove_capability_ids,
+                                                     const std::vector<FragmentView>& replacements,
+                                                     FileSystem& files, const std::string& path) {
+  const auto began = std::chrono::steady_clock::now();
+  const ResultCode code =
+      commit_fragment_replacement_steps(expected_revision, remove_capability_ids, replacements, files, path);
+  note_commit(path, code, elapsed_ms(began));
+  return code;
+}
+
+ResultCode EditDocument::commit_baked_reset(std::uint64_t expected_revision, FileSystem& files,
+                                            const std::string& path) {
+  const auto began = std::chrono::steady_clock::now();
+  const ResultCode code = commit_baked_reset_steps(expected_revision, files, path);
+  note_commit(path, code, elapsed_ms(began));
+  return code;
 }
 
 }  // namespace pixcake

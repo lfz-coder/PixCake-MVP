@@ -1,5 +1,6 @@
 #include "pixcake/persist/atomic_file.hpp"
 #include "pixcake/persist/file_system.hpp"
+#include "pixcake/support/counting_log_sink.hpp"
 #include "support/fake_file_system.hpp"
 
 #include <algorithm>
@@ -260,7 +261,73 @@ void test_c23_check_durable_revision() {
   EXPECT(pixcake::check_durable_revision(damaged, "dir/doc", 5, revision_of) == pixcake::ResultCode::Ok);
 }
 
+// 写入发生时，日志里已经有几条“开始”记录。
+struct WatchingFileSystem final : pixcake::test::FakeFileSystem {
+  const pixcake::CountingLogSink* log = nullptr;
+  std::uint64_t starts_seen_at_first_write = 99;
+  pixcake::IoResult write_new(const std::string& path, const std::vector<std::uint8_t>& data) override {
+    if (starts_seen_at_first_write == 99) starts_seen_at_first_write = log->count("persist.write.start");
+    return FakeFileSystem::write_new(path, data);
+  }
+};
+
+struct KeepingSink final : pixcake::LogSink {
+  std::vector<pixcake::LogRecord> records;
+  void write(const pixcake::LogRecord& record) override { records.push_back(record); }
+};
+
+void test_o05_write_start_precedes_files_and_finish_follows() {
+  KeepingSink kept;
+  pixcake::CountingLogSink log(&kept);
+  WatchingFileSystem fs;
+  fs.log = &log;
+  fs.files["dir/note"] = kOld;
+  EXPECT(pixcake::atomic_replace(fs, "dir/note", kNew, &log) == pixcake::ResultCode::Ok);
+  EXPECT(fs.starts_seen_at_first_write == 1);
+  EXPECT(log.count("persist.write.start") == 1);
+  EXPECT(log.count("persist.write.finish", pixcake::ResultCode::Ok) == 1);
+  EXPECT(log.count("persist.write.failed") == 0);
+  EXPECT(!kept.records.empty() && kept.records.back().event == "persist.write.finish");
+  EXPECT(!kept.records.empty() && kept.records.back().module == "persist");
+  EXPECT(!kept.records.empty() && kept.records.back().path == "dir/note");
+}
+
+void test_o11_disk_full_is_counted_each_time() {
+  pixcake::CountingLogSink log;
+  pixcake::test::FakeFileSystem fs;
+  fs.files["dir/note"] = kOld;
+  fs.write_error = pixcake::ResultCode::DiskFull;
+  EXPECT(pixcake::atomic_replace(fs, "dir/note", kNew, &log) == pixcake::ResultCode::DiskFull);
+  EXPECT(pixcake::atomic_replace(fs, "dir/note", kNew, &log) == pixcake::ResultCode::DiskFull);
+  EXPECT(log.count("persist.write.start") == 2);
+  EXPECT(log.count("persist.write.failed", pixcake::ResultCode::DiskFull) == 2);
+  EXPECT(log.count("persist.write.finish") == 0);
+}
+
+void test_o10_backup_and_empty_recovery_are_logged() {
+  pixcake::CountingLogSink log;
+  pixcake::test::FakeFileSystem fs;
+  fs.files["dir/note"] = {'B', 'A', 'D'};
+  fs.files["dir/note.bak"] = kOld;
+  EXPECT(pixcake::open_durable_file(fs, "dir/note", accepts_known, &log).used_backup);
+  EXPECT(log.count("persist.recover.backup") == 1);
+  EXPECT(log.count("persist.quarantine") == 1);
+  EXPECT(log.count("persist.recover.empty") == 0);
+
+  pixcake::CountingLogSink empty_log;
+  pixcake::test::FakeFileSystem broken;
+  broken.files["dir/note"] = {'B', 'A', 'D'};
+  broken.files["dir/note.bak"] = {'B', 'A', 'D', '2'};
+  EXPECT(pixcake::open_durable_file(broken, "dir/note", accepts_known, &empty_log).recovered_empty);
+  EXPECT(empty_log.count("persist.recover.empty", pixcake::ResultCode::DocumentCorrupt) == 1);
+  EXPECT(empty_log.count("persist.quarantine") == 2);
+  EXPECT(empty_log.count("persist.recover.backup") == 0);
+}
+
 int main() {
+  test_o05_write_start_precedes_files_and_finish_follows();
+  test_o11_disk_full_is_counted_each_time();
+  test_o10_backup_and_empty_recovery_are_logged();
   test_c10_success_only_after_directory_sync();
   test_b93_disk_full_keeps_formal_file();
   test_b93_permission_denied_keeps_formal_file();

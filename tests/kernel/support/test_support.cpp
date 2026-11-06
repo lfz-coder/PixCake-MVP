@@ -1,5 +1,6 @@
 #include "pixcake/support/checksum.hpp"
 #include "pixcake/support/clock.hpp"
+#include "pixcake/support/counting_log_sink.hpp"
 #include "pixcake/support/fast_export_latch.hpp"
 #include "pixcake/support/log_sink.hpp"
 #include "pixcake/support/result_code.hpp"
@@ -22,9 +23,37 @@ void expect(bool cond, const char* text, int line) {
 
 #define EXPECT(cond) expect(static_cast<bool>(cond), #cond, __LINE__)
 
+struct CollectingSink final : pixcake::LogSink {
+  int received = 0;
+  void write(const pixcake::LogRecord&) override { ++received; }
+};
+
+void test_o06_counting_sink_counts_by_event_and_code() {
+  CollectingSink downstream;
+  pixcake::CountingLogSink counter(&downstream);
+  pixcake::LogRecord full;
+  full.module = "persist";
+  full.event = "persist.write.failed";
+  full.code = pixcake::ResultCode::DiskFull;
+  counter.write(full);
+  counter.write(full);
+  pixcake::LogRecord io = full;
+  io.code = pixcake::ResultCode::IoFailed;
+  counter.write(io);
+  EXPECT(counter.count("persist.write.failed") == 3);
+  EXPECT(counter.count("persist.write.failed", pixcake::ResultCode::DiskFull) == 2);
+  EXPECT(counter.count("persist.write.failed", pixcake::ResultCode::IoFailed) == 1);
+  EXPECT(counter.count("persist.write.finish") == 0);
+  EXPECT(downstream.received == 3);
+  pixcake::CountingLogSink alone;
+  alone.write(full);
+  EXPECT(alone.count("persist.write.failed") == 1);
+}
+
 }  // namespace
 
 int main() {
+  test_o06_counting_sink_counts_by_event_and_code();
   const pixcake::ResultCode codes[] = {
       pixcake::ResultCode::Ok,
       pixcake::ResultCode::UnsupportedFormat,

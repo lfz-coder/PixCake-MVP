@@ -2,6 +2,7 @@
 
 #include "pixcake/persist/file_system.hpp"
 #include "pixcake/support/fast_export_latch.hpp"
+#include "pixcake/support/log_sink.hpp"
 #include "pixcake/support/result_code.hpp"
 
 #include <cstdint>
@@ -81,6 +82,9 @@ class ExportQueue : public FastExportLatch {
   ExportQueue& operator=(ExportQueue&&) noexcept;
 
   void set_sink(ExportEventSink* sink);
+  // 日志可以为空。不为空时：commit_product 碰文件前写 export.commit.start，换名并校验后写
+  // export.commit.finish，失败写 export.commit.failed；任务进入成功、失败、取消时写 export.terminal。
+  void set_log(LogSink* log);
 
   bool enabled() const override;
   ResultCode set_fast_export(bool on);
@@ -106,12 +110,16 @@ class ExportQueue : public FastExportLatch {
   ExportQueue(std::string cache_directory, std::vector<ExportEvent> events);
 
   ResultCode note(ExportEvent event);
+  ResultCode commit_product_steps(const std::string& export_id, const std::vector<std::uint8_t>& bytes,
+                                  FileSystem& files);
+  void log_terminal(const ExportEvent& event) const;
   ResultCode recover_one(const std::string& export_id, FileSystem& files);
   std::string temp_path(const std::string& export_id) const;
 
   std::string cache_directory_;
   std::vector<ExportEvent> events_;
   ExportEventSink* sink_ = nullptr;
+  LogSink* log_ = nullptr;
 };
 
 }  // namespace pixcake

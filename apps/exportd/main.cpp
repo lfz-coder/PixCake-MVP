@@ -1,14 +1,25 @@
 #include "pixcake/exportd/export_service.hpp"
+#include "pixcake/logging/process_log.hpp"
 
 #include <iostream>
-#include <string_view>
 
 int main(int argc, char** argv) {
-  if (argc == 2 && std::string_view(argv[1]) == "--health") {
+  const auto arguments = pixcake::logging::parse_process_arguments(argc, argv);
+  if (!arguments) {
+    std::cerr << "usage: pixcake_app_exportd [--health] [--log-dir <dir>]\n";
+    return 2;
+  }
+  // 需求 §3.8：诊断日志写到应用支持目录的 logs/；内核只拿到 LogSink，不决定位置。
+  pixcake::logging::ProcessLog log(arguments->log_directory, "exportd");
+  if (log.sink() == nullptr) {
+    std::cerr << "pixcake_app_exportd: log directory unavailable (" << pixcake::result_code_label(log.code())
+              << "): " << arguments->log_directory << '\n';
+  }
+  if (arguments->health) {
     pixcake::exportd::ExportService service;
     std::cout << "exportd boundary ready; pending=" << service.pending_count() << '\n';
-    return 0;
+    return log.sink() == nullptr ? 3 : 0;
   }
   std::cerr << "pixcake_app_exportd is a process boundary. Use --health for a self-check.\n";
-  return argc == 1 ? 0 : 2;
+  return log.sink() == nullptr ? 3 : 0;
 }

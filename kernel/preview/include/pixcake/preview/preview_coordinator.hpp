@@ -4,6 +4,7 @@
 #include "pixcake/editdoc/edit_document.hpp"
 #include "pixcake/render/render_description.hpp"
 #include "pixcake/support/fast_export_latch.hpp"
+#include "pixcake/support/log_sink.hpp"
 #include "pixcake/support/result_code.hpp"
 
 #include <cstdint>
@@ -50,11 +51,16 @@ class PreviewCoordinator {
                                 const CapabilityRegistry& registry = CapabilityRegistry::phase_one());
   void clear();
   std::uint64_t latest_sequence() const;
+  // 日志可以为空。不为空时：新值替换了还没取走的旧值写 preview.merged（revision 为旧值的基础修订）；
+  // 每次取走写 preview.taken（带结果码；失败时 message 为阻断诊断）。
+  void set_log(LogSink* log);
 
  private:
+  PreviewTakeResult take_latest_steps(const EditDocument& document, const CapabilityRegistry& registry);
   mutable std::mutex mutex_;
   std::optional<PreviewSnapshot> pending_;
   std::uint64_t next_sequence_ = 1;
+  LogSink* log_ = nullptr;
 };
 
 }  // namespace pixcake::preview

@@ -1,4 +1,6 @@
 #include "pixcake/preview/preview_coordinator.hpp"
+#include "pixcake/support/counting_log_sink.hpp"
+#include "support/fake_file_system.hpp"
 
 #include <cstdio>
 
@@ -73,7 +75,39 @@ void test_rejects_stale_and_fast_export_requests() {
 
 }  // namespace
 
+void test_o06_replaced_preview_values_are_counted() {
+  auto document = *pixcake::EditDocument::create("img-merge");
+  pixcake::CountingLogSink log;
+  pixcake::preview::PreviewCoordinator coordinator;
+  coordinator.set_log(&log);
+  EXPECT(coordinator.submit(document, request(document, "10")) == pixcake::ResultCode::Ok);
+  EXPECT(coordinator.submit(document, request(document, "20")) == pixcake::ResultCode::Ok);
+  EXPECT(coordinator.submit(document, request(document, "30")) == pixcake::ResultCode::Ok);
+  EXPECT(coordinator.take_latest(document).code == pixcake::ResultCode::Ok);
+  EXPECT(log.count("preview.merged") == 2);
+  EXPECT(log.count("preview.taken", pixcake::ResultCode::Ok) == 1);
+  EXPECT(coordinator.submit(document, request(document, "40")) == pixcake::ResultCode::Ok);
+  EXPECT(log.count("preview.merged") == 2);
+}
+
+void test_o06_stale_take_is_logged_with_code() {
+  pixcake::test::FakeFileSystem files;
+  auto document = *pixcake::EditDocument::create("img-stale-take");
+  pixcake::CountingLogSink log;
+  pixcake::preview::PreviewCoordinator coordinator;
+  coordinator.set_log(&log);
+  EXPECT(coordinator.submit(document, request(document, "10")) == pixcake::ResultCode::Ok);
+  EXPECT(document.set_preview("color.global", "temperature", "5") == pixcake::ResultCode::Ok);
+  EXPECT(document.commit_preview(document.revision(), "color.global", "temperature",
+                                 {pixcake::VersionLimit{"color.global", 1}}, files, "/docs/a.pcd") ==
+         pixcake::ResultCode::Ok);
+  EXPECT(coordinator.take_latest(document).code == pixcake::ResultCode::StateConflict);
+  EXPECT(log.count("preview.taken", pixcake::ResultCode::StateConflict) == 1);
+}
+
 int main() {
+  test_o06_replaced_preview_values_are_counted();
+  test_o06_stale_take_is_logged_with_code();
   test_latest_value_wins_without_writing();
   test_rejects_stale_and_fast_export_requests();
   return g_failures == 0 ? 0 : 1;

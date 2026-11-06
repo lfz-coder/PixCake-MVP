@@ -4,6 +4,7 @@
 #include "pixcake/exportq/export_settings.hpp"
 #include "pixcake/ledger/credit_ledger.hpp"
 #include "pixcake/storage/sqlite_export_log.hpp"
+#include "pixcake/support/counting_log_sink.hpp"
 #include "support/fake_file_system.hpp"
 #include "support/temp_dir.hpp"
 
@@ -766,7 +767,76 @@ void test_duplicate_task_cache_key_is_state_conflict_and_one_row_round_trips() {
 
 }  // namespace
 
+struct ExportRecords final : pixcake::LogSink {
+  std::vector<pixcake::LogRecord> records;
+  void write(const pixcake::LogRecord& record) override { records.push_back(record); }
+};
+
+// 临时文件第一次写入时，日志里已经有几条导出提交开始记录。
+struct WatchingExportFiles final : pixcake::test::FakeFileSystem {
+  const pixcake::CountingLogSink* log = nullptr;
+  std::uint64_t starts_at_first_write = 99;
+  pixcake::IoResult write_new(const std::string& path, const std::vector<std::uint8_t>& data) override {
+    if (starts_at_first_write == 99) starts_at_first_write = log->count("export.commit.start");
+    return FakeFileSystem::write_new(path, data);
+  }
+};
+
+void test_o05_export_commit_start_and_finish() {
+  ExportRecords kept;
+  pixcake::CountingLogSink log(&kept);
+  WatchingExportFiles files;
+  files.log = &log;
+  auto queue = pixcake::ExportQueue::open("/cache/exports");
+  queue.set_log(&log);
+  auto job = job_of("exp-1", "orig-1", "/out/a.jpg");
+  reach_render(queue, job);
+  EXPECT(queue.commit_product("exp-1", kBytes, files) == pixcake::ResultCode::Ok);
+  EXPECT(files.starts_at_first_write == 1);
+  EXPECT(log.count("export.commit.finish", pixcake::ResultCode::Ok) == 1);
+  EXPECT(log.count("export.commit.failed") == 0);
+  const pixcake::LogRecord* terminal = nullptr;
+  for (const auto& record : kept.records) {
+    if (record.event == "export.terminal") terminal = &record;
+  }
+  EXPECT(terminal != nullptr && terminal->task_id == "exp-1" && terminal->phase == "成功" &&
+         terminal->module == "exportq" && terminal->path == "/out/a.jpg");
+  EXPECT(queue.commit_product("exp-1", kBytes, files) == pixcake::ResultCode::Ok);
+  EXPECT(log.count("export.commit.start") == 1);
+}
+
+void test_o08_failed_export_records_reason() {
+  ExportRecords kept;
+  pixcake::CountingLogSink log(&kept);
+  pixcake::test::FakeFileSystem files;
+  auto queue = pixcake::ExportQueue::open("/cache/exports");
+  queue.set_log(&log);
+  auto job = job_of("exp-1", "orig-1", "/out/a.jpg");
+  reach_render(queue, job);
+  files.write_error = pixcake::ResultCode::DiskFull;
+  EXPECT(queue.commit_product("exp-1", kBytes, files) == pixcake::ResultCode::DiskFull);
+  EXPECT(log.count("export.commit.failed", pixcake::ResultCode::DiskFull) == 1);
+  EXPECT(log.count("export.commit.finish") == 0);
+  EXPECT(log.count("export.terminal", pixcake::ResultCode::DiskFull) == 1);
+  bool failed_terminal = false;
+  for (const auto& record : kept.records) {
+    failed_terminal = failed_terminal || (record.event == "export.terminal" && record.phase == "失败" &&
+                                          record.task_id == "exp-1" && record.code == pixcake::ResultCode::DiskFull);
+  }
+  EXPECT(failed_terminal);
+  EXPECT(queue.failure_reason("exp-1") == pixcake::ResultCode::DiskFull);
+
+  auto other = job_of("exp-2", "orig-2", "/out/b.jpg");
+  files.write_error = pixcake::ResultCode::Ok;
+  reach_render(queue, other);
+  EXPECT(queue.cancel("exp-2") == pixcake::ResultCode::Ok);
+  EXPECT(!kept.records.empty() && kept.records.back().event == "export.terminal" &&
+         kept.records.back().phase == "取消" && kept.records.back().task_id == "exp-2");
+}
+
 int main() {
+  test_o05_export_commit_start_and_finish();
+  test_o08_failed_export_records_reason();
   test_b32_export_settings_parse_strictly();
   test_b32_enqueue_rejects_duplicate_quality();
   test_b32_enqueue_stores_canonical_settings();

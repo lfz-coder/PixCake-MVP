@@ -220,6 +220,25 @@ ExportQueue& ExportQueue::operator=(ExportQueue&&) noexcept = default;
 
 void ExportQueue::set_sink(ExportEventSink* sink) { sink_ = sink; }
 
+void ExportQueue::set_log(LogSink* log) { log_ = log; }
+
+void ExportQueue::log_terminal(const ExportEvent& event) const {
+  if (log_ == nullptr) return;
+  const char* phase = event.kind == "commit-end" ? "成功" : event.kind == "fail" ? "失败"
+                      : event.kind == "cancel"   ? "取消" : nullptr;
+  if (phase == nullptr) return;
+  LogRecord record;
+  record.module = "exportq";
+  record.event = "export.terminal";
+  record.code = event.failure_code;
+  record.message = result_code_label(event.failure_code);
+  record.task_id = event.export_id;
+  record.path = event.destination_path;
+  record.revision = event.document_revision;
+  record.phase = phase;
+  log_->write(record);
+}
+
 const std::vector<ExportEvent>& ExportQueue::events() const { return events_; }
 
 bool ExportQueue::enabled() const { return fold(events_).fast_export; }
@@ -271,6 +290,7 @@ std::string ExportQueue::temp_path(const std::string& export_id) const {
 ResultCode ExportQueue::note(ExportEvent event) {
   events_.push_back(std::move(event));
   if (sink_ == nullptr) {
+    log_terminal(events_.back());
     return ResultCode::Ok;
   }
   const ResultCode persisted = sink_->persist(events_.back(), cache());
@@ -278,6 +298,7 @@ ResultCode ExportQueue::note(ExportEvent event) {
     events_.pop_back();
     return persisted;
   }
+  log_terminal(events_.back());
   return ResultCode::Ok;
 }
 
@@ -417,6 +438,33 @@ ResultCode ExportQueue::cancel(const std::string& export_id) {
 
 ResultCode ExportQueue::commit_product(const std::string& export_id, const std::vector<std::uint8_t>& bytes,
                                        FileSystem& files) {
+  // 只有真正要写文件的一次（任务在“渲染”）才有开始/完成记录；已成功的重复提交不再记。
+  const bool writes = log_ != nullptr && status(export_id) == "渲染" && !bytes.empty();
+  LogRecord record;
+  record.module = "exportq";
+  record.task_id = export_id;
+  if (writes) {
+    ExportJob job;
+    if (find_job(export_id, job)) {
+      record.path = job.destination_path;
+      record.revision = job.document_revision;
+    }
+    record.event = "export.commit.start";
+    record.message = result_code_label(ResultCode::Ok);
+    log_->write(record);
+  }
+  const ResultCode code = commit_product_steps(export_id, bytes, files);
+  if (writes) {
+    record.event = code == ResultCode::Ok ? "export.commit.finish" : "export.commit.failed";
+    record.code = code;
+    record.message = result_code_label(code);
+    log_->write(record);
+  }
+  return code;
+}
+
+ResultCode ExportQueue::commit_product_steps(const std::string& export_id, const std::vector<std::uint8_t>& bytes,
+                                             FileSystem& files) {
   const auto shot = fold(events_);
   const auto found = shot.jobs.find(export_id);
   if (found == shot.jobs.end() || bytes.empty()) {

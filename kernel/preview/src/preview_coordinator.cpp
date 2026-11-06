@@ -24,17 +24,60 @@ ResultCode PreviewCoordinator::submit(EditDocument& document, const PreviewReque
     return updated;
   }
 
+  std::optional<std::uint64_t> replaced_revision;
   std::lock_guard<std::mutex> lock(mutex_);
+  if (pending_.has_value()) replaced_revision = pending_->request.base_revision;
   PreviewSnapshot pending;
   pending.sequence = next_sequence_++;
   if (next_sequence_ == 0) next_sequence_ = 1;
   pending.request = request;
   pending_ = std::move(pending);
+  if (replaced_revision.has_value() && log_ != nullptr) {
+    LogRecord record;
+    record.module = "preview";
+    record.event = "preview.merged";
+    record.revision = *replaced_revision;
+    record.document_id = request.editing_instance_id;
+    record.capability_id = request.capability_id;
+    record.deduplicated = true;
+    log_->write(record);
+  }
   return ResultCode::Ok;
+}
+
+void PreviewCoordinator::set_log(LogSink* log) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  log_ = log;
 }
 
 PreviewTakeResult PreviewCoordinator::take_latest(const EditDocument& document,
                                                   const CapabilityRegistry& registry) {
+  const PreviewTakeResult result = take_latest_steps(document, registry);
+  LogSink* log = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    log = log_;
+  }
+  if (log != nullptr && (result.code != ResultCode::Ok || result.snapshot.has_value())) {
+    LogRecord record;
+    record.module = "preview";
+    record.event = "preview.taken";
+    record.code = result.code;
+    record.message = result_code_label(result.code);
+    record.revision = document.revision();
+    record.document_id = document.editing_instance_id();
+    if (result.snapshot.has_value()) {
+      for (const auto& diagnostic : result.snapshot->description.diagnostics) {
+        if (diagnostic.blocking) record.message += "；" + diagnostic.reason;
+      }
+    }
+    log->write(record);
+  }
+  return result;
+}
+
+PreviewTakeResult PreviewCoordinator::take_latest_steps(const EditDocument& document,
+                                                        const CapabilityRegistry& registry) {
   PreviewSnapshot pending;
   {
     std::lock_guard<std::mutex> lock(mutex_);

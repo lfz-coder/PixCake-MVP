@@ -62,6 +62,7 @@ target_link_libraries(test_render_description PRIVATE pixcake_render pixcake_war
 add_test(NAME test_render_description COMMAND test_render_description)
 
 add_executable(test_preview_coordinator kernel/preview/test_preview_coordinator.cpp)
+target_include_directories(test_preview_coordinator PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 target_link_libraries(test_preview_coordinator PRIVATE pixcake_preview pixcake_warnings)
 add_test(NAME test_preview_coordinator COMMAND test_preview_coordinator)
 
@@ -209,3 +210,17 @@ add_test(
   NAME capability_ownership
   COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P ${CMAKE_SOURCE_DIR}/tests/arch/check_capability_ownership.cmake
 )
+
+add_executable(test_file_log_sink services/logging/test_file_log_sink.cpp)
+target_include_directories(test_file_log_sink PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+target_link_libraries(test_file_log_sink PRIVATE pixcake_logging pixcake_warnings)
+add_test(NAME test_file_log_sink COMMAND test_file_log_sink)
+
+add_test(NAME test_renderd_health_writes_log
+         COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:pixcake_app_renderd>
+                 -DLOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/process-logs/renderd -DPROCESS=renderd
+                 -P ${CMAKE_SOURCE_DIR}/tests/apps/check_process_log.cmake)
+add_test(NAME test_exportd_health_writes_log
+         COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:pixcake_app_exportd>
+                 -DLOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/process-logs/exportd -DPROCESS=exportd
+                 -P ${CMAKE_SOURCE_DIR}/tests/apps/check_process_log.cmake)

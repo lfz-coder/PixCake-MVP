@@ -12,5 +12,5 @@ target_link_libraries(pixcake_renderd_service PUBLIC
 )
 
 add_executable(pixcake_app_renderd main.cpp)
-target_link_libraries(pixcake_app_renderd PRIVATE pixcake_renderd_service pixcake_warnings)
+target_link_libraries(pixcake_app_renderd PRIVATE pixcake_renderd_service pixcake_logging pixcake_warnings)
 target_compile_features(pixcake_app_renderd PRIVATE cxx_std_17)

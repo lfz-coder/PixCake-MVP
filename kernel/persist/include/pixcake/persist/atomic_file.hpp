@@ -1,6 +1,7 @@
 #pragma once
 
 #include "pixcake/persist/file_system.hpp"
+#include "pixcake/support/log_sink.hpp"
 
 #include <cstdint>
 #include <functional>
@@ -23,11 +24,16 @@ struct DurableLoad {
 
 // 正式文件五步替换：写临时文件、刷文件、正式文件换成备份、临时文件换成正式文件、刷目录。
 // 任何一步失败都留下上一份完整正式文件，禁止先截断正式文件再写入。
+// log 不为空时：碰文件之前写 persist.write.start，五步全部成功后写 persist.write.finish（带耗时），
+// 任一步失败写 persist.write.failed（带结果码，磁盘满为 DiskFull）。
 ResultCode atomic_replace(FileSystem& files, const std::string& formal_path,
-                          const std::vector<std::uint8_t>& bytes);
+                          const std::vector<std::uint8_t>& bytes, LogSink* log = nullptr);
 
+// log 不为空时：坏文件进隔离区写 persist.quarantine，改用备份写 persist.recover.backup，
+// 恢复为空写 persist.recover.empty，读失败写 persist.open.failed。
 DurableLoad open_durable_file(FileSystem& files, const std::string& formal_path,
-                              const std::function<bool(const std::vector<std::uint8_t>&)>& valid);
+                              const std::function<bool(const std::vector<std::uint8_t>&)>& valid,
+                              LogSink* log = nullptr);
 
 
 // 提交前在同一路径的 WriteScope 内调用：重读正式文件的持久修订号，与调用方期望值比较。

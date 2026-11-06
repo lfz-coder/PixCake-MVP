@@ -1,6 +1,7 @@
 #include "pixcake/ledger/credit_ledger.hpp"
 #include "pixcake/ledger/ledger_book.hpp"
 #include "pixcake/storage/sqlite_ledger_log.hpp"
+#include "pixcake/support/counting_log_sink.hpp"
 #include "support/temp_dir.hpp"
 
 #include <sqlite3.h>
@@ -8,6 +9,7 @@
 #include <cstdio>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -379,7 +381,79 @@ void test_master_acceleration_does_not_bypass_subscription() {
 
 }  // namespace
 
+struct LedgerRecords final : pixcake::LogSink {
+  std::vector<pixcake::LogRecord> records;
+  void write(const pixcake::LogRecord& record) override { records.push_back(record); }
+  const pixcake::LogRecord* last(const std::string& event, const std::string& task_id) const {
+    const pixcake::LogRecord* found = nullptr;
+    for (const auto& record : records) {
+      if (record.event == event && record.task_id == task_id) found = &record;
+    }
+    return found;
+  }
+};
+
+void test_o09_cancel_position_and_charge_are_logged() {
+  LedgerRecords kept;
+  pixcake::CountingLogSink log(&kept);
+  auto ledger = charged(version_930(), 100, 1);
+  ledger.set_log(&log);
+  EXPECT(ledger.quote(quote_of("queued", "官方", 30)) == pixcake::ResultCode::Ok);
+  EXPECT(ledger.enqueue("queued") == pixcake::ResultCode::Ok);
+  EXPECT(ledger.cancel("queued") == pixcake::ResultCode::Ok);
+  const auto* queued = kept.last("ledger.task.terminal", "queued");
+  EXPECT(queued != nullptr && queued->phase == "排队中" && !queued->charged && queued->module == "ledger");
+
+  EXPECT(ledger.quote(quote_of("running", "官方", 30)) == pixcake::ResultCode::Ok);
+  EXPECT(ledger.enqueue("running") == pixcake::ResultCode::Ok);
+  EXPECT(ledger.start_generating("running") == pixcake::ResultCode::Ok);
+  EXPECT(ledger.cancel("running") == pixcake::ResultCode::Ok);
+  const auto* running = kept.last("ledger.task.terminal", "running");
+  EXPECT(running != nullptr && running->phase == "生成中" && running->charged);
+  EXPECT(ledger.creative_points() == 70);
+  EXPECT(log.count("ledger.task.terminal") == 2);
+}
+
+void test_o12_replayed_stroke_is_counted_once_charged() {
+  LedgerRecords kept;
+  pixcake::CountingLogSink log(&kept);
+  auto ledger = charged(version_930(), 100, 1);
+  ledger.set_log(&log);
+  EXPECT(ledger.quote(quote_of("task-1", "官方", 30)) == pixcake::ResultCode::Ok);
+  EXPECT(ledger.enqueue("task-1") == pixcake::ResultCode::Ok);
+  EXPECT(ledger.start_generating("task-1") == pixcake::ResultCode::Ok);
+  for (int i = 0; i < 3; ++i) EXPECT(ledger.stroke("task-1", "stroke-1") == pixcake::ResultCode::Ok);
+  EXPECT(ledger.creative_points() == 60);
+  EXPECT(log.count("ledger.dedup") == 2);
+  const auto* dedup = kept.last("ledger.dedup", "task-1");
+  EXPECT(dedup != nullptr && dedup->phase == "stroke" && dedup->deduplicated);
+}
+
+void test_o12_repeated_success_is_deduplicated() {
+  LedgerRecords kept;
+  pixcake::CountingLogSink log(&kept);
+  auto ledger = charged(version_930(), 100, 1);
+  ledger.set_log(&log);
+  EXPECT(ledger.quote(quote_of("task-1", "官方", 30)) == pixcake::ResultCode::Ok);
+  EXPECT(ledger.enqueue("task-1") == pixcake::ResultCode::Ok);
+  EXPECT(ledger.start_generating("task-1") == pixcake::ResultCode::Ok);
+  EXPECT(ledger.start_generating("task-1") == pixcake::ResultCode::Ok);
+  EXPECT(ledger.succeed("task-1") == pixcake::ResultCode::Ok);
+  EXPECT(ledger.succeed("task-1") == pixcake::ResultCode::Ok);
+  EXPECT(ledger.creative_points() == 70);
+  EXPECT(log.count("ledger.dedup") == 2);
+  EXPECT(log.count("ledger.task.terminal") == 1);
+  const auto* success = kept.last("ledger.task.terminal", "task-1");
+  EXPECT(success != nullptr && success->phase == "生成中" && success->message.find("成功") != std::string::npos &&
+         success->charged);
+  const auto* dedup = kept.last("ledger.dedup", "task-1");
+  EXPECT(dedup != nullptr && dedup->phase == "task");
+}
+
 int main() {
+  test_o09_cancel_position_and_charge_are_logged();
+  test_o12_replayed_stroke_is_counted_once_charged();
+  test_o12_repeated_success_is_deduplicated();
   test_balances_stay_separate_and_queue_cancel_is_free();
   test_generating_cancel_and_crash_do_not_refund();
   test_accelerate_is_charged_once_and_strokes_dedupe();

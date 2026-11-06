@@ -1,5 +1,6 @@
 #include "pixcake/editdoc/edit_document.hpp"
 #include "pixcake/support/checksum.hpp"
+#include "pixcake/support/counting_log_sink.hpp"
 #include "support/fake_file_system.hpp"
 
 #include <algorithm>
@@ -366,7 +367,35 @@ void test_q02_mask_scope_is_not_a_document_fragment() {
 
 }  // namespace
 
+struct LastRecordSink final : pixcake::LogSink {
+  std::vector<pixcake::LogRecord> records;
+  void write(const pixcake::LogRecord& record) override { records.push_back(record); }
+};
+
+void test_o07_commit_logs_revision_and_code() {
+  pixcake::test::FakeFileSystem files;
+  LastRecordSink kept;
+  pixcake::CountingLogSink log(&kept);
+  auto document = *pixcake::EditDocument::create("img-1");
+  document.set_log(&log);
+  const auto before = document.revision();
+  EXPECT(commit_value(document, files, "color.global", "contrast", "5") == pixcake::ResultCode::Ok);
+  EXPECT(log.count("editdoc.commit", pixcake::ResultCode::Ok) == 1);
+  EXPECT(log.count("persist.write.finish", pixcake::ResultCode::Ok) == 1);
+  const pixcake::LogRecord* commit = nullptr;
+  for (const auto& record : kept.records) {
+    if (record.event == "editdoc.commit") commit = &record;
+  }
+  EXPECT(commit != nullptr && commit->module == "editdoc" && commit->revision == document.revision() &&
+         commit->document_id == kPath);
+  EXPECT(document.set_preview("color.global", "contrast", "6") == pixcake::ResultCode::Ok);
+  EXPECT(document.commit_preview(before, "color.global", "contrast", color_limits(), files, kPath) ==
+         pixcake::ResultCode::StateConflict);
+  EXPECT(log.count("editdoc.commit", pixcake::ResultCode::StateConflict) == 1);
+}
+
 int main() {
+  test_o07_commit_logs_revision_and_code();
   test_c05_monochrome_profile_blocks_vibrance_edits();
   test_q02_mask_scope_is_not_a_document_fragment();
   test_c23_b73_stale_commit_preview_is_rejected();

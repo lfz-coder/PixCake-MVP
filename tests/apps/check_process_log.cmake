@@ -1,0 +1,37 @@
+# 运行进程入口的健康检查，并检查日志目录里的开始/退出记录（运维清单 O-01、O-10）。
+# 参数：-DEXE=<可执行文件> -DLOG_DIR=<目录> -DPROCESS=<renderd|exportd>
+file(REMOVE_RECURSE "${LOG_DIR}")
+execute_process(COMMAND "${EXE}" --log-dir "${LOG_DIR}" --health
+                RESULT_VARIABLE status OUTPUT_VARIABLE out ERROR_VARIABLE err)
+if(NOT status EQUAL 0)
+  message(FATAL_ERROR "health check exited ${status}: ${out}${err}")
+endif()
+if(NOT out MATCHES "boundary ready")
+  message(FATAL_ERROR "health text changed: ${out}")
+endif()
+set(log "${LOG_DIR}/${PROCESS}.log")
+if(NOT EXISTS "${log}")
+  message(FATAL_ERROR "missing ${log}")
+endif()
+file(STRINGS "${log}" lines ENCODING UTF-8)
+list(LENGTH lines count)
+if(NOT count EQUAL 2)
+  message(FATAL_ERROR "expected 2 lines, got ${count}: ${lines}")
+endif()
+list(GET lines 0 first)
+list(GET lines 1 second)
+if(NOT first MATCHES "^[0-9-]+T[0-9:]+Z\t${PROCESS}\tprocess\tprocess.start\t")
+  message(FATAL_ERROR "bad start line: ${first}")
+endif()
+if(NOT second MATCHES "\tprocess\tprocess.exit\t")
+  message(FATAL_ERROR "bad exit line: ${second}")
+endif()
+
+# 日志目录不可用：健康检查文字照常输出，但返回 3。
+file(WRITE "${LOG_DIR}.blocker" "x")
+execute_process(COMMAND "${EXE}" --health --log-dir "${LOG_DIR}.blocker"
+                RESULT_VARIABLE blocked OUTPUT_VARIABLE blocked_out ERROR_VARIABLE blocked_err)
+file(REMOVE "${LOG_DIR}.blocker")
+if(NOT blocked EQUAL 3 OR NOT blocked_out MATCHES "boundary ready")
+  message(FATAL_ERROR "unavailable log dir: exit ${blocked}, out ${blocked_out}, err ${blocked_err}")
+endif()

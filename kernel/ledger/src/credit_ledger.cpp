@@ -203,6 +203,7 @@ ResultCode CreditLedger::start_generating(const std::string& task_id) {
     return ResultCode::StateConflict;
   }
   if (found->second.status != "排队中") {
+    note_dedup(task_id, "task");
     return ResultCode::Ok;
   }
   const LedgerEvent& quoted = found->second.quote;
@@ -247,6 +248,7 @@ ResultCode CreditLedger::accelerate(const std::string& task_id) {
     return ResultCode::StateConflict;
   }
   if (found->second.accelerated) {
+    note_dedup(task_id, "task");
     return ResultCode::Ok;
   }
   // Qualification is part of the decision to charge for acceleration.  In
@@ -290,7 +292,9 @@ ResultCode CreditLedger::cancel(const std::string& task_id) {
   } else {
     return ResultCode::StateConflict;
   }
+  const bool queued = event.kind == "cancel-queued";
   events_.push_back(std::move(event));
+  note_terminal("ledger.task.terminal", task_id, found->second.status, queued ? "排队取消" : "生成中取消");
   return ResultCode::Ok;
 }
 
@@ -307,6 +311,8 @@ ResultCode CreditLedger::crash(const std::string& task_id) {
   event.kind = "crash";
   event.task_id = task_id;
   events_.push_back(std::move(event));
+  note_terminal("ledger.task.crash", task_id, found->second.status,
+                found->second.status == "生成中" ? "失败" : "排队中");
   return ResultCode::Ok;
 }
 
@@ -317,6 +323,7 @@ ResultCode CreditLedger::succeed(const std::string& task_id) {
     return ResultCode::StateConflict;
   }
   if (found->second.status == "成功") {
+    note_dedup(task_id, "task");
     return ResultCode::Ok;
   }
   if (found->second.status != "生成中") {
@@ -326,6 +333,7 @@ ResultCode CreditLedger::succeed(const std::string& task_id) {
   event.kind = "succeed";
   event.task_id = task_id;
   events_.push_back(std::move(event));
+  note_terminal("ledger.task.terminal", task_id, found->second.status, "成功");
   return ResultCode::Ok;
 }
 
@@ -336,6 +344,7 @@ ResultCode CreditLedger::fail(const std::string& task_id) {
     return ResultCode::StateConflict;
   }
   if (found->second.status == "失败") {
+    note_dedup(task_id, "task");
     return ResultCode::Ok;
   }
   if (found->second.status != "排队中" && found->second.status != "生成中") {
@@ -345,6 +354,7 @@ ResultCode CreditLedger::fail(const std::string& task_id) {
   event.kind = "fail";
   event.task_id = task_id;
   events_.push_back(std::move(event));
+  note_terminal("ledger.task.terminal", task_id, found->second.status, "失败");
   return ResultCode::Ok;
 }
 
@@ -354,6 +364,7 @@ ResultCode CreditLedger::stroke(const std::string& task_id, const std::string& s
   }
   const auto shot = fold(events_);
   if (shot.strokes.count(stroke_id) != 0) {
+    note_dedup(task_id, "stroke");
     return ResultCode::Ok;
   }
   const auto found = shot.tasks.find(task_id);
@@ -385,6 +396,7 @@ ResultCode CreditLedger::settle_exports(const std::vector<ExportProduct>& produc
     const std::string batch_id = product.batch_id.empty() ? product.export_id : product.batch_id;
     if (shot.settled_exports.count(product.export_id) != 0 ||
         (!product.batch_id.empty() && shot.settled_batches.count(batch_id + "\n" + product.original_id) != 0)) {
+      note_dedup(product.export_id, "export");
       continue;
     }
     const std::string group_key = product.batch_id.empty()
@@ -420,6 +432,39 @@ ResultCode CreditLedger::settle_exports(const std::vector<ExportProduct>& produc
   }
   events_.insert(events_.end(), added.begin(), added.end());
   return ResultCode::Ok;
+}
+
+bool CreditLedger::task_charged(const std::string& task_id) const {
+  for (const auto& event : events_) {
+    if (event.task_id == task_id && event.points_delta < 0) return true;
+  }
+  return false;
+}
+
+void CreditLedger::note_terminal(const char* event, const std::string& task_id, const std::string& before,
+                                 const char* after) const {
+  if (log_ == nullptr) return;
+  LogRecord record;
+  record.module = "ledger";
+  record.event = event;
+  record.task_id = task_id;
+  record.phase = before;
+  record.message = after;
+  record.charged = task_charged(task_id);
+  log_->write(record);
+}
+
+void CreditLedger::note_dedup(const std::string& id, const char* kind) const {
+  if (log_ == nullptr) return;
+  LogRecord record;
+  record.module = "ledger";
+  record.event = "ledger.dedup";
+  record.task_id = id;
+  record.phase = kind;
+  record.message = "重复记账已挡住";
+  record.deduplicated = true;
+  record.charged = task_charged(id);
+  log_->write(record);
 }
 
 }  // namespace pixcake
