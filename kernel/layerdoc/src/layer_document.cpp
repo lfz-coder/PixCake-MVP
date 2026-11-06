@@ -38,6 +38,8 @@ constexpr std::uint32_t kLayerNode = 5;
 constexpr std::uint32_t kLayerGeneration = 6;
 constexpr std::uint32_t kLayerCurrent = 7;
 constexpr std::uint32_t kLayerRecovered = 8;
+constexpr std::uint32_t kLayerDocumentRevision = 9;
+constexpr std::uint32_t kLayerFirstUnknown = 10;
 constexpr std::uint32_t kLayerFormat = 1;
 
 void append_u32(std::vector<std::uint8_t>& out, std::uint32_t value) {
@@ -620,6 +622,9 @@ std::vector<std::uint8_t> LayerDocument::encode() const {
   if (recovered_empty_) {
     append_record(body, kLayerRecovered, {1});
   }
+  std::vector<std::uint8_t> document_revision;
+  append_u64(document_revision, document_revision_);
+  append_record(body, kLayerDocumentRevision, document_revision);
   for (const auto& unknown : unknown_) {
     append_record(body, unknown.first, unknown.second);
   }
@@ -735,7 +740,11 @@ std::optional<LayerDocument> LayerDocument::decode(const std::vector<std::uint8_
         return std::nullopt;
       }
       document.recovered_empty_ = true;
-    } else if (type >= 9) {
+    } else if (type == kLayerDocumentRevision) {
+      if (size != 8 || !read_u64(payload, 0, document.document_revision_)) {
+        return std::nullopt;
+      }
+    } else if (type >= kLayerFirstUnknown) {
       document.unknown_.push_back({type, payload});
     } else {
       return std::nullopt;
@@ -790,16 +799,34 @@ LoadResult LayerDocument::load(LayerDocument& destination, FileSystem& files, co
   return result;
 }
 
-ResultCode LayerDocument::save(FileSystem& files, const std::string& path, const FastExportLatch* latch) const {
+std::uint64_t LayerDocument::document_revision() const { return document_revision_; }
+
+ResultCode LayerDocument::save(FileSystem& files, const std::string& path, const FastExportLatch* latch) {
   WriteScope scope(files, path, latch);
   if (!scope) {
     return scope.code();
   }
-  return atomic_replace(files, path, encode());
+  const ResultCode durable = check_durable_revision(
+      files, path, document_revision_, [](const std::vector<std::uint8_t>& bytes) -> std::optional<std::uint64_t> {
+        const auto decoded = decode(bytes);
+        if (!decoded) return std::nullopt;
+        return decoded->document_revision();
+      });
+  if (durable != ResultCode::Ok) {
+    return durable;
+  }
+  LayerDocument next = *this;
+  next.document_revision_ = document_revision_ + 1;
+  const ResultCode saved = atomic_replace(files, path, next.encode());
+  if (saved != ResultCode::Ok) {
+    return saved;
+  }
+  document_revision_ = next.document_revision_;
+  return ResultCode::Ok;
 }
 
 ResultCode LayerDocument::append_unknown_record(std::uint32_t type, std::vector<std::uint8_t> payload) {
-  if (type < 9) {
+  if (type < kLayerFirstUnknown) {
     return ResultCode::StateConflict;
   }
   unknown_.push_back({type, std::move(payload)});

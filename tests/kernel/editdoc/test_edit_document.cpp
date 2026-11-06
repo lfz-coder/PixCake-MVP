@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -245,9 +246,99 @@ void test_fragment_replacement_keeps_other_records() {
   EXPECT(files.files[kPath] == saved);
 }
 
+struct TwoHandles {
+  pixcake::test::FakeFileSystem files;
+  pixcake::EditDocument first;
+  pixcake::EditDocument second;
+};
+
+void open_two_handles(TwoHandles& handles) {
+  auto created = *pixcake::EditDocument::create("img-1");
+  EXPECT(created.write_snapshot(handles.files, kPath) == pixcake::ResultCode::Ok);
+  EXPECT(pixcake::EditDocument::load(handles.first, handles.files, kPath, color_limits()).code ==
+         pixcake::ResultCode::Ok);
+  EXPECT(pixcake::EditDocument::load(handles.second, handles.files, kPath, color_limits()).code ==
+         pixcake::ResultCode::Ok);
+}
+
+void advance_first_handle(TwoHandles& handles) {
+  EXPECT(handles.first.set_preview("color.global", "exposure", "1.00") == pixcake::ResultCode::Ok);
+  EXPECT(handles.first.commit_preview(0, "color.global", "exposure", color_limits(), handles.files, kPath) ==
+         pixcake::ResultCode::Ok);
+}
+
+void expect_disk_has_first_commit(TwoHandles& handles) {
+  pixcake::EditDocument reloaded;
+  EXPECT(pixcake::EditDocument::load(reloaded, handles.files, kPath, color_limits()).code ==
+         pixcake::ResultCode::Ok);
+  EXPECT(reloaded.revision() == 1);
+  EXPECT(reloaded.committed_parameter("color.global", "exposure") == std::optional<std::string>("1.00"));
+  EXPECT(!reloaded.effects_baked());
+}
+
+void test_c23_b73_stale_commit_preview_is_rejected() {
+  TwoHandles handles;
+  open_two_handles(handles);
+  advance_first_handle(handles);
+  EXPECT(handles.second.set_preview("color.global", "exposure", "-1.00") == pixcake::ResultCode::Ok);
+  EXPECT(handles.second.commit_preview(0, "color.global", "exposure", color_limits(), handles.files, kPath) ==
+         pixcake::ResultCode::StateConflict);
+  EXPECT(handles.second.revision() == 0);
+  expect_disk_has_first_commit(handles);
+}
+
+void test_c23_b73_stale_fragment_replacement_is_rejected() {
+  TwoHandles handles;
+  open_two_handles(handles);
+  advance_first_handle(handles);
+  const pixcake::FragmentView replacement{"portrait.blemish", 1, {1, 2, 3}};
+  EXPECT(handles.second.commit_fragment_replacement(0, {}, {replacement}, handles.files, kPath) ==
+         pixcake::ResultCode::StateConflict);
+  EXPECT(handles.second.revision() == 0);
+  expect_disk_has_first_commit(handles);
+}
+
+void test_c23_b73_stale_baked_reset_is_rejected() {
+  TwoHandles handles;
+  open_two_handles(handles);
+  advance_first_handle(handles);
+  EXPECT(handles.second.commit_baked_reset(0, handles.files, kPath) == pixcake::ResultCode::StateConflict);
+  EXPECT(handles.second.revision() == 0);
+  expect_disk_has_first_commit(handles);
+}
+
+void test_c23_stale_write_snapshot_is_rejected() {
+  TwoHandles handles;
+  open_two_handles(handles);
+  advance_first_handle(handles);
+  EXPECT(handles.second.write_snapshot(handles.files, kPath) == pixcake::ResultCode::StateConflict);
+  expect_disk_has_first_commit(handles);
+}
+
+void test_b73_reloaded_handle_commits_next_revision() {
+  TwoHandles handles;
+  open_two_handles(handles);
+  advance_first_handle(handles);
+  EXPECT(pixcake::EditDocument::load(handles.second, handles.files, kPath, color_limits()).code ==
+         pixcake::ResultCode::Ok);
+  EXPECT(handles.second.set_preview("color.global", "exposure", "-1.00") == pixcake::ResultCode::Ok);
+  EXPECT(handles.second.commit_preview(1, "color.global", "exposure", color_limits(), handles.files, kPath) ==
+         pixcake::ResultCode::Ok);
+  pixcake::EditDocument reloaded;
+  EXPECT(pixcake::EditDocument::load(reloaded, handles.files, kPath, color_limits()).code ==
+         pixcake::ResultCode::Ok);
+  EXPECT(reloaded.revision() == 2);
+  EXPECT(reloaded.committed_parameter("color.global", "exposure") == std::optional<std::string>("-1.00"));
+}
+
 }  // namespace
 
 int main() {
+  test_c23_b73_stale_commit_preview_is_rejected();
+  test_c23_b73_stale_fragment_replacement_is_rejected();
+  test_c23_b73_stale_baked_reset_is_rejected();
+  test_c23_stale_write_snapshot_is_rejected();
+  test_b73_reloaded_handle_commits_next_revision();
   test_c24_preview_is_not_written();
   test_b61_commit_keeps_latest_display_value();
   test_c26_other_capability_bytes_stay();

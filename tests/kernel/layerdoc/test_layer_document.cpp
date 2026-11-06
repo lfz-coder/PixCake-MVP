@@ -1,5 +1,6 @@
 #include "pixcake/editdoc/edit_document.hpp"
 #include "pixcake/layerdoc/layer_document.hpp"
+#include "pixcake/support/checksum.hpp"
 #include "support/fake_file_system.hpp"
 
 #include <cstdio>
@@ -169,8 +170,9 @@ void test_place_result_replace_locked_generation_layer() {
 void test_round_trip_keeps_unknown_records_and_rejects_the_retouch_magic() {
   auto document = opened();
   EXPECT(document.add_layer("layer-1", "人物") == pixcake::ResultCode::Ok);
-  EXPECT(document.append_unknown_record(9, {7, 8}) == pixcake::ResultCode::Ok);
+  EXPECT(document.append_unknown_record(10, {7, 8}) == pixcake::ResultCode::Ok);
   EXPECT(document.append_unknown_record(5, {1}) == pixcake::ResultCode::StateConflict);
+  EXPECT(document.append_unknown_record(9, {1}) == pixcake::ResultCode::StateConflict);
   const std::vector<std::uint8_t> bytes = document.encode();
   EXPECT(bytes.size() > 4);
   EXPECT(bytes[0] == 'P' && bytes[1] == 'X' && bytes[2] == 'L' && bytes[3] == 'D');
@@ -291,9 +293,84 @@ void test_remove_clears_generation_cursor_for_deleted_children() {
   EXPECT(replacement.name == "重繪");
 }
 
+std::uint64_t read_le(const std::vector<std::uint8_t>& bytes, std::size_t offset, int width) {
+  std::uint64_t value = 0;
+  for (int index = 0; index < width; ++index) value |= static_cast<std::uint64_t>(bytes[offset + index]) << (index * 8);
+  return value;
+}
+
+void write_le(std::vector<std::uint8_t>& out, std::uint64_t value, int width) {
+  for (int index = 0; index < width; ++index) out.push_back(static_cast<std::uint8_t>(value >> (index * 8)));
+}
+
+// 去掉某一类记录并重算校验和，用来构造旧版本写出的图层文件。
+std::vector<std::uint8_t> without_record(const std::vector<std::uint8_t>& bytes, std::uint32_t removed) {
+  const std::uint64_t body_size = read_le(bytes, 8, 8);
+  std::vector<std::uint8_t> body;
+  std::size_t offset = 16;
+  while (offset < 16 + body_size) {
+    const auto type = static_cast<std::uint32_t>(read_le(bytes, offset, 4));
+    const auto size = static_cast<std::uint32_t>(read_le(bytes, offset + 4, 4));
+    if (type != removed) body.insert(body.end(), bytes.begin() + offset, bytes.begin() + offset + 8 + size);
+    offset += 8u + size;
+  }
+  std::vector<std::uint8_t> out(bytes.begin(), bytes.begin() + 8);
+  write_le(out, body.size(), 8);
+  out.insert(out.end(), body.begin(), body.end());
+  write_le(out, pixcake::checksum_fnv1a64(body.data(), body.size()), 8);
+  return out;
+}
+
+void test_c23_b73_stale_layer_save_is_rejected() {
+  pixcake::test::FakeFileSystem files;
+  auto seed = opened();
+  EXPECT(seed.save(files, "/creative/race.pxlayer") == pixcake::ResultCode::Ok);
+  EXPECT(seed.document_revision() == 1);
+  pixcake::LayerDocument first;
+  pixcake::LayerDocument second;
+  EXPECT(pixcake::LayerDocument::load(first, files, "/creative/race.pxlayer").code == pixcake::ResultCode::Ok);
+  EXPECT(pixcake::LayerDocument::load(second, files, "/creative/race.pxlayer").code == pixcake::ResultCode::Ok);
+  EXPECT(first.set_opacity("background", 40) == pixcake::ResultCode::Ok);
+  EXPECT(first.save(files, "/creative/race.pxlayer") == pixcake::ResultCode::Ok);
+  EXPECT(first.document_revision() == 2);
+  EXPECT(second.set_opacity("background", 90) == pixcake::ResultCode::Ok);
+  EXPECT(second.save(files, "/creative/race.pxlayer") == pixcake::ResultCode::StateConflict);
+  EXPECT(second.document_revision() == 1);
+  pixcake::LayerDocument reloaded;
+  EXPECT(pixcake::LayerDocument::load(reloaded, files, "/creative/race.pxlayer").code == pixcake::ResultCode::Ok);
+  EXPECT(reloaded.document_revision() == 2);
+  pixcake::LayerView background;
+  EXPECT(reloaded.find_layer("background", background));
+  EXPECT(background.opacity == 40);
+}
+
+void test_b116_layer_file_without_revision_record_loads_as_zero() {
+  auto document = opened();
+  const auto legacy = without_record(document.encode(), 9);
+  const auto decoded = pixcake::LayerDocument::decode(legacy);
+  EXPECT(decoded.has_value());
+  EXPECT(decoded.has_value() && decoded->document_revision() == 0);
+  EXPECT(decoded.has_value() && decoded->unknown_records().empty());
+}
+
+void test_b93_failed_layer_save_keeps_revision() {
+  pixcake::test::FakeFileSystem files;
+  auto document = opened();
+  EXPECT(document.save(files, "/creative/full.pxlayer") == pixcake::ResultCode::Ok);
+  files.write_error = pixcake::ResultCode::DiskFull;
+  EXPECT(document.save(files, "/creative/full.pxlayer") == pixcake::ResultCode::DiskFull);
+  EXPECT(document.document_revision() == 1);
+  files.write_error = pixcake::ResultCode::Ok;
+  EXPECT(document.save(files, "/creative/full.pxlayer") == pixcake::ResultCode::Ok);
+  EXPECT(document.document_revision() == 2);
+}
+
 }  // namespace
 
 int main() {
+  test_c23_b73_stale_layer_save_is_rejected();
+  test_b116_layer_file_without_revision_record_loads_as_zero();
+  test_b93_failed_layer_save_keeps_revision();
   test_entry_does_not_copy_sliders_and_keeps_background();
   test_blend_opacity_lock_and_index();
   test_group_mask_selection_and_batch_design();

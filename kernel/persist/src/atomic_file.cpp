@@ -226,4 +226,24 @@ DurableLoad open_durable_file(FileSystem& files, const std::string& formal_path,
   return loaded;
 }
 
+ResultCode check_durable_revision(
+    FileSystem& files, const std::string& formal_path, std::uint64_t expected_revision,
+    const std::function<std::optional<std::uint64_t>(const std::vector<std::uint8_t>&)>& revision_of) {
+  const DurableLoad durable = open_durable_file(
+      files, formal_path, [&revision_of](const std::vector<std::uint8_t>& bytes) {
+        return revision_of(bytes).has_value();
+      });
+  if (durable.absent || durable.recovered_empty) {
+    return ResultCode::Ok;
+  }
+  if (durable.code != ResultCode::Ok) {
+    return durable.code;
+  }
+  const std::optional<std::uint64_t> revision = revision_of(durable.bytes);
+  if (!revision.has_value() || *revision != expected_revision) {
+    return ResultCode::StateConflict;
+  }
+  return ResultCode::Ok;
+}
+
 }  // namespace pixcake

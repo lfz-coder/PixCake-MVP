@@ -311,6 +311,17 @@ std::optional<EditDocument> EditDocument::decode(const std::vector<std::uint8_t>
   return document;
 }
 
+namespace {
+
+// 正式文件里记录的修订号。供提交前在写区内与调用方期望值比较。
+std::optional<std::uint64_t> durable_document_revision(const std::vector<std::uint8_t>& bytes) {
+  const auto decoded = EditDocument::decode(bytes);
+  if (!decoded) return std::nullopt;
+  return decoded->revision();
+}
+
+}  // namespace
+
 LoadResult EditDocument::load(EditDocument& destination, FileSystem& files, const std::string& path,
                               const std::vector<VersionLimit>& limits) {
   LoadResult result;
@@ -383,6 +394,10 @@ ResultCode EditDocument::write_snapshot(FileSystem& files, const std::string& pa
   WriteScope scope(files, path, latch);
   if (!scope) {
     return scope.code();
+  }
+  const ResultCode durable = check_durable_revision(files, path, revision(), durable_document_revision);
+  if (durable != ResultCode::Ok) {
+    return durable;
   }
   return atomic_replace(files, path, encode());
 }
@@ -707,6 +722,10 @@ ResultCode EditDocument::commit_preview(std::uint64_t expected_revision, const s
     inner_records.push_back(std::move(created));
   }
 
+  const ResultCode durable = check_durable_revision(files, path, expected_revision, durable_document_revision);
+  if (durable != ResultCode::Ok) {
+    return durable;
+  }
   EditDocument next = *this;
   next.clear_recovered_flag();
   next.store_fragment(capability_id, version, serialize_tlv(inner_records));
@@ -743,6 +762,10 @@ ResultCode EditDocument::commit_fragment_replacement(
     }
   }
 
+  const ResultCode durable = check_durable_revision(files, path, expected_revision, durable_document_revision);
+  if (durable != ResultCode::Ok) {
+    return durable;
+  }
   EditDocument next = *this;
   next.clear_recovered_flag();
   next.records_.erase(std::remove_if(next.records_.begin(), next.records_.end(),
@@ -801,6 +824,10 @@ ResultCode EditDocument::commit_baked_reset(std::uint64_t expected_revision, Fil
   }
   if (effects_baked() && fragments().empty() && preview_.empty()) {
     return ResultCode::Ok;
+  }
+  const ResultCode durable = check_durable_revision(files, path, expected_revision, durable_document_revision);
+  if (durable != ResultCode::Ok) {
+    return durable;
   }
   EditDocument next = *this;
   next.records_.erase(std::remove_if(next.records_.begin(), next.records_.end(), [&](const Record& record) {

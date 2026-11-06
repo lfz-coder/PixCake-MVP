@@ -1,12 +1,20 @@
 #include "pixcake/command/command_gate.hpp"
 #include "support/fake_file_system.hpp"
+#include "support/temp_dir.hpp"
 
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
+
+#if defined(__APPLE__) || defined(__unix__)
+#include <sys/wait.h>
+#include <unistd.h>
+#define PIXCAKE_HAVE_FORK 1
+#endif
 
 namespace {
 
@@ -210,9 +218,69 @@ void test_b60_two_gates_share_document_submission_state() {
   EXPECT(second_document.revision() == 0);
 }
 
+#if defined(PIXCAKE_HAVE_FORK)
+pixcake::ResultCode submit_exposure(const std::string& path, pixcake::EditDocument& document, const std::string& value) {
+  pixcake::PosixFileSystem files;
+  Latch latch;
+  const std::vector<pixcake::VersionLimit> limits{{"color.global", 1}};
+  pixcake::CommandGate gate(document, latch, files, path, limits, nullptr);
+  pixcake::UserCommand command;
+  command.name = "preview";
+  command.target_id = "img-1";
+  command.revision = document.revision();
+  command.capability_id = "color.global";
+  command.parameter_id = "exposure";
+  command.display_value = value;
+  if (gate.submit(command).code != pixcake::ResultCode::Ok) return pixcake::ResultCode::IoFailed;
+  command.name = "commit";
+  return gate.submit(command).code;
+}
+
+// 两个进程都在修订 0 装载同一份文档；先提交者成功，后提交者必须得到状态冲突。
+void test_b60_c23_cross_process_gate_rejects_stale_commit() {
+  pixcake::test::TempDir dir;
+  const std::string path = dir.path() + "/img-1.pxedit";
+  const std::vector<pixcake::VersionLimit> limits{{"color.global", 1}};
+  pixcake::PosixFileSystem files;
+  EXPECT(pixcake::EditDocument::create("img-1")->write_snapshot(files, path) == pixcake::ResultCode::Ok);
+
+  int loaded_pipe[2];
+  int go_pipe[2];
+  EXPECT(pipe(loaded_pipe) == 0 && pipe(go_pipe) == 0);
+  const pid_t child = fork();
+  if (child == 0) {
+    pixcake::EditDocument stale;
+    pixcake::PosixFileSystem child_files;
+    const bool opened = pixcake::EditDocument::load(stale, child_files, path, limits).code == pixcake::ResultCode::Ok;
+    char byte = 1;
+    (void)!write(loaded_pipe[1], &byte, 1);
+    (void)!read(go_pipe[0], &byte, 1);
+    const bool rejected = submit_exposure(path, stale, "-2.00") == pixcake::ResultCode::StateConflict;
+    _exit(opened && rejected ? 0 : 1);
+  }
+  char byte = 0;
+  EXPECT(read(loaded_pipe[0], &byte, 1) == 1);
+  pixcake::EditDocument current;
+  EXPECT(pixcake::EditDocument::load(current, files, path, limits).code == pixcake::ResultCode::Ok);
+  EXPECT(submit_exposure(path, current, "2.00") == pixcake::ResultCode::Ok);
+  EXPECT(write(go_pipe[1], &byte, 1) == 1);
+  int status = 0;
+  EXPECT(waitpid(child, &status, 0) == child);
+  EXPECT(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+
+  pixcake::EditDocument reloaded;
+  EXPECT(pixcake::EditDocument::load(reloaded, files, path, limits).code == pixcake::ResultCode::Ok);
+  EXPECT(reloaded.revision() == 1);
+  EXPECT(reloaded.committed_parameter("color.global", "exposure") == std::optional<std::string>("2.00"));
+}
+#endif
+
 }  // namespace
 
 int main() {
+#if defined(PIXCAKE_HAVE_FORK)
+  test_b60_c23_cross_process_gate_rejects_stale_commit();
+#endif
   test_b01_missing_fields_do_not_write();
   test_c24_previews_do_not_write_or_bump_revision();
   test_b61_commit_writes_latest_preview();

@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -27,5 +28,13 @@ ResultCode atomic_replace(FileSystem& files, const std::string& formal_path,
 
 DurableLoad open_durable_file(FileSystem& files, const std::string& formal_path,
                               const std::function<bool(const std::vector<std::uint8_t>&)>& valid);
+
+
+// 提交前在同一路径的 WriteScope 内调用：重读正式文件的持久修订号，与调用方期望值比较。
+// 正式文件不存在或已无可恢复内容时返回成功（没有可比较的持久版本）；读失败原样返回；
+// 修订号不一致返回状态冲突，调用方不得写盘。
+ResultCode check_durable_revision(
+    FileSystem& files, const std::string& formal_path, std::uint64_t expected_revision,
+    const std::function<std::optional<std::uint64_t>(const std::vector<std::uint8_t>&)>& revision_of);
 
 }  // namespace pixcake

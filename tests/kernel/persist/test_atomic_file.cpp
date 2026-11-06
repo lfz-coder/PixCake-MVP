@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <unistd.h>
 #include <vector>
@@ -231,6 +232,34 @@ void test_posix_write_lock_is_exclusive_across_file_system_instances() {
 
 }  // namespace
 
+std::vector<std::uint8_t> revision_bytes(std::uint64_t revision) {
+  std::vector<std::uint8_t> bytes;
+  for (int shift = 0; shift < 64; shift += 8) bytes.push_back(static_cast<std::uint8_t>(revision >> shift));
+  return bytes;
+}
+
+std::optional<std::uint64_t> revision_of(const std::vector<std::uint8_t>& bytes) {
+  if (bytes.size() != 8) return std::nullopt;
+  std::uint64_t revision = 0;
+  for (int index = 0; index < 8; ++index) revision |= static_cast<std::uint64_t>(bytes[index]) << (index * 8);
+  return revision;
+}
+
+void test_c23_check_durable_revision() {
+  pixcake::test::FakeFileSystem fs;
+  EXPECT(pixcake::check_durable_revision(fs, "dir/doc", 0, revision_of) == pixcake::ResultCode::Ok);
+  fs.files["dir/doc"] = revision_bytes(3);
+  EXPECT(pixcake::check_durable_revision(fs, "dir/doc", 3, revision_of) == pixcake::ResultCode::Ok);
+  EXPECT(pixcake::check_durable_revision(fs, "dir/doc", 2, revision_of) == pixcake::ResultCode::StateConflict);
+  EXPECT(fs.files["dir/doc"] == revision_bytes(3));
+
+  pixcake::test::FakeFileSystem damaged;
+  damaged.files["dir/doc"] = {'B', 'A', 'D'};
+  damaged.files["dir/doc.bak"] = revision_bytes(5);
+  EXPECT(pixcake::check_durable_revision(damaged, "dir/doc", 3, revision_of) == pixcake::ResultCode::StateConflict);
+  EXPECT(pixcake::check_durable_revision(damaged, "dir/doc", 5, revision_of) == pixcake::ResultCode::Ok);
+}
+
 int main() {
   test_c10_success_only_after_directory_sync();
   test_b93_disk_full_keeps_formal_file();
@@ -245,5 +274,6 @@ int main() {
   test_absent_file_is_not_success_or_corruption();
   test_posix_truncated_formal_reopens_backup();
   test_posix_write_lock_is_exclusive_across_file_system_instances();
+  test_c23_check_durable_revision();
   return g_failures == 0 ? 0 : 1;
 }

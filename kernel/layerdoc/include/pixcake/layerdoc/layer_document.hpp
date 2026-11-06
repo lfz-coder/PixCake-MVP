@@ -77,8 +77,11 @@ class LayerDocument {
   static std::optional<LayerDocument> decode(const std::vector<std::uint8_t>& bytes);
   static LoadResult load(LayerDocument& destination, FileSystem& files, const std::string& path);
   std::vector<std::uint8_t> encode() const;
-  ResultCode save(FileSystem& files, const std::string& path,
-                  const FastExportLatch* latch = nullptr) const;
+  // 图层文件自己的修订号。旧文件没有这条记录时为 0。
+  std::uint64_t document_revision() const;
+  // 写区内先核对正式文件的修订号与本句柄一致，再写出修订号加一的内容；
+  // 不一致返回状态冲突且不写盘。写盘失败时修订号不变。
+  ResultCode save(FileSystem& files, const std::string& path, const FastExportLatch* latch = nullptr);
   ResultCode append_unknown_record(std::uint32_t type, std::vector<std::uint8_t> payload);
   std::vector<std::pair<std::uint32_t, std::vector<std::uint8_t>>> unknown_records() const;
 
@@ -92,6 +95,7 @@ class LayerDocument {
 
   std::string source_image_id_;
   std::uint64_t source_revision_ = 0;
+  std::uint64_t document_revision_ = 0;
   bool batch_design_ = false;
   bool recovered_empty_ = false;
   SelectionView selection_;
