@@ -1,3 +1,4 @@
+#include "pixcake/capability/fragment_codec.hpp"
 #include "pixcake/editdoc/edit_document.hpp"
 #include "pixcake/support/checksum.hpp"
 #include "pixcake/support/counting_log_sink.hpp"
@@ -427,7 +428,49 @@ void test_q02_grain_sub_parameter_preview_needs_nonzero_amount() {
   EXPECT(document.set_preview("detail", "grain_size", "20") == pixcake::ResultCode::Ok);
 }
 
+// C-33：切换精准控制只改哪一边参与，不删另一边；精准控制下提交已写回的参数改的是写回值。
+std::vector<std::uint8_t> match_records(const std::string& user, const std::string& written) {
+  return pixcake::encode_fragment_records(
+      {{pixcake::kFragmentParameterRecord, pixcake::encode_parameter_record("exposure", user)},
+       {pixcake::kFragmentMatchWritebackRecord, pixcake::encode_parameter_record("exposure", written)}});
+}
+
+std::vector<pixcake::VersionLimit> match_limits() {
+  return {pixcake::VersionLimit{"color.global", 1}, pixcake::VersionLimit{"color.match", 1}};
+}
+
+void test_c33_toggle_keeps_both_sides() {
+  pixcake::test::FakeFileSystem files;
+  auto document = *pixcake::EditDocument::create("img-1");
+  document.store_fragment("color.global", 1, match_records("0.50", "1.00"));
+  EXPECT(document.effective_parameter("color.global", "exposure") == std::optional<std::string>("0.50"));
+  EXPECT(document.set_preview("color.match", "precise", "on") == pixcake::ResultCode::Ok);
+  EXPECT(document.commit_preview(0, "color.match", "precise", match_limits(), files, kPath) == pixcake::ResultCode::Ok);
+  EXPECT(document.effective_parameter("color.global", "exposure") == std::optional<std::string>("1.00"));
+  EXPECT(document.set_preview("color.match", "precise", "off") == pixcake::ResultCode::Ok);
+  EXPECT(document.commit_preview(1, "color.match", "precise", match_limits(), files, kPath) == pixcake::ResultCode::Ok);
+  EXPECT(document.effective_parameter("color.global", "exposure") == std::optional<std::string>("0.50"));
+  EXPECT(document.committed_parameter("color.global", "exposure") == std::optional<std::string>("0.50"));
+  EXPECT(document.match_written_parameter("color.global", "exposure") == std::optional<std::string>("1.00"));
+}
+
+void test_c33_edit_under_precise_updates_written_back_value() {
+  pixcake::test::FakeFileSystem files;
+  auto document = *pixcake::EditDocument::create("img-1");
+  document.store_fragment("color.global", 1, match_records("0.50", "1.00"));
+  document.store_fragment("color.match", 1,
+                          pixcake::encode_fragment_records(
+                              {{pixcake::kFragmentParameterRecord, pixcake::encode_parameter_record("precise", "on")}}));
+  EXPECT(document.set_preview("color.global", "exposure", "1.20") == pixcake::ResultCode::Ok);
+  EXPECT(document.commit_preview(0, "color.global", "exposure", match_limits(), files, kPath) == pixcake::ResultCode::Ok);
+  EXPECT(document.effective_parameter("color.global", "exposure") == std::optional<std::string>("1.20"));
+  EXPECT(document.match_written_parameter("color.global", "exposure") == std::optional<std::string>("1.20"));
+  EXPECT(document.committed_parameter("color.global", "exposure") == std::optional<std::string>("0.50"));
+}
+
 int main() {
+  test_c33_toggle_keeps_both_sides();
+  test_c33_edit_under_precise_updates_written_back_value();
   test_q02_grain_sub_parameter_preview_needs_nonzero_amount();
   test_b52_commit_slower_than_two_seconds_is_not_success();
   test_o07_commit_logs_revision_and_code();

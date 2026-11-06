@@ -87,6 +87,15 @@ std::vector<std::string> phase_one_pipeline_order(std::string* error = nullptr);
 std::optional<std::uint32_t> phase_one_capability_order(std::string_view capability_id);
 const std::vector<ParameterMode>& phase_one_parameter_modes();
 const ParameterMode* find_parameter_mode(std::string_view capability_id, std::string_view parameter_id);
+
+// 追色精准控制的开关与写回目标（契约 C-33，架构“写回的存放与切换”）。
+struct MatchWritebackSwitch {
+  std::string capability_id;
+  std::string parameter_id;
+  std::string on_value;
+  std::vector<std::string> targets;
+};
+const MatchWritebackSwitch& match_writeback_switch();
 // 参数当前是否不可编辑。committed_value 返回条件参数的已提交值；没有时按该参数的 default_choice 判断。
 std::optional<std::string> parameter_disabled_reason(
     std::string_view capability_id, std::string_view parameter_id,

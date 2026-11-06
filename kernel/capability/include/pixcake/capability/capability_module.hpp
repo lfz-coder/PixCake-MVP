@@ -129,7 +129,8 @@ struct DisplayScale {
   bool center_line = false;
 };
 
-enum class WriteMode { Replace, Overlay };
+// MatchWriteback：只替换给出参数的追色写回记录（类型 2），用户参数记录与未知记录原样保留。
+enum class WriteMode { Replace, Overlay, MatchWriteback };
 
 struct ExtractResult {
   ResultCode code = ResultCode::Ok;

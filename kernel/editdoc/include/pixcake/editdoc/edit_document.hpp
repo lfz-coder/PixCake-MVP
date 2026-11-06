@@ -89,6 +89,12 @@ class EditDocument {
                                          const std::string& path);
   std::optional<FragmentView> fragment(const std::string& capability_id) const;
   std::vector<FragmentView> fragments() const;
+  // 追色写回记录（类型 2）里的值；没有时为空。
+  std::optional<std::string> match_written_parameter(const std::string& capability_id,
+                                                     const std::string& parameter_id) const;
+  // 参与编译与显示的值：预览值；精准控制打开且有追色写回时取写回值；否则取用户参数记录（契约 C-33）。
+  std::optional<std::string> effective_parameter(const std::string& capability_id,
+                                                 const std::string& parameter_id) const;
   std::optional<std::string> committed_parameter(const std::string& capability_id,
                                                  const std::string& parameter_id) const;
 

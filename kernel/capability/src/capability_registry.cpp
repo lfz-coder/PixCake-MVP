@@ -81,6 +81,10 @@ std::vector<ParameterMode> make_parameter_modes() {
   };
   // AI 追色程度按需求原文 0..200（2026-11-05 用户裁定恢复，追色没有实测）。
   add_unconfirmed_step("color.match", "amount", 0.0, 200.0, 100.0, "color", "pixcake.color.match", "amount", 10);
+  // 精准控制开关（需求第 395–397 行，架构“写回的存放与切换”），默认关。
+  ParameterMode& precise = add("color.match", "precise", 0.0, 0.0, 1.0, 0.0, "color", "pixcake.color.match", "precise", 10);
+  precise.choices = {"off", "on"};
+  precise.default_choice = "off";
   // AI 色彩风格程度按官方 0..100（2026-11-05 用户裁定，test 版实测上限 100）；默认值按需求 100。
   add_unconfirmed_step("color.style", "amount", 0.0, 100.0, 100.0, "color", "pixcake.color.style", "amount", 11);
   add_color("color.global", "pixcake.color.global", 20);
@@ -353,6 +357,11 @@ std::optional<std::uint32_t> phase_one_capability_order(std::string_view capabil
 const std::vector<ParameterMode>& phase_one_parameter_modes() {
   static const std::vector<ParameterMode> modes = make_parameter_modes();
   return modes;
+}
+
+const MatchWritebackSwitch& match_writeback_switch() {
+  static const MatchWritebackSwitch kSwitch{"color.match", "precise", "on", {"color.global", "color.local"}};
+  return kSwitch;
 }
 
 const ParameterMode* find_parameter_mode(std::string_view capability_id, std::string_view parameter_id) {

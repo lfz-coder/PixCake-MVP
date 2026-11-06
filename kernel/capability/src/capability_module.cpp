@@ -106,6 +106,21 @@ FragmentResult ParameterBackedModule::write_back(const std::optional<FragmentByt
       return result;
     }
     for (auto& record : records) {
+      if (mode == WriteMode::MatchWriteback) {
+        if (record.type == kFragmentMatchWritebackRecord) {
+          std::string id;
+          std::string display;
+          if (!decode_parameter_record(record.payload, id, display)) {
+            result.code = ResultCode::DocumentCorrupt;
+            return result;
+          }
+          const bool given = std::any_of(values.begin(), values.end(),
+                                         [&id](const ParameterValue& value) { return value.parameter_id == id; });
+          if (given) continue;
+        }
+        kept.push_back(std::move(record));
+        continue;
+      }
       if (record.type == kFragmentParameterRecord) {
         std::string id;
         std::string display;
@@ -122,8 +137,10 @@ FragmentResult ParameterBackedModule::write_back(const std::optional<FragmentByt
       kept.push_back(std::move(record));
     }
   }
+  const std::uint32_t written_type =
+      mode == WriteMode::MatchWriteback ? kFragmentMatchWritebackRecord : kFragmentParameterRecord;
   for (const auto& value : values) {
-    kept.push_back({kFragmentParameterRecord, encode_parameter_record(value.parameter_id, value.display_value)});
+    kept.push_back({written_type, encode_parameter_record(value.parameter_id, value.display_value)});
   }
   result.fragment.inner = encode_fragment_records(kept);
   return result;

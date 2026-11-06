@@ -432,7 +432,27 @@ void test_c23_b73_failed_document_commands_do_not_notify() {
   EXPECT(!log.records.empty() && log.records.back().code == pixcake::ResultCode::DiskFull);
 }
 
+// C-33：追色结果只经命令入口写进 color.global、color.local（架构“写回的存放与切换”）。
+void test_c33_match_result_written_through_the_gate() {
+  pixcake::test::FakeFileSystem files;
+  Latch latch;
+  auto document = *pixcake::EditDocument::create("img-1");
+  pixcake::CommandGate gate(document, latch, files, "docs/c33-match.pxedit", limits(), nullptr);
+  RecordingListener listener;
+  gate.set_commit_listener(&listener);
+  EXPECT(gate.write_match_result({{"color.style", {{"amount", "50"}}}}, 0).code == pixcake::ResultCode::StateConflict);
+  EXPECT(gate.write_match_result({{"color.global", {{"exposure", "0.03"}}}}, 0).code ==
+         pixcake::ResultCode::StateConflict);
+  EXPECT(document.revision() == 0 && listener.commits.empty());
+  const auto result = gate.write_match_result({{"color.global", {{"exposure", "1.00"}}}}, 0);
+  EXPECT(result.code == pixcake::ResultCode::Ok && result.revision == 1);
+  EXPECT(document.match_written_parameter("color.global", "exposure") == std::optional<std::string>("1.00"));
+  EXPECT(!document.committed_parameter("color.global", "exposure").has_value());
+  EXPECT(listener.commits.size() == 1);
+}
+
 int main() {
+  test_c33_match_result_written_through_the_gate();
   test_c23_preset_apply_goes_through_the_gate();
   test_c23_paste_goes_through_the_gate();
   test_c23_sync_goes_through_each_target_gate();

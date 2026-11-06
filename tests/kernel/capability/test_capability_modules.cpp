@@ -397,7 +397,61 @@ void test_c31_transfer_rejects_corrupt_or_invalid_source() {
 
 }  // namespace
 
+// C-33：精准控制是 color.match 的枚举参数，默认关；打开时程度通道不画，值保留。
+void test_c33_precise_on_suspends_amount_channel() {
+  const auto* precise = pixcake::find_parameter_mode("color.match", "precise");
+  EXPECT(precise != nullptr && precise->choices == std::vector<std::string>({"off", "on"}) &&
+         precise->default_choice == "off");
+  const auto* module = pixcake::find_capability_module("color.match");
+  EXPECT(module != nullptr);
+  if (module == nullptr) return;
+  MapReader reader;
+  reader.values[{"color.match", "amount"}] = "120";
+  reader.values[{"color.match", "precise"}] = "off";
+  auto off = module->compile(reader);
+  EXPECT(off.steps.size() == 1 && off.steps[0].values.size() == 1 && off.steps[0].values[0].parameter_id == "amount");
+  reader.values[{"color.match", "precise"}] = "on";
+  auto on = module->compile(reader);
+  EXPECT(on.steps.empty());
+  EXPECT(module->parameter_disabled_reason(reader, "amount").empty());
+}
+
+// 追色写回只写记录类型 2，用户参数记录和未知记录保留；值按色彩能力的参数模式校验。
+void test_c33_match_writeback_keeps_user_records() {
+  const auto* module = pixcake::find_capability_module("color.global");
+  EXPECT(module != nullptr);
+  if (module == nullptr) return;
+  pixcake::FragmentBytes existing;
+  existing.inner = pixcake::encode_fragment_records(
+      {{pixcake::kFragmentParameterRecord, pixcake::encode_parameter_record("exposure", "0.50")},
+       {pixcake::kFragmentMatchWritebackRecord, pixcake::encode_parameter_record("exposure", "2.00")},
+       {77, {9}}});
+  const auto written = module->write_back(existing, {{"exposure", "1.00"}}, pixcake::WriteMode::MatchWriteback);
+  EXPECT(written.code == pixcake::ResultCode::Ok);
+  std::vector<pixcake::FragmentRecord> records;
+  EXPECT(pixcake::decode_fragment_records(written.fragment.inner, records));
+  int user = 0, match = 0, unknown = 0;
+  for (const auto& record : records) {
+    std::string id, value;
+    if (record.type == pixcake::kFragmentParameterRecord && pixcake::decode_parameter_record(record.payload, id, value)) {
+      ++user;
+      EXPECT(value == "0.50");
+    } else if (record.type == pixcake::kFragmentMatchWritebackRecord &&
+               pixcake::decode_parameter_record(record.payload, id, value)) {
+      ++match;
+      EXPECT(value == "1.00");
+    } else if (record.type == 77) {
+      ++unknown;
+    }
+  }
+  EXPECT(user == 1 && match == 1 && unknown == 1);
+  EXPECT(module->write_back(existing, {{"exposure", "0.03"}}, pixcake::WriteMode::MatchWriteback).code ==
+         pixcake::ResultCode::StateConflict);
+}
+
 int main() {
+  test_c33_precise_on_suspends_amount_channel();
+  test_c33_match_writeback_keeps_user_records();
   test_c31_transfer_replaces_with_validated_source();
   test_c31_transfer_copies_too_new_source();
   test_c31_transfer_leaves_too_new_target();

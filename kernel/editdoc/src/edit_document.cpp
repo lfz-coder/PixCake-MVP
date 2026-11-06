@@ -281,13 +281,9 @@ bool parameter_disabled_in(const EditDocument& document, const std::string& capa
                            const std::string& parameter_id) {
   return parameter_disabled_reason(capability_id, parameter_id,
                                    [&document](std::string_view capability, std::string_view parameter) {
-                                     // 与能力模块编译时一样：预览值优先，其次已提交值。
-                                     auto value = document.preview(std::string(capability), std::string(parameter));
-                                     if (!value) {
-                                       value = document.committed_parameter(std::string(capability),
-                                                                            std::string(parameter));
-                                     }
-                                     return value;
+                                     // 与能力模块编译时一样取有效值（预览、追色写回、已提交）。
+                                     return document.effective_parameter(std::string(capability),
+                                                                         std::string(parameter));
                                    })
       .has_value();
 }
@@ -577,9 +573,10 @@ std::vector<FragmentView> EditDocument::fragments() const {
   return views;
 }
 
-std::optional<std::string> EditDocument::committed_parameter(const std::string& capability_id,
-                                                            const std::string& parameter_id) const {
-  const auto found = fragment(capability_id);
+namespace {
+
+std::optional<std::string> record_value(const std::optional<FragmentView>& found, std::uint32_t type,
+                                        const std::string& parameter_id) {
   if (!found) {
     return std::nullopt;
   }
@@ -588,7 +585,7 @@ std::optional<std::string> EditDocument::committed_parameter(const std::string& 
     return std::nullopt;
   }
   for (const auto& record : records) {
-    if (record.type != kInnerParameter) {
+    if (record.type != type) {
       continue;
     }
     std::string id;
@@ -601,6 +598,30 @@ std::optional<std::string> EditDocument::committed_parameter(const std::string& 
     }
   }
   return std::nullopt;
+}
+
+}  // namespace
+
+std::optional<std::string> EditDocument::committed_parameter(const std::string& capability_id,
+                                                            const std::string& parameter_id) const {
+  return record_value(fragment(capability_id), kInnerParameter, parameter_id);
+}
+
+std::optional<std::string> EditDocument::match_written_parameter(const std::string& capability_id,
+                                                                 const std::string& parameter_id) const {
+  return record_value(fragment(capability_id), kFragmentMatchWritebackRecord, parameter_id);
+}
+
+std::optional<std::string> EditDocument::effective_parameter(const std::string& capability_id,
+                                                             const std::string& parameter_id) const {
+  if (auto value = preview(capability_id, parameter_id)) return value;
+  const auto& toggle = match_writeback_switch();
+  auto on = preview(toggle.capability_id, toggle.parameter_id);
+  if (!on) on = committed_parameter(toggle.capability_id, toggle.parameter_id);
+  if (on == std::optional<std::string>(toggle.on_value)) {
+    if (auto written = match_written_parameter(capability_id, parameter_id)) return written;
+  }
+  return committed_parameter(capability_id, parameter_id);
 }
 
 ResultCode EditDocument::set_preview(const std::string& capability_id, const std::string& parameter_id,
@@ -681,9 +702,16 @@ ResultCode EditDocument::commit_preview_steps(std::uint64_t expected_revision, c
   if (existing && !existing->inner.empty() && !parse_tlv(existing->inner, inner_records)) {
     return ResultCode::StateConflict;
   }
+  // 精准控制打开、且这个参数有追色写回时，用户看到并改的是写回值（契约 C-33）。
+  const auto& toggle = match_writeback_switch();
+  const bool precise_on = committed_parameter(toggle.capability_id, toggle.parameter_id) ==
+                          std::optional<std::string>(toggle.on_value);
+  const std::uint32_t target_type =
+      precise_on && match_written_parameter(capability_id, parameter_id) ? kFragmentMatchWritebackRecord
+                                                                          : kInnerParameter;
   bool updated = false;
   for (auto& record : inner_records) {
-    if (record.type != kInnerParameter) {
+    if (record.type != target_type) {
       continue;
     }
     std::string id;
@@ -699,7 +727,7 @@ ResultCode EditDocument::commit_preview_steps(std::uint64_t expected_revision, c
   }
   if (!updated) {
     InnerRecord created;
-    created.type = kInnerParameter;
+    created.type = target_type;
     created.payload = serialize_parameter(parameter_id, *preview_value);
     inner_records.push_back(std::move(created));
   }

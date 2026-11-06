@@ -1,5 +1,9 @@
 #include "pixcake/command/command_gate.hpp"
 
+#include "pixcake/capabilities/module_set.hpp"
+
+#include <algorithm>
+
 #include <unordered_map>
 
 namespace {
@@ -181,6 +185,31 @@ CommandResult CommandGate::sync_from(const EditDocument& source, const std::stri
 CommandResult CommandGate::apply_layers(const LayerDocument& layers, std::uint64_t revision) {
   return run_document_command("apply_layers", revision, [&] {
     return apply_to_original(layers, document_, revision, files_, path_);
+  });
+}
+
+CommandResult CommandGate::write_match_result(const std::vector<MatchWrite>& writes, std::uint64_t revision) {
+  return run_document_command("match.writeback", revision, [&] {
+    const auto& targets = match_writeback_switch().targets;
+    std::vector<FragmentView> replacements;
+    std::vector<std::string> removals;
+    for (const auto& write : writes) {
+      if (std::find(targets.begin(), targets.end(), write.capability_id) == targets.end()) {
+        return ResultCode::StateConflict;
+      }
+      const CapabilityModule* module = find_capability_module(write.capability_id);
+      if (module == nullptr) return ResultCode::StateConflict;
+      std::optional<FragmentBytes> existing;
+      if (const auto found = document_.fragment(write.capability_id)) {
+        existing = FragmentBytes{found->version, found->inner};
+        removals.push_back(write.capability_id);
+      }
+      const FragmentResult written = module->write_back(existing, write.values, WriteMode::MatchWriteback);
+      if (written.code != ResultCode::Ok) return written.code;
+      replacements.push_back(FragmentView{write.capability_id, written.fragment.version, written.fragment.inner});
+    }
+    if (replacements.empty()) return ResultCode::StateConflict;
+    return document_.commit_fragment_replacement(revision, removals, replacements, files_, path_);
   });
 }
 

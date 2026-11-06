@@ -1,5 +1,6 @@
 #pragma once
 
+#include "pixcake/capability/capability_module.hpp"
 #include "pixcake/capability/capability_registry.hpp"
 #include "pixcake/editdoc/edit_document.hpp"
 #include "pixcake/layerdoc/layer_document.hpp"
@@ -27,6 +28,12 @@ struct UserCommand {
   std::string capability_id;
   std::string parameter_id;
   std::string display_value;
+};
+
+// 追色精准控制的写回指令：写进哪个色彩能力、写哪些值（契约 C-33，架构“写回的存放与切换”）。
+struct MatchWrite {
+  std::string capability_id;
+  std::vector<ParameterValue> values;
 };
 
 struct CommandResult {
@@ -61,6 +68,8 @@ class CommandGate {
                           const std::vector<std::string>& checked_ids, std::uint64_t revision);
   // 创意“应用至精修”：把图层结果烘焙回精修文档。
   CommandResult apply_layers(const LayerDocument& layers, std::uint64_t revision);
+  // 追色精准控制写回：只写 match_writeback_switch().targets 里的能力，经该能力模块按参数模式校验。
+  CommandResult write_match_result(const std::vector<MatchWrite>& writes, std::uint64_t revision);
   // 可以为空。不由命令入口持有。
   void set_commit_listener(CommitListener* listener) { listener_ = listener; }
 

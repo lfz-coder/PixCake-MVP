@@ -23,9 +23,7 @@ class DocumentReader final : public ParameterReader {
   explicit DocumentReader(const EditDocument& document) : document_(document) {}
 
   std::optional<std::string> value(const std::string& capability_id, const std::string& parameter_id) const override {
-    auto found = document_.preview(capability_id, parameter_id);
-    if (!found) found = document_.committed_parameter(capability_id, parameter_id);
-    return found;
+    return document_.effective_parameter(capability_id, parameter_id);
   }
 
   std::uint32_t fragment_version(const std::string& capability_id) const override {

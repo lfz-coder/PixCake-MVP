@@ -1,4 +1,5 @@
 #include "pixcake/render/render_description.hpp"
+#include "pixcake/capability/fragment_codec.hpp"
 #include "pixcake/layerdoc/layer_document.hpp"
 #include "support/fake_file_system.hpp"
 
@@ -167,6 +168,55 @@ void test_q06_layer_mask_feather_above_100_renders() {
   EXPECT(found);
 }
 
+// C-33：同一帧追色只有一个来源（架构“写回的存放与切换”）。
+std::vector<std::uint8_t> records(std::vector<std::pair<std::uint32_t, std::pair<std::string, std::string>>> items) {
+  std::vector<pixcake::FragmentRecord> out;
+  for (const auto& item : items) {
+    out.push_back({item.first, pixcake::encode_parameter_record(item.second.first, item.second.second)});
+  }
+  return pixcake::encode_fragment_records(out);
+}
+
+pixcake::EditDocument matched_document(const std::string& precise) {
+  auto document = *pixcake::EditDocument::create("img-match");
+  document.store_fragment("color.global", 1,
+                          records({{pixcake::kFragmentParameterRecord, {"exposure", "0.50"}},
+                                   {pixcake::kFragmentMatchWritebackRecord, {"exposure", "1.00"}}}));
+  document.store_fragment("color.match", 1,
+                          records({{pixcake::kFragmentParameterRecord, {"amount", "100"}},
+                                   {pixcake::kFragmentParameterRecord, {"precise", precise}}}));
+  return document;
+}
+
+const pixcake::render::RenderOperation* operation_for(const pixcake::render::RenderDescription& description,
+                                                     const std::string& capability_id) {
+  for (const auto& operation : description.operations) {
+    if (operation.capability_id == capability_id) return &operation;
+  }
+  return nullptr;
+}
+
+std::string value_of(const pixcake::render::RenderOperation* operation, const std::string& parameter_id) {
+  if (operation == nullptr) return "";
+  for (const auto& value : operation->values) {
+    if (value.parameter_id == parameter_id) return value.display_value;
+  }
+  return "";
+}
+
+void test_c33_precise_off_draws_amount_and_user_values() {
+  const auto result = pixcake::render::compile(matched_document("off"));
+  EXPECT(value_of(operation_for(result.description, "color.global"), "exposure") == "0.50");
+  EXPECT(value_of(operation_for(result.description, "color.match"), "amount") == "100");
+  EXPECT(value_of(operation_for(result.description, "color.match"), "precise").empty());
+}
+
+void test_c33_precise_on_draws_written_back_values_only() {
+  const auto result = pixcake::render::compile(matched_document("on"));
+  EXPECT(value_of(operation_for(result.description, "color.global"), "exposure") == "1.00");
+  EXPECT(operation_for(result.description, "color.match") == nullptr);
+}
+
 }  // namespace
 
 // C-31：渲染把编译交给能力模块。黑白配置文件预览时鲜艳度不画（color.global 模块），
@@ -195,6 +245,8 @@ void test_c31_render_compiles_through_capability_modules() {
 }
 
 int main() {
+  test_c33_precise_off_draws_amount_and_user_values();
+  test_c33_precise_on_draws_written_back_values_only();
   test_q06_layer_mask_feather_above_100_renders();
   test_c31_render_compiles_through_capability_modules();
   test_compile_is_read_only_and_uses_stable_fields();
