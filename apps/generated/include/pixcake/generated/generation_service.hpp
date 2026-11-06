@@ -12,7 +12,9 @@
 namespace pixcake::generated {
 
 // 远端生成工具的回答。生成进程按工具编号调用远程服务（架构第 505 行）；超时、断网由调用方映射为
-// NetworkFailed，没有像素或尺寸为 0 视为坏返回。
+// NetworkFailed。像素是 RGBA8（每像素 4 字节）；没有像素、尺寸为 0、字节数与宽高不符都视为坏返回。
+inline constexpr std::uint64_t kBytesPerPixel = 4;
+
 struct RemoteReply {
   ResultCode code = ResultCode::Ok;
   std::vector<std::uint8_t> image;

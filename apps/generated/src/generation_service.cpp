@@ -44,7 +44,11 @@ ipc::GenerationProgressMessage GenerationService::run(const generate::Generation
     return progress;
   }
   if (reply.code != ResultCode::Ok) return failed(reply.code, true);
-  if (reply.image.empty() || reply.width == 0 || reply.height == 0) return failed(ResultCode::ImageCorrupt, true);
+  // 远端给的是 RGBA8 像素：字节数必须正好是 宽 × 高 × 4（测试清单 T-03“尺寸不符”）。
+  const std::uint64_t expected_bytes = static_cast<std::uint64_t>(reply.width) * reply.height * kBytesPerPixel;
+  if (reply.image.empty() || reply.width == 0 || reply.height == 0 || reply.image.size() != expected_bytes) {
+    return failed(ResultCode::ImageCorrupt, true);
+  }
 
   generate::GenerationResult result;
   result.task_id = task.task_id;

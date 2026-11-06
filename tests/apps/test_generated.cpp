@@ -9,8 +9,10 @@
 #include <string>
 
 #if defined(__APPLE__) || defined(__unix__)
+#include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
+extern char** environ;
 #define PIXCAKE_HAVE_FORK 1
 #endif
 
@@ -131,6 +133,65 @@ void test_t03_remote_timeout_fails_with_network_failed() {
   EXPECT(ledger.book->ledger().task_status("task-slow") == "失败");
 }
 
+// T-03（测试清单第 67 行“尺寸不符”）：远端回答的像素字节数与宽高不符（RGBA8，每像素 4 字节）时判坏返回；
+// 不写结果文件，已有的好结果不动。
+void test_t03_remote_size_mismatch_fails_and_keeps_previous_result() {
+  Book ledger;
+  ledger.queued("task-good", 10);
+  ledger.queued("task-odd", 10);
+  pixcake::test::FakeFileSystem files;
+  FakeTool tool;
+  tool.reply = image_reply();
+  pixcake::generated::GenerationService service(*ledger.book, files, kCreative, tool);
+  const auto good = service.run(task_of("task-good"));
+  EXPECT(good.state == pixcake::generate::TaskState::Succeeded);
+  const auto good_bytes = files.files[good.pixel_file];
+  tool.reply.height = 3;  // 1×3 需要 12 字节，只给了 8
+  const auto odd = service.run(task_of("task-odd"));
+  EXPECT(odd.state == pixcake::generate::TaskState::Failed && odd.code == pixcake::ResultCode::ImageCorrupt);
+  EXPECT(ledger.book->ledger().task_status("task-odd") == "失败");
+  EXPECT(files.files.size() == 1 && files.files[good.pixel_file] == good_bytes);
+}
+
+// T-03：写结果时磁盘满。返回磁盘已满，任务失败，不留半个文件，已有的好结果不动。
+void test_t03_disk_full_while_writing_result_keeps_previous_result() {
+  Book ledger;
+  ledger.queued("task-good", 10);
+  ledger.queued("task-full", 10);
+  pixcake::test::FakeFileSystem files;
+  FakeTool tool;
+  tool.reply = image_reply();
+  pixcake::generated::GenerationService service(*ledger.book, files, kCreative, tool);
+  const auto good = service.run(task_of("task-good"));
+  const auto good_bytes = files.files[good.pixel_file];
+  files.write_error = pixcake::ResultCode::DiskFull;
+  const auto full = service.run(task_of("task-full"));
+  EXPECT(full.state == pixcake::generate::TaskState::Failed && full.code == pixcake::ResultCode::DiskFull);
+  EXPECT(ledger.book->ledger().task_status("task-full") == "失败");
+  EXPECT(files.files.size() == 1 && files.files[good.pixel_file] == good_bytes);
+}
+
+// T-03：重复提交同一任务。第二次状态冲突，远端只调一次、只扣一次点、结果文件不被覆盖。
+void test_t03_duplicate_submit_runs_once() {
+  Book ledger;
+  ledger.queued("task-twice", 30);
+  pixcake::test::FakeFileSystem files;
+  FakeTool tool;
+  tool.reply = image_reply();
+  pixcake::generated::GenerationService service(*ledger.book, files, kCreative, tool);
+  const auto first = service.run(task_of("task-twice"));
+  const auto points = ledger.book->ledger().creative_points();
+  const auto bytes = files.files[first.pixel_file];
+  tool.reply.image = {9, 9, 9, 9, 9, 9, 9, 9};
+  const auto second = service.run(task_of("task-twice"));
+  EXPECT(first.state == pixcake::generate::TaskState::Succeeded);
+  EXPECT(second.state == pixcake::generate::TaskState::Failed && second.code == pixcake::ResultCode::StateConflict);
+  EXPECT(tool.calls == 1);
+  EXPECT(ledger.book->ledger().creative_points() == points);
+  EXPECT(files.files[first.pixel_file] == bytes);
+  EXPECT(ledger.book->ledger().task_status("task-twice") == "成功");
+}
+
 // 架构第 511 行：远程晚到的结果若任务已取消，不留像素文件、不追加就绪事件、不第二次记账；点不退。
 void test_c30_cancel_while_running_discards_late_result() {
   Book ledger;
@@ -161,23 +222,36 @@ void test_c30_task_not_queued_is_not_sent() {
 }
 
 #if defined(PIXCAKE_HAVE_FORK)
+const char* g_self = nullptr;
+
+// 子进程角色：在全新进程里打开同一份账本，开始生成，等远端时崩溃（退出码 9）。
+// 不用 fork 后直接跑：macOS 上 fork 而不 exec 的子进程里再用系统库（SQLite 等）不安全，会随机段错误。
+int crash_child(const std::string& directory) {
+  std::unique_ptr<pixcake::SqliteLedgerLog> log;
+  std::unique_ptr<pixcake::LedgerBook> book;
+  if (pixcake::SqliteLedgerLog::open(directory + "/ledger.db", log) != pixcake::ResultCode::Ok ||
+      pixcake::LedgerBook::open(pixcake::FreeQueuePolicy{}, *log, book) != pixcake::ResultCode::Ok) {
+    return 2;
+  }
+  pixcake::test::FakeFileSystem files;
+  FakeTool tool;
+  tool.during = [] { _exit(9); };
+  pixcake::generated::GenerationService service(*book, files, kCreative, tool);
+  service.run(task_of("task-crash"));
+  return 0;
+}
+
 // 架构第 307 行：生成进程崩溃视同生成中取消，不退点，任务失败。主进程看到进程退出后折叠。
 void test_c30_t03_generated_crash_fails_without_refund() {
   Book ledger;
   ledger.queued("task-crash", 30);
   ledger.book.reset();
   ledger.log.reset();
-  const pid_t child = fork();
-  if (child == 0) {
-    Book* reopened = &ledger;
-    reopened->open();
-    pixcake::test::FakeFileSystem files;
-    FakeTool tool;
-    tool.during = [] { _exit(9); };
-    pixcake::generated::GenerationService service(*reopened->book, files, kCreative, tool);
-    service.run(task_of("task-crash"));
-    _exit(0);
-  }
+  const std::string directory = ledger.dir.path();
+  char* const args[] = {const_cast<char*>(g_self), const_cast<char*>("--crash-child"),
+                        const_cast<char*>(directory.c_str()), nullptr};
+  pid_t child = 0;
+  EXPECT(posix_spawn(&child, g_self, nullptr, nullptr, args, environ) == 0);
   int status = 0;
   EXPECT(waitpid(child, &status, 0) == child);
   EXPECT(WIFEXITED(status) && WEXITSTATUS(status) == 9);
@@ -193,7 +267,17 @@ void test_c30_t03_generated_crash_fails_without_refund() {
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+#if defined(PIXCAKE_HAVE_FORK)
+  g_self = argv[0];
+  if (argc == 3 && std::string(argv[1]) == "--crash-child") return crash_child(argv[2]);
+#else
+  (void)argc;
+  (void)argv;
+#endif
+  test_t03_remote_size_mismatch_fails_and_keeps_previous_result();
+  test_t03_disk_full_while_writing_result_keeps_previous_result();
+  test_t03_duplicate_submit_runs_once();
   test_c04_result_written_before_ready();
   test_t03_remote_bad_return_fails_without_file();
   test_t03_remote_timeout_fails_with_network_failed();
