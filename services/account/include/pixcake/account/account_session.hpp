@@ -1,6 +1,7 @@
 #pragma once
 
 #include "pixcake/support/result_code.hpp"
+#include "pixcake/support/session_state.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -47,7 +48,8 @@ const char* login_method_name(LoginMethod method);
 const char* session_state_name(SessionState state);
 ResultCode validate(const AccountSnapshot& snapshot);
 
-class AccountSession {
+// 账号会话就是内核看到的登录态（安全清单 S-25）。
+class AccountSession final : public ::pixcake::SessionState {
  public:
   AccountSession();
 
@@ -59,13 +61,13 @@ class AccountSession {
   ResultCode add_favorite_color(std::string color_id);
   ResultCode remove_favorite_color(const std::string& color_id);
 
-  SessionState state() const;
-  bool signed_in() const;
+  account::SessionState state() const;
+  bool signed_in() const override;
   const AccountSnapshot& snapshot() const;
 
  private:
   AccountSnapshot snapshot_;
-  SessionState state_ = SessionState::SignedOut;
+  account::SessionState state_ = account::SessionState::SignedOut;
 };
 
 }  // namespace pixcake::account

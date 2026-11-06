@@ -83,7 +83,15 @@ void test_layout_limits_and_logout_scope() {
 
 }  // namespace
 
+// S-25：账号会话就是内核看到的登录态（kernel/support 的 SessionState）。
+void test_s25_account_session_is_the_session_state() {
+  pixcake::account::AccountSession session;
+  const pixcake::SessionState& state = session;
+  EXPECT(!state.signed_in());
+}
+
 int main() {
+  test_s25_account_session_is_the_session_state();
   test_session_and_two_balances();
   test_bad_cache_keeps_current_session();
   test_layout_limits_and_logout_scope();

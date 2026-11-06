@@ -10,6 +10,7 @@
 #include "pixcake/support/fast_export_latch.hpp"
 #include "pixcake/support/log_sink.hpp"
 #include "pixcake/support/result_code.hpp"
+#include "pixcake/support/session_state.hpp"
 #include "pixcake/sync/sync_batch.hpp"
 
 #include <cstdint>
@@ -72,6 +73,8 @@ class CommandGate {
   CommandResult write_match_result(const std::vector<MatchWrite>& writes, std::uint64_t revision);
   // 可以为空。不由命令入口持有。
   void set_commit_listener(CommitListener* listener) { listener_ = listener; }
+  // 登录态（安全清单 S-25）。主进程总是设置；设置后未登录的命令一律返回状态冲突，不碰文档。
+  void set_session(const SessionState* session) { session_ = session; }
 
  private:
   CommandResult run_document_command(const char* name, std::uint64_t revision,
@@ -85,6 +88,7 @@ class CommandGate {
   LogSink* log_ = nullptr;
   std::string pipeline_error_;
   CommitListener* listener_ = nullptr;
+  const SessionState* session_ = nullptr;
 };
 
 }  // namespace pixcake

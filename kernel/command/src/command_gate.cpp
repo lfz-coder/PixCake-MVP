@@ -59,6 +59,9 @@ CommandResult CommandGate::submit(const UserCommand& command) {
       !command.revision) {
     return finish(ResultCode::StateConflict);
   }
+  if (session_ != nullptr && !session_->signed_in()) {
+    return finish(ResultCode::StateConflict);
+  }
   // C-35：管线有环或重复时拒绝开始编辑。不碰文档、不写盘，留一条能筛出来的记录（O-04）。
   if (!pipeline_error_.empty()) {
     LogRecord record;
@@ -130,6 +133,7 @@ CommandResult CommandGate::run_document_command(const char* name, std::uint64_t 
     write_log(log_, record);
     return result;
   };
+  if (session_ != nullptr && !session_->signed_in()) return finish(ResultCode::StateConflict);
   if (!pipeline_error_.empty()) return finish(ResultCode::StateConflict);
   if (latch_.enabled()) return finish(ResultCode::FastExportBusy);
   WriteScope scope(files_, path_, &latch_);

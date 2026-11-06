@@ -43,9 +43,9 @@ const char* login_method_name(LoginMethod method) {
 
 const char* session_state_name(SessionState state) {
   switch (state) {
-    case SessionState::SignedOut:
+    case account::SessionState::SignedOut:
       return "未登录";
-    case SessionState::SignedIn:
+    case account::SessionState::SignedIn:
       return "已登录";
   }
   return "";
@@ -90,14 +90,14 @@ AccountSession::AccountSession() = default;
 CacheLoadResult AccountSession::load(std::optional<AccountSnapshot> cached) {
   if (!cached.has_value()) {
     snapshot_ = {};
-    state_ = SessionState::SignedOut;
+    state_ = account::SessionState::SignedOut;
     return {ResultCode::Ok, false};
   }
   if (validate(*cached) != ResultCode::Ok) {
-    return {ResultCode::StateConflict, state_ == SessionState::SignedIn};
+    return {ResultCode::StateConflict, state_ == account::SessionState::SignedIn};
   }
   snapshot_ = std::move(*cached);
-  state_ = SessionState::SignedIn;
+  state_ = account::SessionState::SignedIn;
   return {ResultCode::Ok, true};
 }
 
@@ -106,21 +106,21 @@ ResultCode AccountSession::sign_in(AccountSnapshot snapshot) {
     return ResultCode::StateConflict;
   }
   snapshot_ = std::move(snapshot);
-  state_ = SessionState::SignedIn;
+  state_ = account::SessionState::SignedIn;
   return ResultCode::Ok;
 }
 
 ResultCode AccountSession::sign_out() {
-  if (state_ != SessionState::SignedIn) {
+  if (state_ != account::SessionState::SignedIn) {
     return ResultCode::StateConflict;
   }
   snapshot_ = {};
-  state_ = SessionState::SignedOut;
+  state_ = account::SessionState::SignedOut;
   return ResultCode::Ok;
 }
 
 ResultCode AccountSession::add_toolbar_capability(std::string capability_id) {
-  if (state_ != SessionState::SignedIn || !valid_identifier(capability_id) ||
+  if (state_ != account::SessionState::SignedIn || !valid_identifier(capability_id) ||
       duplicate(snapshot_.toolbar_capability_ids, capability_id) ||
       snapshot_.toolbar_capability_ids.size() >= kToolbarLimit) {
     return ResultCode::StateConflict;
@@ -130,7 +130,7 @@ ResultCode AccountSession::add_toolbar_capability(std::string capability_id) {
 }
 
 ResultCode AccountSession::remove_toolbar_capability(const std::string& capability_id) {
-  if (state_ != SessionState::SignedIn) {
+  if (state_ != account::SessionState::SignedIn) {
     return ResultCode::StateConflict;
   }
   const auto found = std::find(snapshot_.toolbar_capability_ids.begin(), snapshot_.toolbar_capability_ids.end(),
@@ -143,7 +143,7 @@ ResultCode AccountSession::remove_toolbar_capability(const std::string& capabili
 }
 
 ResultCode AccountSession::add_favorite_color(std::string color_id) {
-  if (state_ != SessionState::SignedIn || !valid_identifier(color_id) ||
+  if (state_ != account::SessionState::SignedIn || !valid_identifier(color_id) ||
       duplicate(snapshot_.favorite_colors, color_id) || snapshot_.favorite_colors.size() >= kFavoriteColorLimit) {
     return ResultCode::StateConflict;
   }
@@ -152,7 +152,7 @@ ResultCode AccountSession::add_favorite_color(std::string color_id) {
 }
 
 ResultCode AccountSession::remove_favorite_color(const std::string& color_id) {
-  if (state_ != SessionState::SignedIn) {
+  if (state_ != account::SessionState::SignedIn) {
     return ResultCode::StateConflict;
   }
   const auto found = std::find(snapshot_.favorite_colors.begin(), snapshot_.favorite_colors.end(), color_id);
@@ -163,9 +163,9 @@ ResultCode AccountSession::remove_favorite_color(const std::string& color_id) {
   return ResultCode::Ok;
 }
 
-SessionState AccountSession::state() const { return state_; }
+account::SessionState AccountSession::state() const { return state_; }
 
-bool AccountSession::signed_in() const { return state_ == SessionState::SignedIn; }
+bool AccountSession::signed_in() const { return state_ == account::SessionState::SignedIn; }
 
 const AccountSnapshot& AccountSession::snapshot() const { return snapshot_; }
 

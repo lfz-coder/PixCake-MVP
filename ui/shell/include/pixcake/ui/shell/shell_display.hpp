@@ -1,6 +1,7 @@
 #pragma once
 
 #include "pixcake/support/result_code.hpp"
+#include "pixcake/support/session_state.hpp"
 
 #include <string>
 #include <vector>
@@ -38,8 +39,10 @@ struct WindowContract {
 class ShellDisplay {
  public:
   static ShellDisplay logged_out();
-  static ShellDisplay home();
-  static ShellDisplay entered_project();
+  // 按会话决定首屏（需求第 79、103 行）：未登录是登录页，本机已有会话直接进主页。
+  static ShellDisplay for_session(const SessionState& session);
+  // 只给开发构建的 --page 预览用（PIXCAKE_DEV_PAGES，门禁规则 18）；发布构建由会话决定页面（S-25）。
+  static ShellDisplay dev_preview(Page page);
 
   Page page() const;
   bool in_project() const;
@@ -49,6 +52,9 @@ class ShellDisplay {
   // Navigation is the only state-changing operation in this batch.
   ResultCode open_project();
   ResultCode navigate(Page target);
+  // 登录成功后换成主页；会话没有登录时拒绝。退出登录回到登录页，不保留项目（需求第 226 行）。
+  ResultCode signed_in(const SessionState& session);
+  ResultCode signed_out();
 
  private:
   Page page_ = Page::Login;

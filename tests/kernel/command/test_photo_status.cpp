@@ -1,4 +1,6 @@
+#include "pixcake/command/business_commands.hpp"
 #include "pixcake/command/command_gate.hpp"
+#include "pixcake/storage/sqlite_ledger_log.hpp"
 #include "pixcake/command/photo_status.hpp"
 #include "pixcake/project/project_library.hpp"
 #include "pixcake/project/source_deleter.hpp"
@@ -160,7 +162,64 @@ void test_p12_exported_products_mark_photos_exported() {
 
 }  // namespace
 
+// S-25：未登录时项目、导出、生成、扣点、扣张都不可用；由命令入口按会话检查，不只靠界面隐藏。
+struct Session final : pixcake::SessionState {
+  bool on = false;
+  bool signed_in() const override { return on; }
+};
+
+void test_s25_signed_out_document_commands_rejected() {
+  auto document = *pixcake::EditDocument::create("img-1");
+  pixcake::test::FakeFileSystem doc_files;
+  Off latch;
+  Session session;
+  pixcake::CommandGate gate(document, latch, doc_files, "docs/s25.pxedit", kLimits, nullptr);
+  gate.set_session(&session);
+  EXPECT(gate.submit(command("preview", 0, "1.00")).code == pixcake::ResultCode::StateConflict);
+  EXPECT(gate.paste(pixcake::EffectClipboard{}, 0).code == pixcake::ResultCode::StateConflict);
+  EXPECT(document.revision() == 0 && !document.preview("color.global", "exposure").has_value());
+  EXPECT(doc_files.files.empty());
+  session.on = true;
+  EXPECT(gate.submit(command("preview", 0, "1.00")).code == pixcake::ResultCode::Ok);
+  EXPECT(gate.submit(command("commit", 0, "1.00")).code == pixcake::ResultCode::Ok);
+}
+
+void test_s25_signed_out_business_commands_rejected() {
+  World world;
+  Session session;
+  pixcake::BusinessCommands commands(session);
+  EXPECT(commands.create_project(*world.library, "新项目", pixcake::kOriginLocal, false).code ==
+         pixcake::ResultCode::StateConflict);
+  pixcake::image_import::ImportCoordinator importer(*world.library, world.files);
+  const auto imported = commands.import_into(importer, 1, {{"/p/c.png", "c.png", {1}}});
+  EXPECT(imported.overall_code == pixcake::ResultCode::StateConflict && imported.accepted_count == 0);
+
+  std::unique_ptr<pixcake::SqliteLedgerLog> ledger_log;
+  EXPECT(pixcake::SqliteLedgerLog::open(world.dir.path() + "/ledger.db", ledger_log) == pixcake::ResultCode::Ok);
+  std::unique_ptr<pixcake::LedgerBook> book;
+  EXPECT(pixcake::LedgerBook::open(pixcake::FreeQueuePolicy{}, *ledger_log, book) == pixcake::ResultCode::Ok);
+  EXPECT(book->credit_points(80) == pixcake::ResultCode::Ok);
+  pixcake::TaskQuote quote;
+  quote.task_id = "task-1";
+  quote.tool_id = "creative.remove_passerby";
+  quote.origin = "官方";
+  quote.quoted_points = 30;
+  EXPECT(commands.quote_generation(*book, quote) == pixcake::ResultCode::StateConflict);
+  EXPECT(book->ledger().task_status("task-1").empty());
+  EXPECT(commands.settle_exports(*book, {}) == pixcake::ResultCode::StateConflict);
+  auto queue = pixcake::ExportQueue::open(world.dir.path() + "/exports");
+  EXPECT(commands.enqueue_export(queue, pixcake::ExportJob{}) == pixcake::ResultCode::StateConflict);
+
+  session.on = true;
+  EXPECT(commands.create_project(*world.library, "新项目", pixcake::kOriginLocal, false).code == pixcake::ResultCode::Ok);
+  EXPECT(commands.quote_generation(*book, quote) == pixcake::ResultCode::Ok);
+  EXPECT(commands.enqueue_generation(*book, "task-1") == pixcake::ResultCode::Ok);
+  EXPECT(book->ledger().task_status("task-1") == "排队中");
+}
+
 int main() {
+  test_s25_signed_out_document_commands_rejected();
+  test_s25_signed_out_business_commands_rejected();
   test_p12_commit_marks_photo_edited();
   test_p12_failed_commit_does_not_mark_edited();
   test_p12_status_write_failure_is_logged();

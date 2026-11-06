@@ -38,19 +38,37 @@ ShellDisplay ShellDisplay::logged_out() {
   return display;
 }
 
-ShellDisplay ShellDisplay::home() {
+ShellDisplay ShellDisplay::for_session(const SessionState& session) {
   ShellDisplay display;
-  display.page_ = Page::Home;
+  if (session.signed_in()) display.page_ = Page::Home;
   display.rebuild_regions();
   return display;
 }
 
-ShellDisplay ShellDisplay::entered_project() {
+ShellDisplay ShellDisplay::dev_preview(Page page) {
   ShellDisplay display;
-  display.page_ = Page::Refine;
-  display.in_project_ = true;
+  display.page_ = page == Page::Login ? Page::Login : Page::Home;
+  if (page != Page::Login && page != Page::Home) {
+    display.page_ = page;
+    display.in_project_ = true;
+  }
   display.rebuild_regions();
   return display;
+}
+
+ResultCode ShellDisplay::signed_in(const SessionState& session) {
+  if (page_ != Page::Login || !session.signed_in()) return ResultCode::StateConflict;
+  page_ = Page::Home;
+  in_project_ = false;
+  rebuild_regions();
+  return ResultCode::Ok;
+}
+
+ResultCode ShellDisplay::signed_out() {
+  page_ = Page::Login;
+  in_project_ = false;
+  rebuild_regions();
+  return ResultCode::Ok;
 }
 
 Page ShellDisplay::page() const { return page_; }

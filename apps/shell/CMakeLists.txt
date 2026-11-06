@@ -39,16 +39,37 @@ target_link_libraries(pixcake_app_shell PRIVATE
   Qt6::Svg
 )
 target_compile_features(pixcake_app_shell PRIVATE cxx_std_17)
+target_link_libraries(pixcake_app_shell PRIVATE pixcake_account)
+
+# --page 直达业务页只在开发构建里有（安全清单 S-25）。发布构建由账号会话决定首屏。
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+  set(PIXCAKE_DEV_PAGES_DEFAULT OFF)
+else()
+  set(PIXCAKE_DEV_PAGES_DEFAULT ON)
+endif()
+option(PIXCAKE_DEV_PAGES "Allow --page previews of business pages (development builds only)" ${PIXCAKE_DEV_PAGES_DEFAULT})
+if(PIXCAKE_DEV_PAGES)
+  target_compile_definitions(pixcake_app_shell PRIVATE PIXCAKE_DEV_PAGES=1)
+endif()
 
 add_test(NAME test_shell_app_help COMMAND pixcake_app_shell --help)
 set_tests_properties(test_shell_app_help PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
-foreach(shell_page IN ITEMS login home library refine creative)
-  add_test(NAME test_shell_app_smoke_${shell_page}
-           COMMAND pixcake_app_shell --page ${shell_page} --smoke)
-  set_tests_properties(test_shell_app_smoke_${shell_page}
-                       PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-endforeach()
+if(PIXCAKE_DEV_PAGES)
+  foreach(shell_page IN ITEMS login home library refine creative)
+    add_test(NAME test_shell_app_smoke_${shell_page}
+             COMMAND pixcake_app_shell --page ${shell_page} --smoke)
+    set_tests_properties(test_shell_app_smoke_${shell_page}
+                         PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+  endforeach()
+else()
+  add_test(NAME test_shell_app_smoke_login COMMAND pixcake_app_shell --smoke)
+  set_tests_properties(test_shell_app_smoke_login PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+  # S-25：发布构建不认 --page，进不了业务页。
+  add_test(NAME test_s25_release_shell_rejects_page COMMAND pixcake_app_shell --page home --smoke)
+  set_tests_properties(test_s25_release_shell_rejects_page
+                       PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" WILL_FAIL TRUE)
+endif()
 
 add_test(NAME test_shell_single_instance_T21
          COMMAND ${CMAKE_SOURCE_DIR}/tests/apps/check_shell_single_instance.sh $<TARGET_FILE:pixcake_app_shell>)
