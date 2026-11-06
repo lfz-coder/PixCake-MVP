@@ -37,7 +37,7 @@
 - [x] **Task 2**：模块声明与图片条件。测试 `test_c31_only_body_reports_broken_image`、`test_c31_portrait_needs_detection`、`test_c31_sky_needs_assets`、`test_c31_solid_background_parameter_has_no_effect_on_other_backgrounds`、`test_c31_generation_entries_compile_to_jumps`。
 - [x] **Task 3**：20 个能力目录与工厂表。测试 `test_c31_every_capability_has_its_own_directory`；门禁对能力目录的链接检查改到工厂函数。
 - [x] **Task 4**：预设、同步、粘贴经模块写回。测试 `test_c31_transfer_replaces_with_validated_source`、`test_c31_transfer_copies_too_new_source`、`test_c31_transfer_leaves_too_new_target`、`test_c31_transfer_rejects_corrupt_or_invalid_source`，以及预设、同步模块里的对应集成测试。
-- [ ] **Task 5**：状态接线。测试 `test_p12_commit_marks_photo_edited`、`test_p12_failed_commit_does_not_mark_edited`、`test_p12_exported_products_mark_photos_exported`。
+- [x] **Task 5**：状态接线。测试 `test_p12_commit_marks_photo_edited`、`test_p12_failed_commit_does_not_mark_edited`、`test_p12_exported_products_mark_photos_exported`。
 - [ ] **Task 6**：第七轮复审。
 
 ## Rulings

@@ -99,8 +99,11 @@ CommandResult CommandGate::submit(const UserCommand& command) {
     const auto result = finish(document_.commit_preview(*command.revision, command.capability_id,
                                                         command.parameter_id, limits_, files_, path_));
     if (result.code == ResultCode::Ok) {
-      std::lock_guard<std::mutex> registry_lock(g_registry_mu);
-      g_document_revisions[path_] = document_.revision();
+      {
+        std::lock_guard<std::mutex> registry_lock(g_registry_mu);
+        g_document_revisions[path_] = document_.revision();
+      }
+      if (listener_ != nullptr) listener_->committed(document_.image_id(), document_.revision());
     }
     return result;
   }

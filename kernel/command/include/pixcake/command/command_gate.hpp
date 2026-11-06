@@ -30,6 +30,14 @@ struct CommandResult {
   std::uint64_t revision = 0;
 };
 
+// 提交落盘成功后的通知。命令入口把“已编辑”这类派生状态交给所属模块（架构 6.2：交给所属模块，
+// 自己不写 SQL）。通知在提交成功之后发出，不能改变这次提交的结果。
+class CommitListener {
+ public:
+  virtual ~CommitListener() = default;
+  virtual void committed(const std::string& image_id, std::uint64_t revision) = 0;
+};
+
 class CommandGate {
  public:
   // pipeline 是开始编辑前要检查的能力管线，默认是阶段一管线。管线有环或重复时，所有命令都返回
@@ -40,6 +48,8 @@ class CommandGate {
   ~CommandGate();
 
   CommandResult submit(const UserCommand& command);
+  // 可以为空。不由命令入口持有。
+  void set_commit_listener(CommitListener* listener) { listener_ = listener; }
 
  private:
   EditDocument& document_;
@@ -49,6 +59,7 @@ class CommandGate {
   std::vector<VersionLimit> limits_;
   LogSink* log_ = nullptr;
   std::string pipeline_error_;
+  CommitListener* listener_ = nullptr;
 };
 
 }  // namespace pixcake
