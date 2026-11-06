@@ -31,7 +31,7 @@ const pixcake::SyncItem* find_item(const std::vector<pixcake::SyncItem>& tree, c
 
 void test_tree_reads_attributes_from_owners() {
   const auto tree = pixcake::sync_tree();
-  EXPECT(tree.size() == 22);
+  EXPECT(tree.size() == 23);
 
   const auto* match = find_item(tree, "color.match");
   EXPECT(match != nullptr);
