@@ -87,6 +87,47 @@ std::vector<ParameterMode> make_parameter_modes() {
                                "profile", 20);
   profile.choices = {"standard", "texture", "monochrome", "basic"};
   profile.default_choice = "standard";
+  // 色阶（RGB 复合通道）。需求 §10.3：输入色阶的黑、灰、白，输出色阶的黑、白。
+  // 来源：架构附录 B「色阶」读数和 2026-11-05 在 test 版上的数值框实测（越界被拒）。
+  // 上排两个输出框互相约束（最小间隔未测定），这里只校验各自范围；灰场两位小数，步进待确认。
+  // 红、绿、蓝通道没有实测，不注册。
+  const auto add_global = [&add](const std::string& parameter, double minimum, double maximum, double step,
+                                 double default_value) -> ParameterMode& {
+    return add("color.global", parameter, minimum, maximum, step, default_value, "color", "pixcake.color.global",
+               parameter, 20);
+  };
+  add_global("levels_rgb_input_black", 0.0, 255.0, 1.0, 0.0);
+  add_global("levels_rgb_input_gray", -1.0, 1.0, 0.01, 0.0).step_confirmed = false;
+  add_global("levels_rgb_input_white", 0.0, 255.0, 1.0, 255.0);
+  add_global("levels_rgb_output_black", 0.0, 255.0, 1.0, 0.0);
+  add_global("levels_rgb_output_white", 0.0, 255.0, 1.0, 255.0);
+  // HSL：八个颜色各自的色相、饱和度、明亮度（需求 §10.3），-100 到 100，步长 1，默认 0（2026-11-05 用户给出，
+  // 色相行另有读回确认）。黑白配置文件把 HSL 换成黑白组，所以黑白档下这 24 项不可编辑。
+  for (const char* channel : {"hue", "saturation", "luminance"}) {
+    for (const char* color : {"red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta"}) {
+      ParameterMode& hsl = add_global(std::string("hsl_") + channel + "_" + color, -100.0, 100.0, 1.0, 0.0);
+      hsl.disable_rules.push_back({"color.global", "profile", "monochrome", "黑白配置文件下 HSL 换成黑白组"});
+    }
+  }
+  // 可选颜色：九个目标色，每个目标四个滑杆，-100 到 100，步长 1，默认 0（2026-11-05 用户给出）。
+  // 目标色和滑杆名取自 test 版画面；调整方式默认「相对」。
+  for (const char* target : {"red", "yellow", "green", "cyan", "blue", "magenta", "white", "neutral", "black"}) {
+    for (const char* slider : {"cyan", "magenta", "yellow", "black"}) {
+      add_global(std::string("selective_") + target + "_" + slider, -100.0, 100.0, 1.0, 0.0);
+    }
+  }
+  ParameterMode& selective_mode = add_global("selective_mode", 0.0, 0.0, 1.0, 0.0);
+  selective_mode.choices = {"relative", "absolute"};
+  selective_mode.default_choice = "relative";
+  // 颜色分级：阴影、中间调、高光、全局四个模式，各有明度、饱和度、色相；另有混合。
+  // 来源：2026-11-05 test 版数值框实测（四个模式一致，越界被拒）。只测了整数输入，步进待确认。
+  // 平衡只用滑杆读到过 -100 到 100，没有用数值框核对，不注册。
+  for (const char* zone : {"shadows", "midtones", "highlights", "global"}) {
+    add_global(std::string("grading_") + zone + "_luminance", -100.0, 100.0, 1.0, 0.0).step_confirmed = false;
+    add_global(std::string("grading_") + zone + "_saturation", 0.0, 100.0, 1.0, 0.0).step_confirmed = false;
+    add_global(std::string("grading_") + zone + "_hue", 0.0, 359.0, 1.0, 0.0).step_confirmed = false;
+  }
+  add_global("grading_blending", 0.0, 100.0, 1.0, 50.0).step_confirmed = false;
   // 黑白档禁用影调里的鲜艳度和饱和度（需求第 10.3 节、第 24 节第 9 条）。
   for (auto& mode : modes) {
     if (mode.capability_id == "color.global" && (mode.parameter_id == "vibrance" || mode.parameter_id == "saturation")) {

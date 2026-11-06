@@ -32,6 +32,8 @@ struct SliderSpec {
 std::optional<SliderBinding> refine_color_binding(std::string_view label);
 
 // 精修局部调色面板的显示名到参数的绑定（羽化 → mask/feather）；其他显示名返回 nullopt。
+// 色阶、颜色分级、HSL、可选颜色的子分组滑杆绑定；顶层影调和同名的子分组滑杆互不串。
+std::optional<SliderBinding> refine_subgroup_binding(std::string_view label);
 std::optional<SliderBinding> refine_local_binding(std::string_view label);
 
 // 裁剪面板角度滑杆的参数（crop/angle）。

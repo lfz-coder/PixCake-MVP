@@ -296,9 +296,13 @@ class ShellWindow final : public QMainWindow {
                                                            pixcake::ui::panels::refine_color_binding(label.toStdString())),
                           QString());
     };
-    // 子分组滑杆：内核还没有它们的参数模式，不显示范围。
+    // 子分组滑杆：显示名在绑定表里的（色阶、HSL、可选颜色、颜色分级）范围来自内核参数模式，
+    // 其余内核还没有参数模式，不显示范围。
     const auto add_unbound = [&](const QString& label, const QString& object_name = QString()) {
-      add_disabled_slider(color_layout, pixcake::ui::panels::slider_spec(label.toStdString(), std::nullopt), object_name);
+      add_disabled_slider(color_layout,
+                          pixcake::ui::panels::slider_spec(label.toStdString(),
+                                                           pixcake::ui::panels::refine_subgroup_binding(label.toStdString())),
+                          object_name);
     };
     const auto add_title = [&](const QString& label) {
       auto* name = text(label);
@@ -583,8 +587,9 @@ int check_refine_sliders(const QWidget& window) {
       if (slider->maximum() != 0) { qCritical("unbound slider has ticks: %s", qPrintable(name)); return 4; }
       continue;
     }
-    const auto spec = pixcake::ui::panels::slider_spec(label.toStdString(),
-                                                       pixcake::ui::panels::refine_color_binding(label.toStdString()));
+    auto binding = pixcake::ui::panels::refine_color_binding(label.toStdString());
+    if (!binding) binding = pixcake::ui::panels::refine_subgroup_binding(label.toStdString());
+    const auto spec = pixcake::ui::panels::slider_spec(label.toStdString(), binding);
     if (!spec.bound || name != QString::fromStdString(spec.accessible_name) || slider->minimum() != 0 ||
         slider->maximum() != spec.tick_count || slider->value() != spec.default_tick) {
       qCritical("refine slider not from parameter mode: %s", qPrintable(name));
@@ -593,7 +598,8 @@ int check_refine_sliders(const QWidget& window) {
     ++bound;
     if (label == QStringLiteral("曝光")) exposure_ok = true;
   }
-  if (bound != 14 || !exposure_ok) { qCritical("expected 14 parameter-mode sliders, found %d", bound); return 4; }
+  // 顶层影调 14 + 色阶 5 + HSL 24 + 可选颜色 36 + 颜色分级 13（“平衡”未注册）。
+  if (bound != 92 || !exposure_ok) { qCritical("expected 92 parameter-mode sliders, found %d", bound); return 4; }
   return 0;
 }
 

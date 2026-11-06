@@ -147,7 +147,116 @@ void test_pipeline() {
 
 }  // namespace
 
+// 来源：需求 §10.3 第 433 行（输入色阶黑灰白三个、输出色阶黑白两个）和架构附录 B「色阶」读数；
+// 2026-11-05 在 test 版上实测：下排黑场、白场为 0–255 整数，灰场 -1.00 到 1.00；上排两框为 0–255 整数。
+void test_c42_levels_rgb_modes() {
+  struct Row { const char* id; double minimum; double maximum; double default_value; bool step_confirmed; };
+  const Row rows[] = {{"levels_rgb_input_black", 0, 255, 0, true},  {"levels_rgb_input_gray", -1, 1, 0, false},
+                      {"levels_rgb_input_white", 0, 255, 255, true}, {"levels_rgb_output_black", 0, 255, 0, true},
+                      {"levels_rgb_output_white", 0, 255, 255, true}};
+  for (const Row& row : rows) {
+    const auto* mode = pixcake::find_parameter_mode("color.global", row.id);
+    EXPECT(mode != nullptr);
+    if (mode == nullptr) continue;
+    EXPECT(mode->minimum == row.minimum && mode->maximum == row.maximum && mode->default_value == row.default_value);
+    EXPECT(mode->step_confirmed == row.step_confirmed && mode->default_confirmed);
+  }
+  EXPECT(pixcake::validate_parameter_display_value("color.global", "levels_rgb_input_white", "255"));
+  EXPECT(!pixcake::validate_parameter_display_value("color.global", "levels_rgb_input_white", "256"));
+  EXPECT(!pixcake::validate_parameter_display_value("color.global", "levels_rgb_input_black", "-1"));
+  EXPECT(!pixcake::validate_parameter_display_value("color.global", "levels_rgb_input_black", "1.5"));
+  EXPECT(pixcake::validate_parameter_display_value("color.global", "levels_rgb_input_gray", "0.5"));
+  EXPECT(!pixcake::validate_parameter_display_value("color.global", "levels_rgb_input_gray", "1.01"));
+  // 红、绿、蓝通道没有实测，不注册。
+  EXPECT(pixcake::find_parameter_mode("color.global", "levels_red_input_black") == nullptr);
+}
+
+// 来源：2026-11-05 用户给出的范围（色相、饱和度、明亮度偏移 -100 到 100，步长 1，默认 0）；
+// 色相行 8 个颜色的范围和整数步进由另一会话在 test 版上读回确认。
+void test_c43_hsl_modes_and_monochrome_switch() {
+  const char* colors[] = {"red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta"};
+  const char* channels[] = {"hue", "saturation", "luminance"};
+  std::size_t found = 0;
+  const auto monochrome = [](std::string_view capability, std::string_view parameter) -> std::optional<std::string> {
+    if (capability == "color.global" && parameter == "profile") return std::string("monochrome");
+    return std::nullopt;
+  };
+  const auto standard = [](std::string_view, std::string_view) -> std::optional<std::string> { return std::nullopt; };
+  for (const char* channel : channels) {
+    for (const char* color : colors) {
+      const std::string id = std::string("hsl_") + channel + "_" + color;
+      const auto* mode = pixcake::find_parameter_mode("color.global", id);
+      EXPECT(mode != nullptr);
+      if (mode == nullptr) continue;
+      ++found;
+      EXPECT(mode->minimum == -100.0 && mode->maximum == 100.0 && mode->step == 1.0 && mode->default_value == 0.0);
+      EXPECT(mode->step_confirmed && mode->default_confirmed);
+      EXPECT(pixcake::parameter_disabled_reason("color.global", id, monochrome).has_value());
+      EXPECT(!pixcake::parameter_disabled_reason("color.global", id, standard).has_value());
+    }
+  }
+  EXPECT(found == 24);
+  EXPECT(pixcake::validate_parameter_display_value("color.global", "hsl_hue_red", "-100"));
+  EXPECT(!pixcake::validate_parameter_display_value("color.global", "hsl_hue_red", "101"));
+  EXPECT(!pixcake::validate_parameter_display_value("color.global", "hsl_hue_red", "0.5"));
+}
+
+// 来源：2026-11-05 用户给出的范围（这些颜色滑杆 -100 到 100，步长 1）；目标色和滑杆名取自 test 版画面。
+void test_c44_selective_color_modes() {
+  const char* targets[] = {"red", "yellow", "green", "cyan", "blue", "magenta", "white", "neutral", "black"};
+  const char* sliders[] = {"cyan", "magenta", "yellow", "black"};
+  std::size_t found = 0;
+  for (const char* target : targets) {
+    for (const char* slider : sliders) {
+      const auto* mode = pixcake::find_parameter_mode("color.global", std::string("selective_") + target + "_" + slider);
+      EXPECT(mode != nullptr);
+      if (mode == nullptr) continue;
+      ++found;
+      EXPECT(mode->minimum == -100.0 && mode->maximum == 100.0 && mode->step == 1.0 && mode->default_value == 0.0);
+      EXPECT(mode->step_confirmed && mode->default_confirmed);
+    }
+  }
+  EXPECT(found == 36);
+  const auto* method = pixcake::find_parameter_mode("color.global", "selective_mode");
+  EXPECT(method != nullptr);
+  if (method != nullptr) {
+    EXPECT(method->choices == std::vector<std::string>({"relative", "absolute"}));
+    EXPECT(method->default_choice == "relative");
+  }
+  EXPECT(pixcake::validate_parameter_display_value("color.global", "selective_mode", "absolute"));
+  EXPECT(!pixcake::validate_parameter_display_value("color.global", "selective_mode", "绝对"));
+  EXPECT(pixcake::find_parameter_mode("color.global", "selective_gray_cyan") == nullptr);
+}
+
+// 来源：2026-11-05 test 版实测（数值框键盘输入，越界被拒）：四个模式（阴影、中间调、高光、全局）下
+// 明度 -100–100、饱和度 0–100、色相 0–359、默认 0；混合 0–100、默认 50。整数以外的输入没有测，步进待确认。
+void test_c45_color_grading_modes() {
+  const char* zones[] = {"shadows", "midtones", "highlights", "global"};
+  for (const char* zone : zones) {
+    const auto* luminance = pixcake::find_parameter_mode("color.global", std::string("grading_") + zone + "_luminance");
+    const auto* saturation = pixcake::find_parameter_mode("color.global", std::string("grading_") + zone + "_saturation");
+    const auto* hue = pixcake::find_parameter_mode("color.global", std::string("grading_") + zone + "_hue");
+    EXPECT(luminance != nullptr && saturation != nullptr && hue != nullptr);
+    if (luminance == nullptr || saturation == nullptr || hue == nullptr) continue;
+    EXPECT(luminance->minimum == -100.0 && luminance->maximum == 100.0 && luminance->default_value == 0.0);
+    EXPECT(saturation->minimum == 0.0 && saturation->maximum == 100.0 && saturation->default_value == 0.0);
+    EXPECT(hue->minimum == 0.0 && hue->maximum == 359.0 && hue->default_value == 0.0);
+    EXPECT(!luminance->step_confirmed && !saturation->step_confirmed && !hue->step_confirmed);
+  }
+  const auto* blending = pixcake::find_parameter_mode("color.global", "grading_blending");
+  EXPECT(blending != nullptr && blending->minimum == 0.0 && blending->maximum == 100.0 && blending->default_value == 50.0);
+  EXPECT(pixcake::validate_parameter_display_value("color.global", "grading_global_hue", "359"));
+  EXPECT(!pixcake::validate_parameter_display_value("color.global", "grading_global_hue", "360"));
+  EXPECT(!pixcake::validate_parameter_display_value("color.global", "grading_global_saturation", "-1"));
+  // 平衡只用滑杆读到过 -100 到 100，没有用数值框核对，不注册。
+  EXPECT(pixcake::find_parameter_mode("color.global", "grading_balance") == nullptr);
+}
+
 int main() {
+  test_c42_levels_rgb_modes();
+  test_c43_hsl_modes_and_monochrome_switch();
+  test_c44_selective_color_modes();
+  test_c45_color_grading_modes();
   const pixcake::CapabilityRegistry registry = pixcake::CapabilityRegistry::phase_one();
   const std::vector<pixcake::CapabilityDescriptor> descriptors = registry.descriptors();
 

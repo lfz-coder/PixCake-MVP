@@ -43,11 +43,91 @@ std::string format_value(double value, int decimals) {
 
 }  // namespace
 
+namespace {
+
+constexpr std::array<LabelBinding, 5> kLevels = {{
+    {"黑场", "levels_rgb_input_black"},
+    {"灰场", "levels_rgb_input_gray"},
+    {"白场", "levels_rgb_input_white"},
+    {"输出黑场", "levels_rgb_output_black"},
+    {"输出白场", "levels_rgb_output_white"},
+}};
+
+// 颜色分级：“平衡”只用滑杆读到过范围，没有用数值框核对，不在表里。
+constexpr std::array<LabelBinding, 13> kGrading = {{
+    {"阴影亮度", "grading_shadows_luminance"},
+    {"阴影饱和度", "grading_shadows_saturation"},
+    {"阴影色相", "grading_shadows_hue"},
+    {"中间调亮度", "grading_midtones_luminance"},
+    {"中间调饱和度", "grading_midtones_saturation"},
+    {"中间调色相", "grading_midtones_hue"},
+    {"高光亮度", "grading_highlights_luminance"},
+    {"高光饱和度", "grading_highlights_saturation"},
+    {"高光色相", "grading_highlights_hue"},
+    {"全局亮度", "grading_global_luminance"},
+    {"全局调饱和度", "grading_global_saturation"},
+    {"全局调色相", "grading_global_hue"},
+    {"混合", "grading_blending"},
+}};
+
+constexpr std::array<LabelBinding, 3> kHslChannels = {{{"色相", "hue"}, {"饱和度", "saturation"}, {"明亮度", "luminance"}}};
+constexpr std::array<LabelBinding, 8> kHslColors = {{{"红色", "red"},   {"橙色", "orange"}, {"黄色", "yellow"},
+                                                     {"绿色", "green"}, {"浅绿色", "aqua"},  {"蓝色", "blue"},
+                                                     {"紫色", "purple"}, {"洋红色", "magenta"}}};
+constexpr std::array<LabelBinding, 9> kSelectiveTargets = {{{"红色", "red"},     {"黄色", "yellow"},
+                                                            {"绿色", "green"},   {"青色", "cyan"},
+                                                            {"蓝色", "blue"},    {"洋红色", "magenta"},
+                                                            {"白色", "white"},   {"中间色（灰色）", "neutral"},
+                                                            {"黑色", "black"}}};
+constexpr std::array<LabelBinding, 4> kSelectiveSliders = {{{"青色", "cyan"}, {"洋红", "magenta"}, {"黄色", "yellow"}, {"黑色", "black"}}};
+
+// "<前缀显示名>-<后缀显示名>"，两段都要在表里。
+template <std::size_t A, std::size_t B>
+std::optional<std::string> pair_parameter(std::string_view label, const std::array<LabelBinding, A>& first,
+                                          const std::array<LabelBinding, B>& second, std::string_view prefix) {
+  const auto dash = label.find('-');
+  if (dash == std::string_view::npos) return std::nullopt;
+  const std::string_view left = label.substr(0, dash);
+  const std::string_view right = label.substr(dash + 1);
+  const auto find_in = [](const auto& table, std::string_view name) -> const LabelBinding* {
+    for (const auto& entry : table) {
+      if (entry.label == name) return &entry;
+    }
+    return nullptr;
+  };
+  const LabelBinding* a = find_in(first, left);
+  const LabelBinding* b = find_in(second, right);
+  if (a == nullptr || b == nullptr) return std::nullopt;
+  return std::string(prefix) + std::string(a->parameter_id) + "_" + std::string(b->parameter_id);
+}
+
+}  // namespace
+
 std::optional<SliderBinding> refine_color_binding(std::string_view label) {
   for (const auto& entry : kTopLevelColor) {
     if (entry.label == label) {
       return SliderBinding{kGlobalColor, std::string(entry.parameter_id)};
     }
+  }
+  return std::nullopt;
+}
+
+// 只给色阶、颜色分级、HSL、可选颜色的子分组滑杆用。曲线等子分组里同名的“阴影”“高光”
+// 不在这些表里，不会被绑到顶层影调参数。
+std::optional<SliderBinding> refine_subgroup_binding(std::string_view label) {
+  for (const auto& entry : kLevels) {
+    if (entry.label == label) return SliderBinding{kGlobalColor, std::string(entry.parameter_id)};
+  }
+  for (const auto& entry : kGrading) {
+    if (entry.label == label) return SliderBinding{kGlobalColor, std::string(entry.parameter_id)};
+  }
+  // HSL：“色相-红色”等，显示名带模式（色相、饱和度、明亮度）和颜色。
+  if (const auto hsl = pair_parameter(label, kHslChannels, kHslColors, "hsl_")) {
+    return SliderBinding{kGlobalColor, *hsl};
+  }
+  // 可选颜色：“红色-青色”等，显示名带目标色和滑杆名。
+  if (const auto selective = pair_parameter(label, kSelectiveTargets, kSelectiveSliders, "selective_")) {
+    return SliderBinding{kGlobalColor, *selective};
   }
   return std::nullopt;
 }
