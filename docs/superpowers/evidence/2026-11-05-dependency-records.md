@@ -45,7 +45,7 @@
 | --- | --- |
 | 手写的是什么 | 读取 PNG、JPEG、TIFF、BMP 的签名和图像尺寸，用于导入准入（契约 C-11、C-12、B-40、B-90）。**不解码像素，不做色彩管理。** |
 | 考虑过的候选 | libvips、OpenImageIO、LibRaw（规范 §5 列出的图像 I/O 方向）。其中 libvips 已在 `third_party/libvips.lock.cmake` 锁定版本，作为 `apps/renderd` / `apps/exportd` 解码和编码适配器的主候选。 |
-| 排除理由 | 依赖规范第 13 行：“图像 I/O 依赖应放在 `apps/renderd`、`apps/exportd` 或明确的平台适配器，不能把图像库头文件和实现塞进 `kernel/`”；§3：“公共内核不因为调用方需要而直接链接图像库”。准入发生在内核导入流程里，不能为了读几个字节的文件头引入整套图像库。注意：现有架构门禁只对 `kernel/ledger`、`kernel/layerdoc`、`kernel/workspace` 扫描 `jpeglib.h`（rule 6/13/14），rule 15 只拦 Qt/OpenGL/opencv/cuda/torch/onnxruntime，`kernel/import` 引入图像库目前不会被门禁发现，这条缺口记入第四轮复审。 |
+| 排除理由 | 依赖规范第 13 行：“图像 I/O 依赖应放在 `apps/renderd`、`apps/exportd` 或明确的平台适配器，不能把图像库头文件和实现塞进 `kernel/`”；§3：“公共内核不因为调用方需要而直接链接图像库”。准入发生在内核导入流程里，不能为了读几个字节的文件头引入整套图像库。注意：现有架构门禁只对 `kernel/ledger`、`kernel/layerdoc`、`kernel/workspace` 扫描 `jpeglib.h`（rule 6/13/14），rule 15 只拦 Qt/OpenGL/opencv/cuda/torch/onnxruntime，`kernel/import` 引入图像库目前不会被门禁发现，这条缺口记入第四轮复审。**2026-11-06 已补**：rule 16 扫描整个 `kernel/` 的图像库头文件（png、jpeglib、turbojpeg、tiff、webp、vips、libraw、OpenImageIO、libheif、exiv2），rule 15 增加对应链接目标；用临时违规文件验证 4 种头文件和 `PNG::PNG` 链接都被拦下。 |
 | 范围 | 只读文件头里固定位置的字段，读取前先检查长度。宽或高为 0、负数，或宽乘高溢出时拒绝（`source_probe.cpp` 中的尺寸检查）。 |
 | 测试向量 | `tests/kernel/import/test_source_probe.cpp`：损坏的 PNG/JPEG/TIFF 判 `ImageCorrupt`；BMP 等不支持的格式判 `UnsupportedFormat`；缺失文件判 `SourceMissing`；拒读判 `PermissionDenied`；以及尺寸为 0 和溢出的用例。`tests/kernel/import/test_import_coordinator.cpp` 覆盖批量导入、准入凭证、准入后文件被替换、准入后文件消失。 |
 | 损坏输入处理 | 截断或签名不完整时返回 `ImageCorrupt`；不认识的签名返回 `UnsupportedFormat`；都不进入项目（S-07）。 |

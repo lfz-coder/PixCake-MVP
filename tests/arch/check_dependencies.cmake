@@ -133,12 +133,21 @@ scan("${SOURCE_DIR}/kernel/workspace" "rule 14" "sqlite3.h" "pixcake/ledger/" "j
 file(GLOB_RECURSE kernel_cmake "${SOURCE_DIR}/kernel/*/CMakeLists.txt")
 foreach(path ${kernel_cmake})
   file(READ "${path}" text)
-  foreach(token "Qt5::" "Qt6::" "OpenGL" "GL/" "opencv" "cuda" "torch" "onnxruntime")
+  # 图像库链接目标同样禁止（依赖规范第 13、32 行：图像 I/O 放在 renderd/exportd 或平台适配器）。
+  foreach(token "Qt5::" "Qt6::" "OpenGL" "GL/" "opencv" "cuda" "torch" "onnxruntime"
+                "PNG::" "JPEG::" "TIFF::" "WebP::" "libjpeg" "libpng" "libtiff" "libwebp" "turbojpeg"
+                "vips" "libraw" "OpenImageIO" "libheif" "Exiv2")
     string(FIND "${text}" "${token}" found)
     if(NOT found EQUAL -1)
       message(FATAL_ERROR "rule 15: ${path} contains forbidden kernel dependency ${token}")
     endif()
   endforeach()
 endforeach()
+
+# 16. 整个 kernel/ 不包含图像库头文件（依赖规范第 13 行；第四轮复审指出 rule 6/13/14 只覆盖三个目录）。
+#     kernel/import 的文件头探测是记录在案的手写例外，只读签名和尺寸，不引入任何图像库。
+scan("${SOURCE_DIR}/kernel" "rule 16"
+     "<png.h>" "\"png.h\"" "<jpeglib.h>" "\"jpeglib.h\"" "<turbojpeg.h>" "<tiffio.h>" "<tiff.h>"
+     "<webp/" "<vips/" "<libraw/" "<OpenImageIO/" "<libheif/" "<exiv2/")
 
 message(STATUS "arch dependencies ok")
