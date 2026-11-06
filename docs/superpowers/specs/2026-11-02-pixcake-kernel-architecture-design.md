@@ -441,7 +441,7 @@ tests/
 
 表情、牙齿、眼睛、妆容、头发分成一个能力下的参数组。若后续某一组要单独扣点或单独同步，再拆成新标识，旧标识继续读入并迁移。阶段一不提前拆成五个库。
 
-参数归属（2026-11-05）：眼神光的垂直、水平、旋转是 `portrait.feature` 的参数 `eye_glint_vertical`、`eye_glint_horizontal`、`eye_glint_rotation`；宠物眼神光是 `pet` 的同名参数；光影均匀明度是 `image.background` 的 `light_uniform_brightness`；配置文件是 `color.global` 的枚举参数 `profile`，可选值 `standard`（标准）、`texture`（质感）、`monochrome`（黑白）、`basic`（基础），默认 `standard`。`mask/feather` 是 `kernel/mask` 蒙版属性“羽化”的显示刻度，`export/quality` 是导出品质的刻度，二者都不是能力，不写入精修文档片段。需求只给了范围、没给步进或默认值的参数，参数模式里标为待确认：校验只查范围，界面写“待确认”。
+参数归属（2026-11-05）：眼神光的垂直、水平、旋转是 `portrait.feature` 的参数 `eye_glint_vertical`、`eye_glint_horizontal`、`eye_glint_rotation`；宠物眼神光是 `pet` 的同名参数；光影均匀明度是 `image.background` 的 `light_uniform_brightness`；配置文件是 `color.global` 的枚举参数 `profile`，可选值 `standard`（标准）、`texture`（质感）、`monochrome`（黑白）、`basic`（基础），默认 `standard`。`mask/feather` 是 `kernel/mask` 蒙版属性“羽化”的显示刻度；创意图层蒙版的密度和羽化是 `mask/density`、`mask/layer_feather`（附录 B，2026-11-06 实测），由图层文档保存；`export/quality` 是导出品质的刻度，二者都不是能力，不写入精修文档片段。需求只给了范围、没给步进或默认值的参数，参数模式里标为待确认：校验只查范围，界面写“待确认”。
 
 AI 点修不是能力。它是壳层的一种选区会话：选区写入 `mask`，然后只显示与该蒙版匹配的能力参数。调色仍写 `color.local` 或 `color.match`，美化仍写对应人像能力。人像液化的锚点写入 `manual.liquify`，不另建参数文档。
 
@@ -828,6 +828,17 @@ AI 点修不是能力。它是壳层的一种选区会话：选区写入 `mask`�
 | 颗粒 | 颗粒效果、阴影、中间调、高光、颗粒大小、粗糙度、颗粒色彩 | 0 到 100 | 1 | 0、30、50、15、10、15、10 | 范围与步进用户给出；默认值取自 test 版画面。颗粒效果为 0 时其余项不可调（用户给出）。归 `detail`（契约 §4） |
 | 黑白（黑白配置文件） | 黑白混合 8 色：红、橙、黄、绿、浅绿、蓝、紫、洋红 | -100 到 100 | 1 | 0 | 实测（`evidence/2026-11-06-monochrome-mixer-measurement.md`）。只在黑白配置文件下出现，此时 HSL 与色彩编辑器分组从面板消失 |
 | AI 色彩风格 | 程度 | 0 到 100 | 未确认 | 100（需求） | 实测上限 100（`evidence/2026-11-06-free-group-creative-amount-measurement.md`）；用户裁定按官方。AI 追色程度仍按需求 0 到 200 |
+
+### 创意图层蒙版（2026-11-06 实测）
+
+需求第 728 行只写“图层蒙版可调密度和羽化”，没有数值。下面来自 test 版数值框实测（`evidence/2026-11-06-layer-mask-density-measurement.md`）：范围外和小数输入被拒绝，不夹紧。参数模式归 `mask`（与选区羽化同一归属方），由图层文档保存，不写入精修文档片段。
+
+| 参数模式 | 画面上的标题 | 显示范围 | 步进 | 默认（新加蒙版时） |
+| --- | --- | --- | --- | --- |
+| `mask/density` | 蒙版 → 密度 | 0 到 100 | 1 | 100 |
+| `mask/layer_feather` | 蒙版 → 羽化 | 0 到 1000 | 1 | 0 |
+
+图层蒙版羽化与精修蒙版的 `mask/feather`（0 到 100，步进待确认）是两个控件，范围不同；后者本次没有重测。
 
 配置文件下拉在一张 PNG 上只看到标准、黑白、基础，没有需求第 10.3 节写的“质感”；是否只对 RAW 出现还没测。
 

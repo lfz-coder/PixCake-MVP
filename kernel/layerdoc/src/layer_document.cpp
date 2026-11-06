@@ -20,8 +20,8 @@ bool safe_id(const std::string& id) {
 
 bool safe_name(const std::string& name) { return !name.empty() && !has_nul(name); }
 
-// 不透明度、蒙版羽化、选区羽化的范围只来自参数模式（质量清单 Q-06）：
-// layer/opacity、mask/feather、mask/selection_feather。
+// 不透明度、图层蒙版的密度与羽化、选区羽化的范围和默认值只来自参数模式（质量清单 Q-06）：
+// layer/opacity、mask/density、mask/layer_feather、mask/selection_feather。
 bool within_mode(const char* owner, const char* parameter, long long value) {
   return validate_parameter_display_value(owner, parameter, std::to_string(value));
 }
@@ -29,6 +29,17 @@ bool within_mode(const char* owner, const char* parameter, long long value) {
 std::uint32_t mode_maximum(const char* owner, const char* parameter) {
   const ParameterMode* mode = find_parameter_mode(owner, parameter);
   return mode == nullptr || mode->maximum < 0 ? 0u : static_cast<std::uint32_t>(mode->maximum);
+}
+
+int mode_default(const char* owner, const char* parameter) {
+  const ParameterMode* mode = find_parameter_mode(owner, parameter);
+  return mode == nullptr ? 0 : static_cast<int>(mode->default_value);
+}
+
+// 新加或去掉蒙版时，密度和羽化回到参数模式的默认值。
+void reset_mask_values(LayerView& layer) {
+  layer.mask_density = mode_default("mask", "density");
+  layer.mask_feather = mode_default("mask", "layer_feather");
 }
 
 bool known_blend(const std::string& blend) {
@@ -161,12 +172,15 @@ bool decode_layer(const std::vector<std::uint8_t>& payload, LayerView& layer) {
   if (!within_mode("layer", "opacity", opacity)) {
     return false;
   }
+  if (!within_mode("mask", "density", density)) {
+    return false;
+  }
   layer.opacity = static_cast<int>(opacity);
   layer.mask_density = static_cast<int>(density);
   // PXLD v1 wrote feather values above the current editor range.  The field
   // is understood, so migrate it to the nearest supported value while
   // keeping the rest of the document readable.
-  layer.mask_feather = static_cast<int>(std::min<std::uint32_t>(feather, mode_maximum("mask", "feather")));
+  layer.mask_feather = static_cast<int>(std::min<std::uint32_t>(feather, mode_maximum("mask", "layer_feather")));
   layer.group = (flags & 1u) != 0;
   layer.locked = (flags & 2u) != 0;
   layer.hidden = (flags & 4u) != 0;
@@ -471,6 +485,7 @@ ResultCode LayerDocument::add_mask(const std::string& id) {
     return ResultCode::StateConflict;
   }
   layer->mask = true;
+  reset_mask_values(*layer);
   return ResultCode::Ok;
 }
 
@@ -483,13 +498,12 @@ ResultCode LayerDocument::remove_mask(const std::string& id) {
     return ResultCode::StateConflict;
   }
   layer->mask = false;
-  layer->mask_density = 100;
-  layer->mask_feather = 0;
+  reset_mask_values(*layer);
   return ResultCode::Ok;
 }
 
 ResultCode LayerDocument::set_mask_density(const std::string& id, int density) {
-  if (!editable() || density < 0) {
+  if (!editable() || !within_mode("mask", "density", density)) {
     return ResultCode::StateConflict;
   }
   LayerView* layer = find(id);
@@ -501,7 +515,7 @@ ResultCode LayerDocument::set_mask_density(const std::string& id, int density) {
 }
 
 ResultCode LayerDocument::set_mask_feather(const std::string& id, int feather) {
-  if (!editable() || !within_mode("mask", "feather", feather)) {
+  if (!editable() || !within_mode("mask", "layer_feather", feather)) {
     return ResultCode::StateConflict;
   }
   LayerView* layer = find(id);
@@ -581,6 +595,7 @@ ResultCode LayerDocument::place_result(const std::string& result_id, const std::
     LayerView layer = make_layer(result_id, tool_id);
     if (shape == "可编辑蒙版的图层") {
       layer.mask = true;
+      reset_mask_values(layer);
     }
     if (shape == "可改位置和大小的图层") {
       layer.position_editable = true;

@@ -1,6 +1,7 @@
 #include "pixcake/render/render_description.hpp"
 
 #include "pixcake/capabilities/module_set.hpp"
+#include "pixcake/capability/capability_registry.hpp"
 #include "pixcake/layerdoc/layer_document.hpp"
 
 #include <algorithm>
@@ -8,6 +9,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <set>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -203,8 +205,10 @@ CompileResult compile(const EditDocument& document, const LayerDocument& layers,
       output.disabled_reason = "图层父节点不存在";
       result.description.diagnostics.push_back({"layers", output.disabled_reason, true});
     }
-    if (layer.opacity < 0 || layer.opacity > 100 || layer.mask_density < 0 || layer.mask_density > 100 ||
-        layer.mask_feather < 0 || layer.mask_feather > 100) {
+    // 范围来自参数模式（Q-06）：layer/opacity、mask/density、mask/layer_feather。
+    if (!validate_parameter_display_value("layer", "opacity", std::to_string(layer.opacity)) ||
+        !validate_parameter_display_value("mask", "density", std::to_string(layer.mask_density)) ||
+        !validate_parameter_display_value("mask", "layer_feather", std::to_string(layer.mask_feather))) {
       output.enabled = false;
       output.disabled_reason = "图层透明度或蒙版参数越界";
       result.description.diagnostics.push_back({"layers", output.disabled_reason, true});

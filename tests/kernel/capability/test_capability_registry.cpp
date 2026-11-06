@@ -357,6 +357,20 @@ void test_q06_layer_ranges_come_from_parameter_modes() {
   EXPECT(pixcake::CapabilityRegistry::phase_one().find("layer") == nullptr);
 }
 
+// 创意图层蒙版的密度与羽化（2026-11-06 test 版实测，架构附录 B“创意图层蒙版”）。
+void test_q06_layer_mask_modes_match_measurement() {
+  const auto* density = pixcake::find_parameter_mode("mask", "density");
+  EXPECT(density != nullptr && density->minimum == 0.0 && density->maximum == 100.0 && density->step == 1.0 &&
+         density->default_value == 100.0 && density->step_confirmed && density->default_confirmed);
+  const auto* feather = pixcake::find_parameter_mode("mask", "layer_feather");
+  EXPECT(feather != nullptr && feather->minimum == 0.0 && feather->maximum == 1000.0 && feather->step == 1.0 &&
+         feather->default_value == 0.0 && feather->step_confirmed && feather->default_confirmed);
+  EXPECT(!pixcake::validate_parameter_display_value("mask", "density", "101"));
+  EXPECT(!pixcake::validate_parameter_display_value("mask", "density", "55.5"));
+  EXPECT(pixcake::validate_parameter_display_value("mask", "layer_feather", "1000"));
+  EXPECT(!pixcake::validate_parameter_display_value("mask", "layer_feather", "1001"));
+}
+
 // 2026-11-05 用户给出：只有颗粒效果不为 0，下面各项才可以调节。没有值时按默认值 0 判断。
 void test_q02_grain_sub_parameters_need_nonzero_amount() {
   std::optional<std::string> amount;
@@ -380,6 +394,7 @@ void test_q02_grain_sub_parameters_need_nonzero_amount() {
 int main() {
   test_q02_grain_sub_parameters_need_nonzero_amount();
   test_q06_layer_ranges_come_from_parameter_modes();
+  test_q06_layer_mask_modes_match_measurement();
   test_c05_monochrome_switches_hsl_to_mixer();
   test_c49_color_editor_offsets();
   test_c31_q02_grain_belongs_to_detail();

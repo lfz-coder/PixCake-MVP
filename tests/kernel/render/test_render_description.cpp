@@ -149,6 +149,24 @@ void test_layer_and_mask_inputs_are_descriptive() {
   }
 }
 
+// 图层蒙版羽化按参数模式 0 到 1000 检查，不再写死 100（Q-06）。
+void test_q06_layer_mask_feather_above_100_renders() {
+  auto document = *pixcake::EditDocument::create("img-layer");
+  auto layers = *pixcake::LayerDocument::create("img-layer", 0);
+  EXPECT(layers.add_layer("subject", "Subject") == pixcake::ResultCode::Ok);
+  EXPECT(layers.add_mask("subject") == pixcake::ResultCode::Ok);
+  EXPECT(layers.set_mask_feather("subject", 1000) == pixcake::ResultCode::Ok);
+  const auto result = pixcake::render::compile(document, layers);
+  bool found = false;
+  for (const auto& layer : result.description.layers) {
+    if (layer.id != "subject") continue;
+    found = true;
+    EXPECT(layer.enabled);
+    EXPECT(layer.mask_feather == 1000);
+  }
+  EXPECT(found);
+}
+
 }  // namespace
 
 // C-31：渲染把编译交给能力模块。黑白配置文件预览时鲜艳度不画（color.global 模块），
@@ -177,6 +195,7 @@ void test_c31_render_compiles_through_capability_modules() {
 }
 
 int main() {
+  test_q06_layer_mask_feather_above_100_renders();
   test_c31_render_compiles_through_capability_modules();
   test_compile_is_read_only_and_uses_stable_fields();
   test_preview_without_committed_fragment_is_renderable();

@@ -172,6 +172,10 @@ std::vector<ParameterMode> make_parameter_modes() {
   ParameterMode& selection_feather =
       add("mask", "selection_feather", 0.0, 1000.0, 1.0, 0.0, "mask", "pixcake.mask", "selection_feather", 41);
   selection_feather.default_confirmed = false;
+  // 创意图层蒙版的密度 0 到 100、默认 100，羽化 0 到 1000、默认 0，步进都是 1（2026-11-06 test 版实测，
+  // 架构附录 B“创意图层蒙版”）。由图层文档保存，不写入精修文档片段；与上面精修蒙版的 feather 是两个控件。
+  add("mask", "density", 0.0, 100.0, 1.0, 100.0, "mask", "pixcake.mask", "density", 43);
+  add("mask", "layer_feather", 0.0, 1000.0, 1.0, 0.0, "mask", "pixcake.mask", "layer_feather", 44);
   // layer 不是能力：图层不透明度 0 到 100（边界 B-33、契约 C-28），由图层文档保存，不写入精修文档片段。
   // 需求没有写默认值；新图层按 100 处理，标待确认。
   ParameterMode& opacity = add("layer", "opacity", 0.0, 100.0, 1.0, 100.0, "layer", "", "opacity", 42);

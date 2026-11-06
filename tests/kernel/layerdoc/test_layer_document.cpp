@@ -1,8 +1,10 @@
+#include "pixcake/capability/capability_registry.hpp"
 #include "pixcake/editdoc/edit_document.hpp"
 #include "pixcake/layerdoc/layer_document.hpp"
 #include "pixcake/support/checksum.hpp"
 #include "support/fake_file_system.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -82,16 +84,16 @@ void test_group_mask_selection_and_batch_design() {
   EXPECT(group.group);
   EXPECT(document.add_mask("layer-1") == pixcake::ResultCode::Ok);
   EXPECT(document.set_mask_density("layer-1", 40) == pixcake::ResultCode::Ok);
-  EXPECT(document.set_mask_density("layer-1", 101) == pixcake::ResultCode::Ok);
+  EXPECT(document.set_mask_density("layer-1", 101) == pixcake::ResultCode::StateConflict);
   EXPECT(document.set_mask_density("layer-1", -1) == pixcake::ResultCode::StateConflict);
   pixcake::LayerView masked;
   EXPECT(document.find_layer("layer-1", masked));
-  EXPECT(masked.mask_density == 101);
-  EXPECT(document.set_mask_feather("layer-1", 100) == pixcake::ResultCode::Ok);
-  EXPECT(document.set_mask_feather("layer-1", 101) == pixcake::ResultCode::StateConflict);
+  EXPECT(masked.mask_density == 40);
+  EXPECT(document.set_mask_feather("layer-1", 1000) == pixcake::ResultCode::Ok);
+  EXPECT(document.set_mask_feather("layer-1", 1001) == pixcake::ResultCode::StateConflict);
   EXPECT(document.set_mask_feather("layer-1", -1) == pixcake::ResultCode::StateConflict);
   EXPECT(document.find_layer("layer-1", masked));
-  EXPECT(masked.mask_feather == 100);
+  EXPECT(masked.mask_feather == 1000);
   EXPECT(document.set_selection(true, 12) == pixcake::ResultCode::Ok);
   EXPECT(document.selection().present);
   EXPECT(document.selection().feather == 12);
@@ -362,7 +364,70 @@ void test_q06_selection_feather_at_mode_maximum_round_trips() {
   EXPECT(loaded.selection().present && loaded.selection().inverted && loaded.selection().feather == 1000);
 }
 
+// 新加的蒙版取参数模式的默认值；去掉再加回来也一样（Q-06，架构附录 B“创意图层蒙版”）。
+void test_q06_new_mask_takes_defaults_from_parameter_modes() {
+  const auto* density = pixcake::find_parameter_mode("mask", "density");
+  const auto* feather = pixcake::find_parameter_mode("mask", "layer_feather");
+  EXPECT(density != nullptr && feather != nullptr);
+  if (density == nullptr || feather == nullptr) return;
+  auto document = opened();
+  EXPECT(document.add_layer("layer-1", "人物") == pixcake::ResultCode::Ok);
+  EXPECT(document.add_mask("layer-1") == pixcake::ResultCode::Ok);
+  pixcake::LayerView layer;
+  EXPECT(document.find_layer("layer-1", layer));
+  EXPECT(layer.mask_density == static_cast<int>(density->default_value));
+  EXPECT(layer.mask_feather == static_cast<int>(feather->default_value));
+  EXPECT(document.set_mask_density("layer-1", 40) == pixcake::ResultCode::Ok);
+  EXPECT(document.set_mask_feather("layer-1", 300) == pixcake::ResultCode::Ok);
+  EXPECT(document.remove_mask("layer-1") == pixcake::ResultCode::Ok);
+  EXPECT(document.add_mask("layer-1") == pixcake::ResultCode::Ok);
+  EXPECT(document.find_layer("layer-1", layer));
+  EXPECT(layer.mask_density == static_cast<int>(density->default_value));
+  EXPECT(layer.mask_feather == static_cast<int>(feather->default_value));
+}
+
+void test_q06_layer_mask_feather_at_mode_maximum_round_trips() {
+  auto document = opened();
+  EXPECT(document.add_layer("layer-1", "人物") == pixcake::ResultCode::Ok);
+  EXPECT(document.add_mask("layer-1") == pixcake::ResultCode::Ok);
+  EXPECT(document.set_mask_density("layer-1", 0) == pixcake::ResultCode::Ok);
+  EXPECT(document.set_mask_feather("layer-1", 1000) == pixcake::ResultCode::Ok);
+  auto restored = pixcake::LayerDocument::decode(document.encode());
+  EXPECT(restored.has_value());
+  pixcake::LayerView layer;
+  EXPECT(restored && restored->find_layer("layer-1", layer));
+  EXPECT(layer.mask_density == 0);
+  EXPECT(layer.mask_feather == 1000);
+}
+
+// 把图层记录里的密度改成 101 并重算校验和：解码按参数模式拒绝。
+void test_q06_decode_rejects_density_outside_mode() {
+  auto document = opened();
+  EXPECT(document.add_layer("layer-1", "人物") == pixcake::ResultCode::Ok);
+  EXPECT(document.add_mask("layer-1") == pixcake::ResultCode::Ok);
+  EXPECT(document.set_mask_density("layer-1", 77) == pixcake::ResultCode::Ok);
+  EXPECT(document.set_mask_feather("layer-1", 913) == pixcake::ResultCode::Ok);
+  std::vector<std::uint8_t> bytes = document.encode();
+  // 密度与羽化相邻：77、913 两个小端 u32。
+  const std::vector<std::uint8_t> pattern = {77, 0, 0, 0, 0x91, 0x03, 0, 0};
+  std::size_t at = bytes.size();
+  for (std::size_t index = 0; index + pattern.size() <= bytes.size(); ++index) {
+    if (std::equal(pattern.begin(), pattern.end(), bytes.begin() + static_cast<std::ptrdiff_t>(index))) at = index;
+  }
+  EXPECT(at != bytes.size());
+  if (at == bytes.size()) return;
+  EXPECT(pixcake::LayerDocument::decode(bytes).has_value());
+  bytes[at] = 101;
+  const std::uint64_t body_size = read_le(bytes, 8, 8);
+  std::vector<std::uint8_t> sealed(bytes.begin(), bytes.begin() + 16 + static_cast<std::ptrdiff_t>(body_size));
+  write_le(sealed, pixcake::checksum_fnv1a64(sealed.data() + 16, static_cast<std::size_t>(body_size)), 8);
+  EXPECT(!pixcake::LayerDocument::decode(sealed).has_value());
+}
+
 int main() {
+  test_q06_new_mask_takes_defaults_from_parameter_modes();
+  test_q06_layer_mask_feather_at_mode_maximum_round_trips();
+  test_q06_decode_rejects_density_outside_mode();
   test_q06_selection_feather_at_mode_maximum_round_trips();
   test_c23_b73_stale_layer_save_is_rejected();
   test_b116_layer_file_without_revision_record_loads_as_zero();
