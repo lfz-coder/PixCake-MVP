@@ -102,7 +102,7 @@ git diff --check
 1. **蒙版密度没有参数模式**（见第 5 关 Q-06）。需要 test 版实测或用户给出范围与默认值后登记 `mask/density`。
 2. **不经命令入口的文档修改不记“已编辑”**：预设应用（`preset_library.cpp:271`）、批量同步与粘贴（`sync_batch.cpp:92、209`）、应用至精修的烘焙重置（`layer_document.cpp:858`）直接调用文档提交，不经过 `CommandGate`，所以不会通知 `CommitListener`。架构第 6.2 节要求用户发起的修改都从命令入口进入；这几条路径还没有对应的命令。
 3. **图片条件在渲染端没有来源**：模块会按“检测未完成、缺少素材、非纯色背景”跳过绘制，但 `render::compile` 的读取方对这些条件一律返回“满足”。在接上人物检测（`kernel/subject`）、素材（`kernel/assets`）和纯色判断之前，渲染端不会因此跳过能力。
-4. **并行会话隔离**：整改提交 `77ebff0` 一度带入了另一会话在 `tests/CMakeLists.txt` 里未提交的 `test_segmentation_contract` 注册（源文件未提交，干净检出会配置失败）；提交前已修正为只含本次改动，并核对过 HEAD 的 `tests/CMakeLists.txt` 引用的测试源文件都已入库。本轮构建改在干净工作树里做。
+4. **并行会话隔离**：整改提交（修正后为 `d77c724`）一度带入了另一会话在 `tests/CMakeLists.txt` 里未提交的 `test_segmentation_contract` 注册（源文件未提交，干净检出会配置失败）；提交前已修正为只含本次改动，并核对过 HEAD 的 `tests/CMakeLists.txt` 引用的测试源文件都已入库。本轮构建改在干净工作树里做。
 5. **观察**：轨道两端颜色仍无来源（`colors_confirmed` 为假）；壳层颗粒滑杆仍未绑定 `detail/grain_*`；应用层（`apps/`）还没有使用项目库、命令入口和导出队列，状态接线目前只在内核层成立。
 
 ## 总结论
