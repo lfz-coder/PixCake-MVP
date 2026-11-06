@@ -94,12 +94,19 @@ void test_c35_missing_kernel_parameter_is_unbound() {
 void test_c35_local_feather_and_crop_angle_come_from_parameter_modes() {
   const auto feather = slider_spec("羽化", refine_local_binding("羽化"));
   EXPECT(feather.bound);
-  EXPECT(feather.accessible_name == "羽化，范围 0 到 100，步进 1，默认 0");
+  EXPECT(feather.accessible_name == "羽化，范围 0 到 100，步进待确认，默认 0");
   EXPECT(!refine_local_binding("画笔").has_value());
   const auto angle = slider_spec("角度滑杆", refine_crop_angle_binding());
   EXPECT(angle.bound);
   EXPECT(angle.minimum == -45.0);
   EXPECT(angle.maximum == 45.0);
+}
+
+void test_b33_unconfirmed_step_and_default_are_labelled() {
+  const auto angle = slider_spec("角度滑杆", refine_crop_angle_binding());
+  EXPECT(angle.accessible_name == "角度滑杆，范围 -45 到 45，步进待确认，默认待确认");
+  const auto exposure = slider_spec("曝光", refine_color_binding("曝光"));
+  EXPECT(exposure.accessible_name == "曝光，范围 -5.00 到 5.00，步进 0.05，默认 0.00");
 }
 
 }  // namespace
@@ -111,5 +118,6 @@ int main() {
   test_c35_unbound_label_has_no_range();
   test_c35_missing_kernel_parameter_is_unbound();
   test_c35_local_feather_and_crop_angle_come_from_parameter_modes();
+  test_b33_unconfirmed_step_and_default_are_labelled();
   return failures == 0 ? 0 : 1;
 }

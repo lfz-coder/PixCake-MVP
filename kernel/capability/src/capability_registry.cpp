@@ -42,37 +42,72 @@ std::vector<ParameterMode> make_parameter_modes() {
   std::vector<ParameterMode> modes;
   const auto add = [&modes](std::string capability, std::string parameter, double minimum,
                             double maximum, double step, double default_value, std::string stage,
-                            std::string program, std::string channel, std::uint32_t order) {
-    modes.push_back(ParameterMode{std::move(capability), std::move(parameter), minimum, maximum, step,
-                                  default_value, std::move(stage), std::move(program), std::move(channel), 1,
-                                  order});
+                            std::string program, std::string channel, std::uint32_t order) -> ParameterMode& {
+    ParameterMode mode;
+    mode.capability_id = std::move(capability);
+    mode.parameter_id = std::move(parameter);
+    mode.minimum = minimum;
+    mode.maximum = maximum;
+    mode.step = step;
+    mode.default_value = default_value;
+    mode.render_stage = std::move(stage);
+    mode.render_program = std::move(program);
+    mode.render_channel = std::move(channel);
+    mode.order = order;
+    modes.push_back(std::move(mode));
+    return modes.back();
+  };
+  // 契约只给了范围（和默认值）、没给步进的参数：校验只查范围。
+  const auto add_unconfirmed_step = [&add](std::string capability, std::string parameter, double minimum,
+                                           double maximum, double default_value, std::string stage,
+                                           std::string program, std::string channel,
+                                           std::uint32_t order) -> ParameterMode& {
+    ParameterMode& mode = add(std::move(capability), std::move(parameter), minimum, maximum, 1.0, default_value,
+                              std::move(stage), std::move(program), std::move(channel), order);
+    mode.step_confirmed = false;
+    return mode;
   };
   const auto add_color = [&add](const std::string& capability, const std::string& program,
                                 std::uint32_t base_order) {
     add(capability, "temperature", -100.0, 100.0, 1.0, 0.0, "color", program, "temperature", base_order);
-    add(capability, "color_temperature", -100.0, 100.0, 1.0, 0.0, "color", program, "temperature", base_order);
     add(capability, "tint", -100.0, 100.0, 1.0, 0.0, "color", program, "tint", base_order);
-    add(capability, "color_tint", -100.0, 100.0, 1.0, 0.0, "color", program, "tint", base_order);
     add(capability, "exposure", -5.0, 5.0, 0.05, 0.0, "tone", program, "exposure", base_order);
     for (const char* parameter : {"contrast", "brightness", "highlights", "shadows", "whites",
                                   "blacks", "texture", "clarity", "dehaze", "vibrance", "saturation"}) {
       add(capability, parameter, -100.0, 100.0, 1.0, 0.0, "tone", program, parameter, base_order);
     }
   };
-  add("color.match", "amount", 0.0, 200.0, 1.0, 100.0, "color", "pixcake.color.match", "amount", 10);
-  add("color.style", "amount", 0.0, 200.0, 1.0, 100.0, "color", "pixcake.color.style", "amount", 11);
+  add_unconfirmed_step("color.match", "amount", 0.0, 200.0, 100.0, "color", "pixcake.color.match", "amount", 10);
+  add_unconfirmed_step("color.style", "amount", 0.0, 200.0, 100.0, "color", "pixcake.color.style", "amount", 11);
   add_color("color.global", "pixcake.color.global", 20);
   add_color("color.local", "pixcake.color.local", 21);
   add_color("color.post", "pixcake.color.post", 70);
-  add("mask", "feather", 0.0, 100.0, 1.0, 0.0, "mask", "pixcake.mask", "feather", 40);
-  add("crop", "angle", -45.0, 45.0, 1.0, 0.0, "geometry", "pixcake.crop", "angle", 50);
-  add("portrait.eye_glint", "vertical", -100.0, 100.0, 1.0, 0.0, "portrait", "pixcake.portrait.eye_glint", "vertical", 60);
-  add("portrait.eye_glint", "horizontal", -100.0, 100.0, 1.0, 0.0, "portrait", "pixcake.portrait.eye_glint", "horizontal", 60);
-  add("portrait.eye_glint", "rotation", -100.0, 100.0, 1.0, 0.0, "portrait", "pixcake.portrait.eye_glint", "rotation", 60);
-  add("pet.eye_glint", "vertical", -100.0, 100.0, 1.0, 0.0, "portrait", "pixcake.pet.eye_glint", "vertical", 63);
-  add("pet.eye_glint", "horizontal", -100.0, 100.0, 1.0, 0.0, "portrait", "pixcake.pet.eye_glint", "horizontal", 63);
-  add("pet.eye_glint", "rotation", -100.0, 100.0, 1.0, 0.0, "portrait", "pixcake.pet.eye_glint", "rotation", 63);
-  add("light.uniform", "brightness", -100.0, 100.0, 1.0, 0.0, "image", "pixcake.light.uniform", "brightness", 70);
+  // 配置文件（需求第 10.3 节）：标准、质感、黑白、基础，默认标准。
+  ParameterMode& profile = add("color.global", "profile", 0.0, 0.0, 1.0, 0.0, "color", "pixcake.color.global",
+                               "profile", 20);
+  profile.choices = {"standard", "texture", "monochrome", "basic"};
+  profile.default_choice = "standard";
+  // 黑白档禁用影调里的鲜艳度和饱和度（需求第 10.3 节、第 24 节第 9 条）。
+  for (auto& mode : modes) {
+    if (mode.capability_id == "color.global" && (mode.parameter_id == "vibrance" || mode.parameter_id == "saturation")) {
+      mode.disable_rules.push_back({"color.global", "profile", "monochrome", "黑白配置文件不调节鲜艳度和饱和度"});
+    }
+  }
+  // mask 不是能力：这是 kernel/mask 蒙版属性“羽化”的显示刻度，不写入精修文档片段。
+  add_unconfirmed_step("mask", "feather", 0.0, 100.0, 0.0, "mask", "pixcake.mask", "feather", 40);
+  ParameterMode& angle = add_unconfirmed_step("crop", "angle", -45.0, 45.0, 0.0, "geometry", "pixcake.crop", "angle", 50);
+  angle.default_confirmed = false;
+  for (const char* axis : {"vertical", "horizontal", "rotation"}) {
+    const std::string parameter = std::string("eye_glint_") + axis;
+    add_unconfirmed_step("portrait.feature", parameter, -100.0, 100.0, 0.0, "portrait",
+                         "pixcake.portrait.feature", parameter, 60);
+    add_unconfirmed_step("pet", parameter, -100.0, 100.0, 0.0, "portrait", "pixcake.pet", parameter, 63);
+  }
+  add_unconfirmed_step("image.background", "light_uniform_brightness", -100.0, 100.0, 0.0, "image",
+                       "pixcake.image.background", "light_uniform_brightness", 70);
+  // 导出品质：0 到 14 的整数（需求第 19 节）；默认值需求未写。export 不是能力，不写入精修文档。
+  ParameterMode& quality = add("export", "quality", 0.0, 14.0, 1.0, 0.0, "export", "", "quality", 0);
+  quality.default_confirmed = false;
   return modes;
 }
 
@@ -245,6 +280,23 @@ const ParameterMode* find_parameter_mode(std::string_view capability_id, std::st
   return nullptr;
 }
 
+std::optional<std::string> parameter_disabled_reason(
+    std::string_view capability_id, std::string_view parameter_id,
+    const std::function<std::optional<std::string>(std::string_view, std::string_view)>& committed_value) {
+  const ParameterMode* mode = find_parameter_mode(capability_id, parameter_id);
+  if (mode == nullptr) return std::nullopt;
+  for (const auto& rule : mode->disable_rules) {
+    std::optional<std::string> current = committed_value ? committed_value(rule.when_capability_id, rule.when_parameter_id)
+                                                         : std::nullopt;
+    if (!current) {
+      const ParameterMode* condition = find_parameter_mode(rule.when_capability_id, rule.when_parameter_id);
+      if (condition != nullptr && !condition->default_choice.empty()) current = condition->default_choice;
+    }
+    if (current && *current == rule.when_choice) return rule.reason;
+  }
+  return std::nullopt;
+}
+
 bool parse_number(std::string_view text, double& value) {
   if (text.empty()) return false;
   std::string copy(text);
@@ -262,11 +314,18 @@ bool step_aligned(double value, double step) {
 
 bool validate_parameter_display_value(std::string_view capability_id, std::string_view parameter_id,
                                       std::string_view display_value) {
+  const ParameterMode* mode = find_parameter_mode(capability_id, parameter_id);
+  if (mode == nullptr) return false;
+  if (!mode->choices.empty()) {
+    for (const auto& choice : mode->choices) {
+      if (choice == display_value) return true;
+    }
+    return false;
+  }
   double value = 0.0;
   if (!parse_number(display_value, value)) return false;
-  const ParameterMode* mode = find_parameter_mode(capability_id, parameter_id);
-  return mode != nullptr && value >= mode->minimum && value <= mode->maximum &&
-         step_aligned(value - mode->minimum, mode->step);
+  if (value < mode->minimum || value > mode->maximum) return false;
+  return !mode->step_confirmed || step_aligned(value - mode->minimum, mode->step);
 }
 
 }  // namespace pixcake

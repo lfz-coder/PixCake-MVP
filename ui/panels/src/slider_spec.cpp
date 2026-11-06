@@ -78,9 +78,13 @@ SliderSpec slider_spec(std::string label, const std::optional<SliderBinding>& bi
   spec.tick_count = static_cast<int>(std::lround((mode->maximum - mode->minimum) / mode->step));
   spec.default_tick = static_cast<int>(std::lround((mode->default_value - mode->minimum) / mode->step));
   spec.default_text = format_value(mode->default_value, spec.decimals);
+  // 参数模式标明步进或默认值没有来源时，只写“待确认”，不把内部取值当成事实展示。
+  const std::string step_text =
+      mode->step_confirmed ? "步进 " + format_value(mode->step, spec.decimals) : std::string("步进待确认");
+  const std::string default_text =
+      mode->default_confirmed ? "默认 " + spec.default_text : std::string("默认待确认");
   spec.accessible_name = spec.label + "，范围 " + format_value(mode->minimum, spec.decimals) + " 到 " +
-                         format_value(mode->maximum, spec.decimals) + "，步进 " +
-                         format_value(mode->step, spec.decimals) + "，默认 " + spec.default_text;
+                         format_value(mode->maximum, spec.decimals) + "，" + step_text + "，" + default_text;
   return spec;
 }
 

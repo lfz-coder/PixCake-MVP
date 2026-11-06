@@ -126,8 +126,20 @@ CompileResult compile(const EditDocument& document, const CapabilityRegistry& re
         continue;
       }
       double numeric = 0.0;
-      if (!parse_number(*value, numeric) ||
-          !validate_parameter_display_value(capability_id, mode.parameter_id, *value)) {
+      bool numeric_ok = false;
+      if (!mode.choices.empty()) {
+        // 枚举参数：数值是可选值在参数模式里的序号，显示值保留稳定标识。
+        for (std::size_t index = 0; index < mode.choices.size(); ++index) {
+          if (mode.choices[index] == *value) {
+            numeric = static_cast<double>(index);
+            numeric_ok = true;
+            break;
+          }
+        }
+      } else {
+        numeric_ok = parse_number(*value, numeric);
+      }
+      if (!numeric_ok || !validate_parameter_display_value(capability_id, mode.parameter_id, *value)) {
         operation = make_operation(mode);
         operation.enabled = false;
         operation.disabled_reason = "参数值不符合参数模式";

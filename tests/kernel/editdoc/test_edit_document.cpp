@@ -331,9 +331,44 @@ void test_b73_reloaded_handle_commits_next_revision() {
   EXPECT(reloaded.committed_parameter("color.global", "exposure") == std::optional<std::string>("-1.00"));
 }
 
+pixcake::ResultCode commit_value(pixcake::EditDocument& document, pixcake::test::FakeFileSystem& files,
+                                 const std::string& capability, const std::string& parameter, const std::string& value) {
+  const pixcake::ResultCode previewed = document.set_preview(capability, parameter, value);
+  if (previewed != pixcake::ResultCode::Ok) return previewed;
+  return document.commit_preview(document.revision(), capability, parameter, color_limits(), files, kPath);
+}
+
+void test_c05_monochrome_profile_blocks_vibrance_edits() {
+  pixcake::test::FakeFileSystem files;
+  auto document = *pixcake::EditDocument::create("img-1");
+  EXPECT(commit_value(document, files, "color.global", "vibrance", "20") == pixcake::ResultCode::Ok);
+  EXPECT(commit_value(document, files, "color.global", "profile", "monochrome") == pixcake::ResultCode::Ok);
+  const auto revision = document.revision();
+  EXPECT(document.set_preview("color.global", "vibrance", "30") == pixcake::ResultCode::StateConflict);
+  EXPECT(document.commit_preview(revision, "color.global", "vibrance", color_limits(), files, kPath) ==
+         pixcake::ResultCode::StateConflict);
+  EXPECT(document.revision() == revision);
+  EXPECT(document.committed_parameter("color.global", "vibrance") == std::optional<std::string>("20"));
+  EXPECT(commit_value(document, files, "color.global", "contrast", "5") == pixcake::ResultCode::Ok);
+  EXPECT(commit_value(document, files, "color.global", "profile", "standard") == pixcake::ResultCode::Ok);
+  EXPECT(commit_value(document, files, "color.global", "vibrance", "30") == pixcake::ResultCode::Ok);
+}
+
+void test_q02_mask_scope_is_not_a_document_fragment() {
+  pixcake::test::FakeFileSystem files;
+  auto document = *pixcake::EditDocument::create("img-1");
+  std::vector<pixcake::VersionLimit> limits = color_limits();
+  limits.push_back({"mask", 1});
+  document.set_preview("mask", "feather", "10");
+  EXPECT(document.commit_preview(0, "mask", "feather", limits, files, kPath) == pixcake::ResultCode::StateConflict);
+  EXPECT(!document.fragment("mask").has_value());
+}
+
 }  // namespace
 
 int main() {
+  test_c05_monochrome_profile_blocks_vibrance_edits();
+  test_q02_mask_scope_is_not_a_document_fragment();
   test_c23_b73_stale_commit_preview_is_rejected();
   test_c23_b73_stale_fragment_replacement_is_rejected();
   test_c23_b73_stale_baked_reset_is_rejected();

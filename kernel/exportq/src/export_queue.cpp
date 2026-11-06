@@ -1,4 +1,5 @@
 #include "pixcake/exportq/export_queue.hpp"
+#include "pixcake/exportq/export_settings.hpp"
 
 #include "pixcake/support/checksum.hpp"
 
@@ -205,19 +206,6 @@ std::string parent_directory(const std::string& path) {
   return path.substr(0, slash);
 }
 
-bool valid_quality_setting(const std::string& settings) {
-  const std::string key = "quality=";
-  const auto at = settings.find(key);
-  if (at == std::string::npos) return true;
-  const auto begin = at + key.size();
-  const auto end = settings.find_first_of(";&, ", begin);
-  const std::string value = settings.substr(begin, end == std::string::npos ? std::string::npos : end - begin);
-  if (value.empty()) return false;
-  char* parsed_end = nullptr;
-  const long parsed = std::strtol(value.c_str(), &parsed_end, 10);
-  return parsed_end == value.c_str() + value.size() && parsed >= 0 && parsed <= 14;
-}
-
 }  // namespace
 
 ExportQueue::ExportQueue(std::string cache_directory, std::vector<ExportEvent> events)
@@ -312,10 +300,14 @@ ResultCode ExportQueue::enqueue(const ExportJob& job) {
   }
   if (!safe_export_id(normalized.export_id) || normalized.original_id.empty() || normalized.document_snapshot.empty() ||
       normalized.original_id.find('\0') != std::string::npos ||
-      !valid_quality_setting(normalized.settings_snapshot) ||
       !path_within_root(normalized.destination_path, normalized.destination_root)) {
     return ResultCode::StateConflict;
   }
+  ExportSettings settings;
+  if (parse_export_settings(normalized.settings_snapshot, settings) != ResultCode::Ok) {
+    return ResultCode::StateConflict;
+  }
+  normalized.settings_snapshot = encode_export_settings(settings);
   const auto shot = fold(events_);
   if (shot.jobs.find(normalized.export_id) != shot.jobs.end()) {
     return ResultCode::Ok;

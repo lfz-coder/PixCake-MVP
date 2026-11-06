@@ -1,7 +1,9 @@
 #include "pixcake/capability/capability_registry.hpp"
 
 #include <cstdio>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -41,8 +43,64 @@ void test_parameter_modes() {
   EXPECT(!pixcake::validate_parameter_display_value("mask", "feather", "100.5"));
   EXPECT(pixcake::validate_parameter_display_value("crop", "angle", "-45"));
   EXPECT(!pixcake::validate_parameter_display_value("crop", "angle", "45.5"));
-  EXPECT(pixcake::validate_parameter_display_value("portrait.eye_glint", "rotation", "-100"));
-  EXPECT(!pixcake::validate_parameter_display_value("portrait.eye_glint", "rotation", "101"));
+  EXPECT(pixcake::validate_parameter_display_value("portrait.feature", "eye_glint_rotation", "-100"));
+  EXPECT(!pixcake::validate_parameter_display_value("portrait.feature", "eye_glint_rotation", "101"));
+}
+
+void test_c05_profile_is_an_enum_parameter() {
+  const auto* profile = pixcake::find_parameter_mode("color.global", "profile");
+  EXPECT(profile != nullptr);
+  if (profile != nullptr) {
+    EXPECT(profile->choices == std::vector<std::string>({"standard", "texture", "monochrome", "basic"}));
+    EXPECT(profile->default_choice == "standard");
+  }
+  EXPECT(pixcake::validate_parameter_display_value("color.global", "profile", "monochrome"));
+  EXPECT(!pixcake::validate_parameter_display_value("color.global", "profile", "黑白"));
+  EXPECT(!pixcake::validate_parameter_display_value("color.global", "profile", "1"));
+}
+
+void test_c31_parameter_modes_use_registered_capabilities() {
+  const auto registry = pixcake::CapabilityRegistry::phase_one();
+  for (const auto& mode : pixcake::phase_one_parameter_modes()) {
+    if (mode.capability_id == "mask" || mode.capability_id == "export") continue;
+    if (registry.find(mode.capability_id) == nullptr) {
+      std::fprintf(stderr, "unregistered capability in parameter mode: %s/%s\n", mode.capability_id.c_str(),
+                   mode.parameter_id.c_str());
+      EXPECT(registry.find(mode.capability_id) != nullptr);
+    }
+  }
+  EXPECT(pixcake::find_parameter_mode("color.global", "color_temperature") == nullptr);
+  EXPECT(pixcake::find_parameter_mode("color.global", "color_tint") == nullptr);
+  EXPECT(pixcake::find_parameter_mode("pet", "eye_glint_vertical") != nullptr);
+  EXPECT(pixcake::find_parameter_mode("image.background", "light_uniform_brightness") != nullptr);
+}
+
+void test_c05_monochrome_disables_vibrance_and_saturation() {
+  std::string profile = "monochrome";
+  const auto lookup = [&profile](std::string_view capability, std::string_view parameter) -> std::optional<std::string> {
+    if (capability == "color.global" && parameter == "profile") return profile;
+    return std::nullopt;
+  };
+  EXPECT(pixcake::parameter_disabled_reason("color.global", "vibrance", lookup) ==
+         std::optional<std::string>("黑白配置文件不调节鲜艳度和饱和度"));
+  EXPECT(pixcake::parameter_disabled_reason("color.global", "saturation", lookup).has_value());
+  EXPECT(!pixcake::parameter_disabled_reason("color.global", "contrast", lookup).has_value());
+  profile = "standard";
+  EXPECT(!pixcake::parameter_disabled_reason("color.global", "vibrance", lookup).has_value());
+  const auto none = [](std::string_view, std::string_view) -> std::optional<std::string> { return std::nullopt; };
+  EXPECT(!pixcake::parameter_disabled_reason("color.global", "vibrance", none).has_value());
+}
+
+void test_b33_unconfirmed_step_checks_range_only() {
+  const auto* feather = pixcake::find_parameter_mode("mask", "feather");
+  EXPECT(feather != nullptr && !feather->step_confirmed && feather->default_confirmed);
+  const auto* angle = pixcake::find_parameter_mode("crop", "angle");
+  EXPECT(angle != nullptr && !angle->step_confirmed && !angle->default_confirmed);
+  const auto* exposure = pixcake::find_parameter_mode("color.global", "exposure");
+  EXPECT(exposure != nullptr && exposure->step_confirmed && exposure->default_confirmed);
+  EXPECT(pixcake::validate_parameter_display_value("mask", "feather", "12.5"));
+  EXPECT(!pixcake::validate_parameter_display_value("mask", "feather", "100.5"));
+  EXPECT(!pixcake::validate_parameter_display_value("color.global", "exposure", "0.03"));
 }
 
 void test_pipeline() {
@@ -144,6 +202,10 @@ int main() {
   EXPECT(global_order.has_value());
   if (style_order && global_order) EXPECT(*style_order < *global_order);
   test_parameter_modes();
+  test_c05_profile_is_an_enum_parameter();
+  test_c31_parameter_modes_use_registered_capabilities();
+  test_b33_unconfirmed_step_checks_range_only();
+  test_c05_monochrome_disables_vibrance_and_saturation();
   test_pipeline();
 
   if (g_failures != 0) {

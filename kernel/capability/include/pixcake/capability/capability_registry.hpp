@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -47,6 +48,14 @@ struct PipelineStep {
         dependencies(std::move(deps)) {}
 };
 
+// 条件参数取某个枚举值时，目标参数不可编辑。
+struct ParameterDisableRule {
+  std::string when_capability_id;
+  std::string when_parameter_id;
+  std::string when_choice;
+  std::string reason;
+};
+
 struct ParameterMode {
   std::string capability_id;
   std::string parameter_id;
@@ -61,6 +70,13 @@ struct ParameterMode {
   std::string render_channel;
   std::uint32_t schema_version = 1;
   std::uint32_t order = 0;
+  // 非空即为枚举参数，显示值只能是其中之一；minimum/maximum/step 不使用。
+  std::vector<std::string> choices;
+  std::string default_choice;
+  // 需求或契约没有写明步进、默认值时为假：校验只查范围，界面标“待确认”。
+  bool step_confirmed = true;
+  bool default_confirmed = true;
+  std::vector<ParameterDisableRule> disable_rules;
 };
 
 std::vector<PipelineStep> phase_one_pipeline();
@@ -69,6 +85,10 @@ std::vector<std::string> phase_one_pipeline_order(std::string* error = nullptr);
 std::optional<std::uint32_t> phase_one_capability_order(std::string_view capability_id);
 const std::vector<ParameterMode>& phase_one_parameter_modes();
 const ParameterMode* find_parameter_mode(std::string_view capability_id, std::string_view parameter_id);
+// 参数当前是否不可编辑。committed_value 返回条件参数的已提交值；没有时按该参数的 default_choice 判断。
+std::optional<std::string> parameter_disabled_reason(
+    std::string_view capability_id, std::string_view parameter_id,
+    const std::function<std::optional<std::string>(std::string_view, std::string_view)>& committed_value);
 
 // Validates the ranges and steps explicitly defined by the phase-one contract.
 // An unknown parameter is rejected until its owning capability publishes a

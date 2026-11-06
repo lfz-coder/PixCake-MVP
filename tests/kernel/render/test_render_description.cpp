@@ -75,6 +75,23 @@ void test_preview_without_committed_fragment_is_renderable() {
   EXPECT(document.fragments().empty());
 }
 
+void test_c05_profile_choice_is_rendered_as_choice_index() {
+  auto document = *pixcake::EditDocument::create("img-profile");
+  EXPECT(document.set_preview("color.global", "profile", "monochrome") == pixcake::ResultCode::Ok);
+  const auto result = pixcake::render::compile(document);
+  EXPECT(result.code == pixcake::ResultCode::Ok);
+  EXPECT(result.description.operations.size() == 1);
+  if (result.description.operations.size() == 1) {
+    const auto& operation = result.description.operations[0];
+    EXPECT(operation.enabled);
+    EXPECT(operation.values.size() == 1);
+    if (operation.values.size() == 1) {
+      EXPECT(operation.values[0].display_value == "monochrome");
+      EXPECT(operation.values[0].numeric_value == 2.0);
+    }
+  }
+}
+
 void test_capability_order_is_stable_across_parameters() {
   auto document = *pixcake::EditDocument::create("img-order");
   EXPECT(document.set_preview("color.global", "contrast", "1") == pixcake::ResultCode::Ok);
@@ -137,6 +154,7 @@ void test_layer_and_mask_inputs_are_descriptive() {
 int main() {
   test_compile_is_read_only_and_uses_stable_fields();
   test_preview_without_committed_fragment_is_renderable();
+  test_c05_profile_choice_is_rendered_as_choice_index();
   test_capability_order_is_stable_across_parameters();
   test_too_new_fragment_is_skipped_and_preserved();
   test_layer_and_mask_inputs_are_descriptive();

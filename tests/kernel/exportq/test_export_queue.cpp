@@ -1,6 +1,7 @@
 #include "pixcake/command/command_gate.hpp"
 #include "pixcake/exportq/export_book.hpp"
 #include "pixcake/exportq/export_queue.hpp"
+#include "pixcake/exportq/export_settings.hpp"
 #include "pixcake/ledger/credit_ledger.hpp"
 #include "pixcake/storage/sqlite_export_log.hpp"
 #include "support/fake_file_system.hpp"
@@ -8,6 +9,7 @@
 
 #include <cstdio>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -158,7 +160,7 @@ void test_snapshot_and_fast_export_stay() {
   pixcake::ExportJob stored;
   EXPECT(queue.find_job("exp-1", stored));
   EXPECT(stored.document_revision == 7);
-  EXPECT(stored.settings_snapshot == "quality=8");
+  EXPECT(stored.settings_snapshot == "format=original;quality=8");
 
   EXPECT(queue.set_fast_export(true) == pixcake::ResultCode::Ok);
   EXPECT(queue.enabled());
@@ -185,6 +187,50 @@ void test_snapshot_and_fast_export_stay() {
   EXPECT(!queue.enabled());
   preview.name = "preview";
   EXPECT(gate.submit(preview).code == pixcake::ResultCode::Ok);
+}
+
+void test_b32_export_settings_parse_strictly() {
+  pixcake::ExportSettings settings;
+  for (const char* accepted : {"", "format=jpg;quality=14", "format=jpg;size_limit_kb=500", "copies=2",
+                               "format=tiff;srgb=1"}) {
+    if (pixcake::parse_export_settings(accepted, settings) != pixcake::ResultCode::Ok) {
+      std::fprintf(stderr, "rejected valid export settings: %s\n", accepted);
+      EXPECT(false);
+    }
+  }
+  for (const char* rejected : {"quality=15", "quality=", "quality=3.5", "quality=-1", "quality=3;quality=4",
+                               "quality=3;size_limit_kb=100", "size_limit_kb=0", "format=png", "unknown=1",
+                               "quality = 3", "srgb=2", "copies=-1", ";", "quality"}) {
+    if (pixcake::parse_export_settings(rejected, settings) != pixcake::ResultCode::StateConflict) {
+      std::fprintf(stderr, "accepted invalid export settings: %s\n", rejected);
+      EXPECT(false);
+    }
+  }
+  EXPECT(pixcake::parse_export_settings("format=jpg;quality=8;srgb=1;copies=3", settings) == pixcake::ResultCode::Ok);
+  EXPECT(settings.format == pixcake::ExportFormat::Jpg);
+  EXPECT(settings.quality == std::optional<int>(8));
+  EXPECT(!settings.size_limit_kb.has_value());
+  EXPECT(settings.convert_to_srgb);
+  EXPECT(settings.print_copies == 3);
+}
+
+void test_b32_enqueue_rejects_duplicate_quality() {
+  auto queue = pixcake::ExportQueue::open("/cache/exports");
+  auto job = job_of("dup-quality", "orig", "/out/dup.jpg");
+  job.settings_snapshot = "quality=3;quality=99";
+  EXPECT(queue.enqueue(job) == pixcake::ResultCode::StateConflict);
+  pixcake::ExportJob stored;
+  EXPECT(!queue.find_job("dup-quality", stored));
+}
+
+void test_b32_enqueue_stores_canonical_settings() {
+  auto queue = pixcake::ExportQueue::open("/cache/exports");
+  auto job = job_of("canonical", "orig", "/out/canonical.jpg");
+  job.settings_snapshot = "quality=8;format=jpg";
+  EXPECT(queue.enqueue(job) == pixcake::ResultCode::Ok);
+  pixcake::ExportJob stored;
+  EXPECT(queue.find_job("canonical", stored));
+  EXPECT(stored.settings_snapshot == "format=jpg;quality=8");
 }
 
 void test_quality_is_limited_by_export_contract() {
@@ -299,7 +345,7 @@ void test_disk_full_then_retry_uses_the_snapshot() {
   EXPECT(queue.retry("exp-1") == pixcake::ResultCode::Ok);
   pixcake::ExportJob stored;
   EXPECT(queue.find_job("exp-1", stored));
-  EXPECT(stored.settings_snapshot == "quality=8");
+  EXPECT(stored.settings_snapshot == "format=original;quality=8");
   EXPECT(stored.document_revision == 7);
   EXPECT(queue.prepare("exp-1") == pixcake::ResultCode::Ok);
   EXPECT(queue.start_rendering("exp-1") == pixcake::ResultCode::Ok);
@@ -362,7 +408,7 @@ void test_cancel_removes_temp_and_print_is_unavailable() {
   reach_render(queue, job);
   pixcake::ExportJob stored;
   EXPECT(queue.find_job("exp-1", stored));
-  EXPECT(stored.settings_snapshot == "copies=2");
+  EXPECT(stored.settings_snapshot == "format=original;copies=2");
   EXPECT(queue.cancel("exp-1") == pixcake::ResultCode::Ok);
   EXPECT(queue.status("exp-1") == "取消");
   EXPECT(files.files.count("/cache/exports/exp-1") == 0);
@@ -721,6 +767,9 @@ void test_duplicate_task_cache_key_is_state_conflict_and_one_row_round_trips() {
 }  // namespace
 
 int main() {
+  test_b32_export_settings_parse_strictly();
+  test_b32_enqueue_rejects_duplicate_quality();
+  test_b32_enqueue_stores_canonical_settings();
   test_snapshot_and_fast_export_stay();
   test_quality_is_limited_by_export_contract();
   test_b63_stale_export_handle_cannot_publish_after_cancel();

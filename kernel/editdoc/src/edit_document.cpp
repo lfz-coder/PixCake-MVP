@@ -320,6 +320,17 @@ std::optional<std::uint64_t> durable_document_revision(const std::vector<std::ui
   return decoded->revision();
 }
 
+// 按本文档已提交的条件参数判断目标参数是否被禁用。
+bool parameter_disabled_in(const EditDocument& document, const std::string& capability_id,
+                           const std::string& parameter_id) {
+  return parameter_disabled_reason(capability_id, parameter_id,
+                                   [&document](std::string_view capability, std::string_view parameter) {
+                                     return document.committed_parameter(std::string(capability),
+                                                                         std::string(parameter));
+                                   })
+      .has_value();
+}
+
 }  // namespace
 
 LoadResult EditDocument::load(EditDocument& destination, FileSystem& files, const std::string& path,
@@ -628,7 +639,7 @@ std::optional<std::string> EditDocument::committed_parameter(const std::string& 
 
 ResultCode EditDocument::set_preview(const std::string& capability_id, const std::string& parameter_id,
                                      const std::string& display_value) {
-  if (capability_id.empty() || parameter_id.empty()) {
+  if (capability_id.empty() || parameter_id.empty() || parameter_disabled_in(*this, capability_id, parameter_id)) {
     return ResultCode::StateConflict;
   }
   preview_[{capability_id, parameter_id}] = display_value;
@@ -673,6 +684,11 @@ ResultCode EditDocument::commit_preview(std::uint64_t expected_revision, const s
     return scope.code();
   }
   if (expected_revision != revision() || capability_id.empty() || parameter_id.empty()) {
+    return ResultCode::StateConflict;
+  }
+  // 只有已注册的能力能写成文档片段；被禁用的参数不能提交。
+  if (CapabilityRegistry::phase_one().find(capability_id) == nullptr ||
+      parameter_disabled_in(*this, capability_id, parameter_id)) {
     return ResultCode::StateConflict;
   }
   const auto preview_value = preview(capability_id, parameter_id);
