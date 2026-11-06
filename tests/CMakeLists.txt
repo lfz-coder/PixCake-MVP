@@ -170,9 +170,17 @@ add_executable(test_renderd apps/test_renderd.cpp)
 target_link_libraries(test_renderd PRIVATE pixcake_renderd_service pixcake_warnings)
 add_test(NAME test_renderd COMMAND test_renderd)
 
+add_executable(test_renderd_image_io apps/test_renderd_image_io.cpp)
+target_link_libraries(test_renderd_image_io PRIVATE pixcake_renderd_service pixcake_warnings)
+add_test(NAME test_renderd_image_io COMMAND test_renderd_image_io)
+
 add_executable(test_exportd apps/test_exportd.cpp)
 target_link_libraries(test_exportd PRIVATE pixcake_exportd_service pixcake_warnings)
 add_test(NAME test_exportd COMMAND test_exportd)
+
+add_executable(test_exportd_image_io apps/test_exportd_image_io.cpp)
+target_link_libraries(test_exportd_image_io PRIVATE pixcake_exportd_service pixcake_warnings)
+add_test(NAME test_exportd_image_io COMMAND test_exportd_image_io)
 
 add_test(
   NAME arch_dependencies

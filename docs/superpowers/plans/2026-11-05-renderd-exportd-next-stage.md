@@ -1,7 +1,7 @@
 # renderd / exportd 下一阶段计划：图像 I/O 与进程协议证据门
 
 日期：2026-11-05
-状态：Task 0 初查完成；Task 1–4 待依赖和协议证据确认
+状态：Task 0 选型证据完成；Task 1 适配器契约初版完成；Task 2–4 待协议和真实库验证
 范围：仅 `apps/renderd`、`apps/exportd` 及其明确的公共进程协议；不修改并行工作的 `gpu/render`。
 
 ## 当前证据
@@ -12,7 +12,9 @@
 - 官方手册确认预览最长边为 4000；导出使用原图分辨率，并提供格式、品质 0–14、色彩空间、水印、排版印刷等设置（<https://i.pixcakeai.com/guide/32483>）。官方页面没有规定本地进程的 IPC 字节布局或第三方库选择。
 - 全局第三方依赖规范已写入 `docs/superpowers/specs/2026-11-06-pixcake-third-party-dependency-policy.md`：通用能力优先使用维护中的第三方库，手写实现必须有例外证据；库的来源、版本、许可证、平台和可复现构建必须可追溯。
 
-Task 0 初查结果：项目顶层只冻结 C++17 和现有 CMake 目标；`kernel/import` 的实现是来源探测，架构门禁明确禁止内核直接包含图像库头。设计文档以 macOS 第一阶段验收、Windows/鸿蒙复用项目结构为目标。下一步可以评估 OpenImageIO、libvips 和 LibRaw 等官方候选，但在完成许可证、传递依赖、插件部署、平台支持和资源上限比较前，不把任何候选写进生产 CMake。
+Task 0 结果：项目顶层只冻结 C++17 和现有 CMake 目标；`kernel/import` 的实现是来源探测，架构门禁明确禁止内核直接包含图像库头。设计文档以 macOS 第一阶段验收、Windows/鸿蒙复用项目结构为目标。候选比较后，先锁定 libvips 8.18.7 作为 raster/RAW 适配的主候选：官方发布页标记为最新稳定版本，签名提交为 `24ad4d0`；官方构建使用 Meson 0.56+，核心依赖为 GLib/GObject/Expat，JPEG/PNG/TIFF/RAW 由可选依赖启用。它的许可证为 LGPL-2.1-or-later，必须以共享库/模块部署和许可证文本审计为前置条件。OpenImageIO 保留为备选：其当前文档要求 CMake 3.23，与本项目 3.20 基线和更重的传递依赖不匹配；LibRaw 只覆盖 RAW，不能独立满足 JPEG/PNG/TIFF 和缩略图编码。
+
+锁定记录见 `third_party/libvips.lock.cmake`。官方源码包下载地址和版本已记录，SHA-256 由官方发布包的归档索引交叉核对；当前受限环境无法用 shell DNS 下载源码，因此在本地依赖缓存可用前不把 libvips 写入生产链接目标。
 
 ## 分步任务
 
@@ -25,9 +27,11 @@ Task 0 初查结果：项目顶层只冻结 C++17 和现有 CMake 目标；`kern
 
 ### Task 1 — 图像 I/O 适配器契约
 
-- 冻结第三方库适配层 `ImageDecoder`、预览缩放和 `ExportEncoder` 的输入/输出、错误码、最大尺寸和资源释放语义；适配层不复制库的通用算法。
+- 冻结第三方库适配层 `ImageDecoder`、预览缩放和 `ExportEncoder` 的输入/输出、错误码、最大尺寸和资源释放语义；适配层不复制库的通用算法。契约先落在 `apps/renderd`、`apps/exportd`，不向 `kernel/` 暴露图像库头。
 - 解码结果必须进入现有 `RgbaInput`；缩略图和预览沿用 4000 最长边限制；导出不得复用预览尺寸。
 - 编码器输出必须通过 `ExportQueue` 的临时文件和提交事务，禁止服务直接写目标文件。
+
+执行结果：`apps/renderd/image_io.hpp` 和 `apps/exportd/image_io.hpp` 已冻结纯项目接口；实现了输入/输出缓冲区校验、尺寸/像素数/字节数限制、0–14 质量范围、`UnsupportedFormat`/`ImageCorrupt`/`IoFailed` 映射和第三方对象不得跨调用保留的所有权要求。新增 `test_renderd_image_io`、`test_exportd_image_io` 已通过。真实 libvips 对接仍留在 Task 3，不能把契约测试当作真实解码/编码完成。
 
 ### Task 2 — 跨进程协议契约
 

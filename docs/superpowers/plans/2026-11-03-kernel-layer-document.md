@@ -12,7 +12,7 @@
 
 - 图层文档记下图层树、混合、不透明度、锁定、隐藏、分组、蒙版、选区、生成记录、来源图片和来源修订。成功时按结果形状落层，结果编号去重。批量设计进行中拒绝编辑。精修滑杆不在这里（契约 C-28、架构第 6.5 节）。
 - 混合模式只有：正常、正片叠底、滤色、变亮、变暗。不透明度 0–100，默认 100。出处是手册 [创意模块功能说明](https://www.pixcakeai.com/guide/127932)（2026-09-14），不是从界面猜的。
-- 选区羽化是 0–1000。出处是手册 [消除——AI祛路人](https://www.pixcakeai.com/guide/158249)（2026-09-17）。蒙版密度和蒙版羽化，[工作区页面介绍](https://www.pixcakeai.com/guide/32445)、创意模块功能说明、AI 祛路人都只写「可以调整」，没有写上下限。这两项保存非负整数，不套用不透明度的 100，也不套用选区羽化的 1000。负数是状态冲突。新蒙版先写成密度 100、羽化 0，这只是文件里的初始值，手册没有写默认值。
+- 选区羽化是 0–1000。出处是手册 [消除——AI祛路人](https://www.pixcakeai.com/guide/158249)（2026-09-17）。蒙版羽化是 0–100，默认 0。2026-11-03 在像素蛋糕-test 9.3.0 的精修、局部调色里，选中蒙版后羽化滑杆接受 100，写入 101 时读回 100。契约清单和阶段设计也写蒙版羽化 0–100。蒙版密度在那几份手册里只写可以调整，没有写上下限，继续只保存非负整数。负数是状态冲突。新蒙版先写成密度 100、羽化 0。
 - 从精修进入时记录来源图片和来源修订，不复制精修滑杆。更新原图在精修信封上留下效果已烘焙、滑杆已重置。用户没选写回时，精修文档不动。更新之后不能靠重置效果回到原图（契约 C-29、架构第 6.5 节、第 8 节）。
 - 结果形状只允许：新图层、替换当前生成图层、细节层加效果层、图层组、可编辑蒙版的图层、可改位置和大小的图层。工具不操作界面，图层文档执行形状（架构第 8 节）。
 - 同一结果编号再落一次不新增图层（架构第 8 节、边界 B-72、B-106）。
@@ -143,10 +143,11 @@ void test_group_mask_selection_and_batch_design() {
   pixcake::LayerView masked;
   EXPECT(document.find_layer("layer-1", masked));
   EXPECT(masked.mask_density == 101);
-  EXPECT(document.set_mask_feather("layer-1", 1001) == pixcake::ResultCode::Ok);
+  EXPECT(document.set_mask_feather("layer-1", 100) == pixcake::ResultCode::Ok);
+  EXPECT(document.set_mask_feather("layer-1", 101) == pixcake::ResultCode::StateConflict);
   EXPECT(document.set_mask_feather("layer-1", -1) == pixcake::ResultCode::StateConflict);
   EXPECT(document.find_layer("layer-1", masked));
-  EXPECT(masked.mask_feather == 1001);
+  EXPECT(masked.mask_feather == 100);
   EXPECT(document.set_selection(true, 12) == pixcake::ResultCode::Ok);
   EXPECT(document.selection().present);
   EXPECT(document.selection().feather == 12);
@@ -678,7 +679,7 @@ ResultCode LayerDocument::set_mask_density(const std::string& id, int density) {
 }
 
 ResultCode LayerDocument::set_mask_feather(const std::string& id, int feather) {
-  if (!editable() || feather < 0) {
+  if (!editable() || feather < 0 || feather > 100) {
     return ResultCode::StateConflict;
   }
   LayerView* layer = find(id);
@@ -1102,7 +1103,7 @@ bool decode_layer(const std::vector<std::uint8_t>& payload, LayerView& layer) {
   if (!layer.parent_id.empty() && !safe_id(layer.parent_id)) {
     return false;
   }
-  if (opacity > 100) {
+  if (opacity > 100 || feather > 100) {
     return false;
   }
   layer.opacity = static_cast<int>(opacity);

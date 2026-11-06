@@ -1,4 +1,5 @@
 add_library(pixcake_exportd_service
+  src/image_io.cpp
   src/export_service.cpp
 )
 target_include_directories(pixcake_exportd_service PUBLIC include)

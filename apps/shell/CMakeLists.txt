@@ -1,4 +1,7 @@
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
+find_package(Qt6Svg REQUIRED PATHS
+  /opt/homebrew/opt/qtsvg/lib/cmake/Qt6Svg
+  /usr/local/opt/qtsvg/lib/cmake/Qt6Svg)
 
 add_executable(pixcake_app_shell
   main.cpp
@@ -9,6 +12,15 @@ configure_file(${CMAKE_CURRENT_SOURCE_DIR}/login-hero.png
 set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/login-hero.png
                             PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
 target_sources(pixcake_app_shell PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/login-hero.png)
+file(GLOB_RECURSE PIXCAKE_SHELL_SVGS CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/assets/*.svg")
+foreach(asset IN LISTS PIXCAKE_SHELL_SVGS)
+  file(RELATIVE_PATH rel "${CMAKE_CURRENT_SOURCE_DIR}/assets" "${asset}")
+  get_filename_component(rel_dir "${rel}" DIRECTORY)
+  set_source_files_properties("${asset}" PROPERTIES
+    MACOSX_PACKAGE_LOCATION "Resources/assets/${rel_dir}")
+endforeach()
+target_sources(pixcake_app_shell PRIVATE ${PIXCAKE_SHELL_SVGS})
 set_target_properties(pixcake_app_shell PROPERTIES
   MACOSX_BUNDLE TRUE
   MACOSX_BUNDLE_GUI_IDENTIFIER "com.pixcake.desktop.shell"
@@ -22,6 +34,7 @@ target_link_libraries(pixcake_app_shell PRIVATE
   Qt6::Core
   Qt6::Gui
   Qt6::Widgets
+  Qt6::Svg
 )
 target_compile_features(pixcake_app_shell PRIVATE cxx_std_17)
 

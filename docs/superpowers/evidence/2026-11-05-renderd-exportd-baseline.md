@@ -62,7 +62,7 @@ Jarvis knowledge connector 在本会话未提供，因此没有把知识库内�
 - `renderd` 的取消接口要求客户端序号、图片身份、编辑实例和文档修订全部匹配；旧请求的取消不会删除替代它的新请求。
 - `exportd` 接收 `ExportQueue` 时推进 `排队 → 准备 → 渲染`；因为解码器/编码器尚未接入，处理结果明确为 `UnsupportedFormat` 并记录失败状态，待处理工作保留到显式 `retry` 后再排队。
 - 服务不写目标文件、不提交预览帧、不生成伪造像素结果。
-- 验证：独立 Debug 构建成功；CTest 47/47 通过；架构依赖检查、能力归属检查和 `git diff --check` 通过。
+- 验证：独立 Debug 构建成功；本轮新增契约测试后 CTest 49/49 通过；架构依赖检查、能力归属检查和 `git diff --check` 通过。
 
 ## 下一阶段入口
 
@@ -72,3 +72,5 @@ Jarvis knowledge connector 在本会话未提供，因此没有把知识库内�
 - 全局依赖规则已写入
   `docs/superpowers/specs/2026-11-06-pixcake-third-party-dependency-policy.md`：通用图像 I/O 优先采用维护中的第三方库，项目只保留契约适配、边界校验和事务语义。
 - 官方候选初查：OpenImageIO 官方文档说明其 ImageInput/ImageOutput 面向多格式、使用 C++17/CMake 并支持 macOS/Windows；libvips 官方项目说明其低内存、按需处理和 LGPL-2.1-or-later；LibRaw 官方文档定位为 RAW 读取库并提供 LGPL-2.1/CDDL 1.0 双许可证。三者仍需完成传递依赖、插件部署和平台验收，当前没有写入生产 CMake。
+- 2026-11-06 依赖选型：libvips 8.18.7 作为主候选，官方发布提交 `24ad4d0`，官方源码包 SHA-256 `5baaead3b0bb20ffdb9e9ff09aa9fda08620923df77b63b436654cb5e0b3bf94`，锁定文件为 `third_party/libvips.lock.cmake`。官方资料确认其 Meson 0.56+ 构建、GLib/GObject/Expat 核心依赖和 JPEG/PNG/TIFF/RAW 可选加载器；OpenImageIO 因当前文档要求 CMake 3.23 且传递依赖较重暂列备选，LibRaw 不能覆盖 raster 全部格式。当前 shell 无法解析 GitHub DNS，源码包尚未写入仓库或生产 CMake；待依赖缓存/构建机验证校验值、许可证文本和动态模块部署后再进入真实适配器。
+- 2026-11-06 Task 1：`apps/renderd` 新增 `ImageDecoder`/`DecodedImage` 契约和解码结果校验；`apps/exportd` 新增 `ExportEncoder`/`EncodedProduct` 契约和 RGBA/编码产物校验。契约不包含第三方头、不写目标文件，编码结果必须交给 `ExportQueue` 的后续临时文件事务；两个新增边界测试通过。该阶段不宣称已经完成真实文件解码或全分辨率导出。

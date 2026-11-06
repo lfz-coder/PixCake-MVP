@@ -2,6 +2,7 @@
 
 #include "pixcake/gpu/render_executor.hpp"
 #include "pixcake/ipc/preview_protocol.hpp"
+#include "pixcake/renderd/image_io.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -11,13 +12,6 @@
 #include <vector>
 
 namespace pixcake::renderd {
-
-struct RgbaInput {
-  std::uint32_t width = 0;
-  std::uint32_t height = 0;
-  std::uint32_t stride = 0;
-  std::vector<std::uint8_t> bytes;
-};
 
 struct PreviewWork {
   std::uint64_t client_sequence = 0;

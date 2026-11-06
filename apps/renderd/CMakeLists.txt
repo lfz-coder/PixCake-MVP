@@ -1,4 +1,5 @@
 add_library(pixcake_renderd_service
+  src/image_io.cpp
   src/render_service.cpp
 )
 target_include_directories(pixcake_renderd_service PUBLIC include)
