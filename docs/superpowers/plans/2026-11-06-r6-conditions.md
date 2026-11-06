@@ -3,7 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 日期：2026-11-06
-状态：执行中
+状态：已完成（第七轮判定：条件 1–4 全部关闭，C-31 通过）
 分支：`codex/desktop-official-layout`，基线 `4d44b77`
 
 **Goal:** 关闭第六轮复审条件 1–4（Q-06 收尾、C-31 续做、状态接线、账本移动语义），然后跑第七轮复审。
@@ -38,7 +38,7 @@
 - [x] **Task 3**：20 个能力目录与工厂表。测试 `test_c31_every_capability_has_its_own_directory`；门禁对能力目录的链接检查改到工厂函数。
 - [x] **Task 4**：预设、同步、粘贴经模块写回。测试 `test_c31_transfer_replaces_with_validated_source`、`test_c31_transfer_copies_too_new_source`、`test_c31_transfer_leaves_too_new_target`、`test_c31_transfer_rejects_corrupt_or_invalid_source`，以及预设、同步模块里的对应集成测试。
 - [x] **Task 5**：状态接线。测试 `test_p12_commit_marks_photo_edited`、`test_p12_failed_commit_does_not_mark_edited`、`test_p12_exported_products_mark_photos_exported`。
-- [ ] **Task 6**：第七轮复审。
+- [x] **Task 6**：第七轮复审。
 
 ## Rulings
 
