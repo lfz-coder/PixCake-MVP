@@ -160,10 +160,10 @@ int main() {
   auto style_half = operation("color.style", "color", "pixcake.color.style", {value("amount", 50.0)});
   assert(executor.renderReference(style_half, image(128, 128, 128), inputs, result));
   assert(result.image.pixels[0] == 133 && result.image.pixels[1] == 129 && result.image.pixels[2] == 124);
-  // 超过 100 的值不再放大效果。
-  auto style_over = operation("color.style", "color", "pixcake.color.style", {value("amount", 200.0)});
-  assert(executor.renderReference(style_over, image(128, 128, 128), inputs, result));
-  assert(result.image.pixels[0] == 138 && result.image.pixels[2] == 120);
+  // AI 追色程度 0..200（需求原文）：100 是默认强度，200 是两倍强度。
+  auto match_double = operation("color.match", "color", "pixcake.color.match", {value("amount", 200.0)});
+  assert(executor.renderReference(match_double, image(128, 128, 128), inputs, result));
+  assert(result.image.pixels[0] == 148 && result.image.pixels[1] == 133 && result.image.pixels[2] == 113);
 
   auto filter = operation("color.global", "color", "pixcake.filter",
                           {value("amount", 100.0)});

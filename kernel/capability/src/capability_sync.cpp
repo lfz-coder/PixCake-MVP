@@ -32,16 +32,6 @@ std::vector<CapabilitySyncRow> capability_sync_rows() {
       local_match.blocked_reason = "局部追色不能批量同步";
       rows.push_back(std::move(local_match));
     }
-
-    if (descriptor.id == "color.post") {
-      CapabilitySyncRow detail;
-      detail.id = "detail";
-      detail.module_label = "色彩";
-      detail.label = "细节";
-      detail.capability_id = "detail";
-      detail.enabled = true;
-      rows.push_back(std::move(detail));
-    }
   }
 
   return rows;

@@ -109,7 +109,7 @@ void test_pipeline() {
       "detail.geometry", "detail.denoise", "color.match", "color.style", "color.global",
       "color.local", "portrait.blemish", "portrait.skin", "portrait.reshape", "portrait.feature",
       "portrait.body", "image.background", "image.idphoto", "image.sky", "clothes", "pet",
-      "color.post", "grain", "manual.liquify", "manual.heal", "manual.edge", "crop"};
+      "color.post", "manual.liquify", "manual.heal", "manual.edge", "crop"};
   EXPECT(pipeline.size() == expected.size());
   for (std::size_t index = 0; index < expected.size() && index < pipeline.size(); ++index) {
     EXPECT(pipeline[index].step_id == expected[index]);
@@ -252,36 +252,41 @@ void test_c45_color_grading_modes() {
   EXPECT(pixcake::find_parameter_mode("color.global", "grading_balance") == nullptr);
 }
 
-// 来源：2026-11-05 用户裁定“颗粒是独立能力，和白平衡、影调同级”；范围 0..100 步长 1 也是用户给出，
-// 默认值取自 test 版画面。“颗粒效果”为 0 时其余各项不可调（数值条件，禁用规则尚不支持，界面层处理）。
-void test_c47_grain_is_its_own_capability() {
+// 契约 §4 第 74、413 行：颗粒属于 `detail`（降噪、锐化、噪点、杂色、颗粒、镜头、透视、校准）。
+// 自定义工具栏里“颗粒”与“白平衡”同级，是参数引用（需求 §8.2、架构第 633 行），不是独立能力。
+// 范围 0..100 步长 1 由用户 2026-11-05 给出，默认值取自 test 版画面。
+void test_c31_q02_grain_belongs_to_detail() {
   const auto registry = pixcake::CapabilityRegistry::phase_one();
-  EXPECT(registry.find("grain") != nullptr);
+  const auto* detail = registry.find("detail");
+  EXPECT(detail != nullptr);
+  if (detail != nullptr) EXPECT(detail->module_label == "色彩" && detail->label == "细节");
+  EXPECT(registry.find("grain") == nullptr);
   struct Row { const char* id; double default_value; };
-  const Row rows[] = {{"amount", 0}, {"shadows", 30}, {"midtones", 50}, {"highlights", 15},
-                      {"size", 10},  {"roughness", 15}, {"color", 10}};
+  const Row rows[] = {{"grain_amount", 0}, {"grain_shadows", 30}, {"grain_midtones", 50}, {"grain_highlights", 15},
+                      {"grain_size", 10},  {"grain_roughness", 15}, {"grain_color", 10}};
   for (const Row& row : rows) {
-    const auto* mode = pixcake::find_parameter_mode("grain", row.id);
+    const auto* mode = pixcake::find_parameter_mode("detail", row.id);
     EXPECT(mode != nullptr);
     if (mode == nullptr) continue;
     EXPECT(mode->minimum == 0.0 && mode->maximum == 100.0 && mode->step == 1.0);
     EXPECT(mode->default_value == row.default_value && mode->step_confirmed && mode->default_confirmed);
   }
-  EXPECT(!pixcake::validate_parameter_display_value("grain", "amount", "101"));
+  EXPECT(pixcake::find_parameter_mode("grain", "amount") == nullptr);
+  EXPECT(!pixcake::validate_parameter_display_value("detail", "grain_amount", "101"));
   std::string error;
-  EXPECT(pixcake::phase_one_capability_order("grain").has_value());
   EXPECT(pixcake::validate_phase_one_pipeline(pixcake::phase_one_pipeline(), &error));
 }
 
-// 来源：2026-11-05 用户裁定“创意色彩程度按官方的来”；官方（test 版）实测 0..100，覆盖需求里的 0..200。
-void test_c48_creative_amount_follows_official() {
-  for (const char* id : {"color.style", "color.match"}) {
-    const auto* mode = pixcake::find_parameter_mode(id, "amount");
-    EXPECT(mode != nullptr);
-    if (mode == nullptr) continue;
-    EXPECT(mode->minimum == 0.0 && mode->maximum == 100.0);
-    EXPECT(!pixcake::validate_parameter_display_value(id, "amount", "101"));
-  }
+// AI 色彩风格程度按官方 0..100（2026-11-05 用户裁定，test 版实测上限 100）；
+// AI 追色程度按需求原文 0..200（2026-11-05 用户裁定恢复，追色没有实测）。默认值都按需求 100。
+void test_b33_c48_amount_ranges() {
+  const auto* style = pixcake::find_parameter_mode("color.style", "amount");
+  EXPECT(style != nullptr && style->minimum == 0.0 && style->maximum == 100.0 && style->default_value == 100.0);
+  EXPECT(!pixcake::validate_parameter_display_value("color.style", "amount", "101"));
+  const auto* match = pixcake::find_parameter_mode("color.match", "amount");
+  EXPECT(match != nullptr && match->minimum == 0.0 && match->maximum == 200.0 && match->default_value == 100.0);
+  EXPECT(pixcake::validate_parameter_display_value("color.match", "amount", "200"));
+  EXPECT(!pixcake::validate_parameter_display_value("color.match", "amount", "201"));
 }
 
 // 来源：官方《基础调色功能说明》（wiki.pixcakeai.com/guide/9398.html）：色彩编辑器色相、饱和度、明亮度偏移
@@ -302,8 +307,8 @@ void test_c49_color_editor_offsets() {
 
 int main() {
   test_c49_color_editor_offsets();
-  test_c47_grain_is_its_own_capability();
-  test_c48_creative_amount_follows_official();
+  test_c31_q02_grain_belongs_to_detail();
+  test_b33_c48_amount_ranges();
   test_c42_levels_rgb_modes();
   test_c43_hsl_modes_and_monochrome_switch();
   test_c44_selective_color_modes();
@@ -312,7 +317,7 @@ int main() {
   const std::vector<pixcake::CapabilityDescriptor> descriptors = registry.descriptors();
 
   const std::vector<std::string> expected_ids = {
-      "color.match", "color.style", "color.global", "color.local", "color.post", "grain",
+      "color.match", "color.style", "color.global", "color.local", "color.post", "detail",
       "portrait.blemish", "portrait.skin", "portrait.reshape", "portrait.feature", "portrait.body",
       "image.background", "image.idphoto", "image.sky", "clothes", "pet", "crop",
       "manual.edge", "manual.liquify", "manual.heal"};
@@ -344,8 +349,9 @@ int main() {
            "同步时按每张图重新计算，不是把数值原样抄过去");
   }
 
+  // 契约 §4 第 74 行：`detail` 是本阶段注册的能力（第四轮复审 C-31/Q-02）。
   const pixcake::CapabilityDescriptor* detail = registry.find("detail");
-  EXPECT(detail == nullptr);
+  EXPECT(detail != nullptr);
   EXPECT(registry.find("color.match.local") == nullptr);
   EXPECT(registry.find("portrait.eyes") == nullptr);
   EXPECT(pixcake::validate_parameter_display_value("color.global", "exposure", "1.50"));

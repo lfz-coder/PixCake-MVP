@@ -122,8 +122,8 @@ void write(RgbaImage& image, std::uint32_t x, std::uint32_t y, Pixel p) {
 }
 Pixel color(Pixel p, const std::map<std::string, float>& v) {
   p = white_balance(p, v);
-  // AI 色彩“程度”按官方 0..100，100 为满格（2026-11-05 用户裁定，与参数模式一致）。
-  const float style = clamp01(get(v, "amount") / 100.0F);
+  // 程度 100 是默认强度：AI 色彩风格 0..100，AI 追色 0..200（200 为两倍强度），与参数模式一致。
+  const float style = std::clamp(get(v, "amount") / 100.0F, 0.0F, 2.0F);
   p.r += style * 0.04F; p.g += style * 0.01F; p.b -= style * 0.03F;
   return p;
 }

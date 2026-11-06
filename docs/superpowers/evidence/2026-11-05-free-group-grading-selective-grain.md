@@ -27,3 +27,7 @@
 - 颗粒是独立能力，与白平衡、影调同级：新增能力 `grain`（模块“色彩”），管线位置在 `color.post` 之后、`manual.liquify` 之前；7 个参数（amount/shadows/midtones/highlights/size/roughness/color）已注册。“颗粒效果为 0 时其余不可调”是数值条件，禁用规则暂不支持，留给界面层。同步树由 22 项变 23 项。
 - 创意色彩程度按官方：`color.match`、`color.style` 的 `amount` 改为 0..100（原需求 0–200），第一阶段设计文档已同步修改。
 - 细节、镜头调整、透视矫正、校准、AI 校准暂不测量（用户确认非主要）。
+
+## 更正（2026-11-06，第四轮复审后）
+- 颗粒不是独立能力：契约 §4 把颗粒列在 `detail` 下。参数改为 `detail` 的 `grain_amount`、`grain_shadows`、`grain_midtones`、`grain_highlights`、`grain_size`、`grain_roughness`、`grain_color`，撤回能力 `grain`；注册表补上 `detail` 描述，同步树仍是 22 项。用户截图中的“自定义工具栏”把颗粒和白平衡并列，那是参数引用（需求 §8.2），不是能力划分。
+- AI 追色程度恢复为需求原文 0..200（用户裁定）；只有 AI 色彩风格按官方 0..100。
