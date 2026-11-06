@@ -153,6 +153,18 @@ int main() {
   // PP-CONTRAST-001 golden vector: amount=2 around the 0.5 midpoint.
   assert(result.image.pixels[0] == 1 && result.image.pixels[1] == 129 && result.image.pixels[2] == 255);
 
+  // 创意色彩“程度”按官方 0..100（2026-11-05 用户裁定）：100 是满格，偏色 +0.04/+0.01/-0.03 全部生效。
+  auto style_full = operation("color.style", "color", "pixcake.color.style", {value("amount", 100.0)});
+  assert(executor.renderReference(style_full, image(128, 128, 128), inputs, result));
+  assert(result.image.pixels[0] == 138 && result.image.pixels[1] == 131 && result.image.pixels[2] == 120);
+  auto style_half = operation("color.style", "color", "pixcake.color.style", {value("amount", 50.0)});
+  assert(executor.renderReference(style_half, image(128, 128, 128), inputs, result));
+  assert(result.image.pixels[0] == 133 && result.image.pixels[1] == 129 && result.image.pixels[2] == 124);
+  // 超过 100 的值不再放大效果。
+  auto style_over = operation("color.style", "color", "pixcake.color.style", {value("amount", 200.0)});
+  assert(executor.renderReference(style_over, image(128, 128, 128), inputs, result));
+  assert(result.image.pixels[0] == 138 && result.image.pixels[2] == 120);
+
   auto filter = operation("color.global", "color", "pixcake.filter",
                           {value("amount", 100.0)});
   assert(executor.renderReference(filter, image(128, 128, 128), inputs, result));
