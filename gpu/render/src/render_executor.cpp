@@ -17,10 +17,88 @@ bool known_blend_mode(const std::string& blend_mode) {
 }
 
 struct Pixel { float r, g, b, a; };
+struct Vec3 { float x, y, z; };
+struct Mat3 { float m[3][3]; };
 float clamp01(float value) { return std::clamp(value, 0.0F, 1.0F); }
+// PP-EXP-001: exposure is an EV offset over the linear working buffer.
+// ISO 2720 defines one EV step as a factor-of-two exposure change.  The
+// conversion to and from an encoded file color space belongs to the I/O
+// adapter, so this function deliberately operates only on linear values.
+float apply_exposure(float value, float ev) { return value * std::exp2(ev); }
 float get(const std::map<std::string, float>& values, const char* key) {
   const auto it = values.find(key);
   return it == values.end() ? 0.0F : it->second;
+}
+Vec3 mul(const Mat3& matrix, Vec3 value) {
+  return {matrix.m[0][0] * value.x + matrix.m[0][1] * value.y + matrix.m[0][2] * value.z,
+          matrix.m[1][0] * value.x + matrix.m[1][1] * value.y + matrix.m[1][2] * value.z,
+          matrix.m[2][0] * value.x + matrix.m[2][1] * value.y + matrix.m[2][2] * value.z};
+}
+Mat3 multiply(const Mat3& left, const Mat3& right) {
+  Mat3 result{};
+  for (int row = 0; row < 3; ++row) {
+    for (int column = 0; column < 3; ++column) {
+      for (int k = 0; k < 3; ++k) result.m[row][column] += left.m[row][k] * right.m[k][column];
+    }
+  }
+  return result;
+}
+Mat3 identity_matrix() {
+  return {{{1.0F, 0.0F, 0.0F}, {0.0F, 1.0F, 0.0F}, {0.0F, 0.0F, 1.0F}}};
+}
+Vec3 add(Vec3 left, Vec3 right) { return {left.x + right.x, left.y + right.y, left.z + right.z}; }
+Vec3 scale(Vec3 value, float factor) { return {value.x * factor, value.y * factor, value.z * factor}; }
+Vec3 white_from_xy(float x, float y) { return {x / y, 1.0F, (1.0F - x - y) / y}; }
+
+// PP-WB-001: IEC/ICC sRGB D65 matrices and the linear Bradford CAT from ICC
+// 1:2022 Annex E.  The matrices are kept here as data, not as UI constants.
+constexpr Mat3 kSrgbToXyz{{{0.4124564F, 0.3575761F, 0.1804375F},
+                            {0.2126729F, 0.7151522F, 0.0721750F},
+                            {0.0193339F, 0.1191920F, 0.9503041F}}};
+constexpr Mat3 kXyzToSrgb{{{3.2404542F, -1.5371385F, -0.4985314F},
+                            {-0.9692660F, 1.8760108F, 0.0415560F},
+                            {0.0556434F, -0.2040259F, 1.0572252F}}};
+constexpr Mat3 kBradford{{{0.8951F, 0.2664F, -0.1614F},
+                           {-0.7502F, 1.7135F, 0.0367F},
+                           {0.0389F, -0.0685F, 1.0296F}}};
+constexpr Mat3 kBradfordInverse{{{0.9869929F, -0.1470543F, 0.1599627F},
+                                  {0.4323053F, 0.5183603F, 0.0492912F},
+                                  {-0.0085287F, 0.0400428F, 0.9684867F}}};
+
+Mat3 white_balance_matrix(float temperature, float tint) {
+  if (std::abs(temperature) < 1e-6F && std::abs(tint) < 1e-6F) return identity_matrix();
+  const Vec3 source_white = white_from_xy(0.3127F, 0.3290F);  // CIE D65.
+  const Vec3 warm_white = white_from_xy(0.3457F, 0.3585F);    // CIE D50.
+  const Vec3 cool_white = white_from_xy(0.2990F, 0.3149F);    // CIE D75.
+  const float temperature_fraction = std::clamp(temperature / 100.0F, -1.0F, 1.0F);
+  const Vec3 target_white = temperature_fraction >= 0.0F
+                                ? add(source_white, scale(add(warm_white, scale(source_white, -1.0F)),
+                                                         temperature_fraction))
+                                : add(source_white, scale(add(cool_white, scale(source_white, -1.0F)),
+                                                         -temperature_fraction));
+  const Vec3 source_lms = mul(kBradford, source_white);
+  Vec3 target_lms = mul(kBradford, target_white);
+  // Project consensus PP-WB-001: tint is a symmetric half-stop adjustment
+  // of the Bradford green-cone response.  The scale is documented here and
+  // is not a hidden per-channel coefficient.
+  target_lms.y *= std::exp2(std::clamp(tint / 100.0F, -1.0F, 1.0F) * 0.5F);
+  const Mat3 cone_scale{{{target_lms.x / source_lms.x, 0.0F, 0.0F},
+                         {0.0F, target_lms.y / source_lms.y, 0.0F},
+                         {0.0F, 0.0F, target_lms.z / source_lms.z}}};
+  // RGB -> XYZ -> Bradford LMS -> scaled LMS -> XYZ -> RGB.
+  return multiply(kXyzToSrgb, multiply(kBradfordInverse, multiply(cone_scale,
+                                                                   multiply(kBradford, kSrgbToXyz))));
+}
+
+Pixel white_balance(Pixel pixel, const std::map<std::string, float>& values) {
+  const float temperature = get(values, "temperature");
+  const float tint = get(values, "tint");
+  if (std::abs(temperature) < 1e-6F && std::abs(tint) < 1e-6F) return pixel;
+  const Vec3 adapted = mul(white_balance_matrix(temperature, tint), {pixel.r, pixel.g, pixel.b});
+  pixel.r = adapted.x;
+  pixel.g = adapted.y;
+  pixel.b = adapted.z;
+  return pixel;
 }
 float luminance(Pixel p) { return 0.2126F * p.r + 0.7152F * p.g + 0.0722F * p.b; }
 Pixel mix(Pixel a, Pixel b, float amount) {
@@ -43,22 +121,25 @@ void write(RgbaImage& image, std::uint32_t x, std::uint32_t y, Pixel p) {
   image.pixels[i + 3] = static_cast<std::uint8_t>(std::lround(clamp01(p.a) * 255.0F));
 }
 Pixel color(Pixel p, const std::map<std::string, float>& v) {
-  const float t = get(v, "temperature") / 100.0F * 0.25F;
-  const float m = get(v, "tint") / 100.0F * 0.18F;
-  p.r += t + m; p.g -= m * 0.9F; p.b -= t - m;
+  p = white_balance(p, v);
   const float style = clamp01(get(v, "amount") / 200.0F);
   p.r += style * 0.04F; p.g += style * 0.01F; p.b -= style * 0.03F;
   return p;
 }
+// PP-EXP-001 and PP-CONTRAST-001 are source-backed reference effects here;
+// brightness/highlights/shadows and the detail controls remain provisional.
 Pixel tone(Pixel p, const std::map<std::string, float>& v) {
   const float exposure = get(v, "exposure");
   const float contrast = get(v, "contrast") / 100.0F;
   const float brightness = get(v, "brightness") / 100.0F;
-  p.r *= std::pow(2.0F, exposure); p.g *= std::pow(2.0F, exposure); p.b *= std::pow(2.0F, exposure);
+  p.r = apply_exposure(p.r, exposure); p.g = apply_exposure(p.g, exposure); p.b = apply_exposure(p.b, exposure);
   p.r += brightness; p.g += brightness; p.b += brightness;
-  p.r = (p.r - 0.5F) * (1.0F + contrast) + 0.5F;
-  p.g = (p.g - 0.5F) * (1.0F + contrast) + 0.5F;
-  p.b = (p.b - 0.5F) * (1.0F + contrast) + 0.5F;
+  // PP-CONTRAST-001: W3C Filter Effects contrast() is an affine transfer
+  // around the 0.5 midpoint.  The project maps -100..100 to a 0..2 slope.
+  const float contrast_amount = 1.0F + contrast;
+  p.r = (p.r - 0.5F) * contrast_amount + 0.5F;
+  p.g = (p.g - 0.5F) * contrast_amount + 0.5F;
+  p.b = (p.b - 0.5F) * contrast_amount + 0.5F;
   const float l = luminance(p);
   const float hi = clamp01((l - 0.5F) * 2.0F), lo = clamp01((0.5F - l) * 2.0F);
   const float lift = get(v, "highlights") / 100.0F * hi * 0.45F + get(v, "shadows") / 100.0F * lo * 0.45F +
@@ -119,6 +200,21 @@ Pixel lut_sample(const Lut3DView& lut, Pixel input) {
 
 }  // namespace
 
+namespace {
+
+// Channels with a shader binding and a recorded GPU readback comparison.
+bool gpu_formula_supported(const pixcake::render::RenderOperation& operation) {
+  if (!operation.enabled || operation.capability_id != "color.global" ||
+      operation.blend_mode != "normal" || !operation.mask_ids.empty()) return false;
+  static const std::set<std::string_view> channels = {"temperature", "tint", "exposure", "contrast"};
+  for (const auto& value : operation.values) {
+    if (channels.find(value.channel) == channels.end() && std::abs(value.numeric_value) > 1e-9) return false;
+  }
+  return true;
+}
+
+}  // namespace
+
 PassStatus PassRegistry::classify(const pixcake::render::RenderOperation& operation) {
   if (!operation.enabled) return PassStatus::Disabled;
   if (operation.program.find("filter") != std::string::npos || operation.program.find("profile") != std::string::npos) return PassStatus::MissingResource;
@@ -128,10 +224,12 @@ PassStatus PassRegistry::classify(const pixcake::render::RenderOperation& operat
 }
 
 bool PassRegistry::gpuSupported(const pixcake::render::RenderOperation& operation) {
-  if (operation.capability_id != "color.global" || operation.blend_mode != "normal" || !operation.mask_ids.empty()) return false;
-  static const std::set<std::string_view> channels = {"temperature", "tint", "exposure", "contrast"};
-  for (const auto& value : operation.values) if (channels.find(value.channel) == channels.end() && std::abs(value.numeric_value) > 1e-9) return false;
-  return true;
+  // 2026-11-05: temperature, tint, exposure and contrast all passed the
+  // reference/readback comparison on native CGL and the Qt desktop platform
+  // (test_gpu_backend_native, test_gpu_shader_path); dropping any one channel
+  // from the shader makes both tests fail.  The formula gate is therefore also
+  // the evidence gate.  A new channel must add its own readback evidence first.
+  return gpu_formula_supported(operation);
 }
 
 bool RenderExecutor::renderReference(const pixcake::render::RenderDescription& description,
@@ -250,15 +348,12 @@ bool RenderExecutor::execute(gl::Context& context, const pixcake::render::Render
                              const RgbaImage& input, const RenderInputs& inputs, RenderResult& result,
                              std::string& error) const {
   if (!context.valid() || !context.makeCurrent()) { error = context.lastError(); return false; }
-  bool gpu_supported = inputs.layers.empty() && inputs.masks.empty() && input.row_stride == input.width * 4;
+  bool gpu_supported = description.operations.size() == 1 && inputs.layers.empty() && inputs.masks.empty() && input.row_stride == input.width * 4;
   std::map<std::string, float> values;
   for (const auto& operation : description.operations) {
-    if (!operation.enabled || operation.capability_id != "color.global" ||
-        (!operation.mask_ids.empty()) || operation.blend_mode != "normal") { gpu_supported = false; continue; }
+    if (!gpu_formula_supported(operation)) { gpu_supported = false; continue; }
     for (const auto& value : operation.values) {
-      if (value.channel != "temperature" && value.channel != "tint" && value.channel != "exposure" && value.channel != "contrast") {
-        if (std::abs(value.numeric_value) > 1e-9) gpu_supported = false;
-      } else values[value.channel] = static_cast<float>(value.numeric_value);
+      values[value.channel] = static_cast<float>(value.numeric_value);
     }
   }
   if (!gpu_supported) {
@@ -282,12 +377,21 @@ bool RenderExecutor::execute(gl::Context& context, const pixcake::render::Render
     auto target = context.createTexture2D();
     auto framebuffer = context.createFramebuffer();
     const char* vertex_source = "#version 330 core\nout vec2 uv;\nvoid main(){vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);uv=p;gl_Position=vec4(p*2.0-1.0,0,1);}";
-    const char* fragment_source = "#version 330 core\nin vec2 uv;out vec4 color;uniform sampler2D source;uniform vec4 adjust;\nvoid main(){vec4 p=texture(source,uv);float t=adjust.x/100.0*0.25;float m=adjust.y/100.0*0.18;p.r+=t+m;p.g-=m*0.9;p.b-=t-m;p.rgb*=pow(2.0,adjust.z);p.rgb=(p.rgb-0.5)*(1.0+adjust.w/100.0)+0.5;color=clamp(p,0.0,1.0);} ";
+    // PP-WB-001, PP-EXP-001, and PP-CONTRAST-001: the shader receives the
+    // same linear working buffer and the same CPU-derived Bradford matrix,
+    // EV multiplier, and affine contrast amount.
+    const char* fragment_source = "#version 330 core\nin vec2 uv;out vec4 color;uniform sampler2D source;uniform vec4 adjust;uniform vec4 wb0;uniform vec4 wb1;uniform vec4 wb2;\nvoid main(){vec4 p=texture(source,uv);vec3 balanced=vec3(dot(wb0.xyz,p.rgb),dot(wb1.xyz,p.rgb),dot(wb2.xyz,p.rgb));balanced*=exp2(adjust.z);balanced=(balanced-0.5)*(1.0+adjust.w/100.0)+0.5;color=clamp(vec4(balanced,p.a),0.0,1.0);} ";
     if (shader.valid() && fragment.valid() && program.valid() && source.valid() && target.valid() && framebuffer.valid()) {
       ok = shader.compile(gl::ShaderStage::Vertex, vertex_source, error) && fragment.compile(gl::ShaderStage::Fragment, fragment_source, error) && program.link(shader, fragment, error) && program.use(error);
       const gl::ImageView view{input.width, input.height, input.row_stride, gl::PixelFormat::Rgba8, reinterpret_cast<const std::byte*>(input.pixels.data()), input.pixels.size()};
       ok = ok && source.upload(view, error) && target.allocate(input.width, input.height, gl::PixelFormat::Rgba8, error) && framebuffer.attachColor(target, error) && framebuffer.complete(error) && framebuffer.bind(error) && context.setViewport(input.width, input.height, error) && source.bind(0, error);
-      ok = ok && program.setTextureUnit("source", 0, error) && program.setVec4("adjust", {values["temperature"], values["tint"], values["exposure"], values["contrast"]}, error) && context.drawTriangles(3, error);
+      const Mat3 white_balance = white_balance_matrix(values["temperature"], values["tint"]);
+      ok = ok && program.setTextureUnit("source", 0, error) &&
+           program.setVec4("adjust", {0.0F, 0.0F, values["exposure"], values["contrast"]}, error) &&
+           program.setVec4("wb0", {white_balance.m[0][0], white_balance.m[0][1], white_balance.m[0][2], 0.0F}, error) &&
+           program.setVec4("wb1", {white_balance.m[1][0], white_balance.m[1][1], white_balance.m[1][2], 0.0F}, error) &&
+           program.setVec4("wb2", {white_balance.m[2][0], white_balance.m[2][1], white_balance.m[2][2], 0.0F}, error) &&
+           context.drawTriangles(3, error);
       std::vector<std::byte> pixels;
       ok = ok && context.readPixels(input.width, input.height, pixels, error);
       if (ok) {

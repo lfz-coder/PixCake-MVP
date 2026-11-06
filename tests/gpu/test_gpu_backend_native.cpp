@@ -125,7 +125,10 @@ int main() {
   operation.capability_id = "color.global";
   operation.stage = "color";
   operation.program = "pixcake.color.global";
-  operation.values = {{"temperature", "temperature", "40", 40.0}, {"exposure", "exposure", "0.5", 0.5}};
+  operation.values = {{"temperature", "temperature", "40", 40.0},
+                      {"tint", "tint", "-20", -20.0},
+                      {"exposure", "exposure", "0.5", 0.5},
+                      {"contrast", "contrast", "20", 20.0}};
   description.operations.push_back(operation);
 
   pixcake::gpu::RenderExecutor executor;

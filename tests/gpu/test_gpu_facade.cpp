@@ -109,19 +109,49 @@ int main() {
 
   auto white_balance = operation("color.global", "color", "pixcake.color.global",
                                  {value("temperature", 100.0), value("tint", 0.0)});
+  // 2026-11-05：本机原生 CGL 与 Qt 桌面 QPA 上 readback 对比通过（变异检查：去掉任一通道都会失败），
+  // 色温、色调、对比度与曝光一起登记为 GPU Implemented。
+  assert(pixcake::gpu::PassRegistry::classify(white_balance.operations[0]) ==
+         pixcake::gpu::PassStatus::Implemented);
   assert(executor.renderReference(white_balance, image(128, 128, 128), inputs, result));
   assert(result.success && result.image.revision == 77);
-  assert(result.image.pixels[0] > result.image.pixels[2]);
+  // PP-WB-001 golden vector: D65 gray -> D50 at temperature +100.
+  assert(result.image.pixels[0] == 151 && result.image.pixels[1] == 125 && result.image.pixels[2] == 92);
+  auto neutral_balance = operation("color.global", "color", "pixcake.color.global",
+                                   {value("temperature", 0.0), value("tint", 0.0)});
+  assert(executor.renderReference(neutral_balance, image(120, 100, 80), inputs, result));
+  assert(result.image.pixels[0] == 120 && result.image.pixels[1] == 100 && result.image.pixels[2] == 80);
+  auto tint = operation("color.global", "color", "pixcake.color.global",
+                        {value("temperature", 0.0), value("tint", 50.0)});
+  assert(pixcake::gpu::PassRegistry::classify(tint.operations[0]) == pixcake::gpu::PassStatus::Implemented);
+  assert(executor.renderReference(tint, image(128, 128, 128), inputs, result));
+  // PP-WB-001 golden vector: D65 gray -> green-cone half-stop at tint +50.
+  assert(result.image.pixels[0] == 95 && result.image.pixels[1] == 156 && result.image.pixels[2] == 126);
 
   auto exposure = operation("color.global", "tone", "pixcake.color.global",
                             {value("exposure", 1.0)});
   assert(executor.renderReference(exposure, image(64, 64, 64), inputs, result));
   assert(result.image.pixels[0] >= 126 && result.image.pixels[0] <= 130);
+  auto half_stop = operation("color.global", "tone", "pixcake.color.global",
+                             {value("exposure", 0.5)});
+  assert(executor.renderReference(half_stop, image(64, 64, 64), inputs, result));
+  assert(result.image.pixels[0] >= 90 && result.image.pixels[0] <= 91);
 
   auto contrast = operation("color.global", "tone", "pixcake.color.global",
                             {value("contrast", 100.0)});
+  assert(pixcake::gpu::PassRegistry::classify(contrast.operations[0]) ==
+         pixcake::gpu::PassStatus::Implemented);
   assert(executor.renderReference(contrast, image(64, 64, 64), inputs, result));
   assert(result.image.pixels[0] <= 2);
+  auto neutral_contrast = operation("color.global", "tone", "pixcake.color.global",
+                                    {value("contrast", 0.0)});
+  assert(executor.renderReference(neutral_contrast, image(64, 128, 192), inputs, result));
+  assert(result.image.pixels[0] == 64 && result.image.pixels[1] == 128 && result.image.pixels[2] == 192);
+  auto contrast_vector = operation("color.global", "tone", "pixcake.color.global",
+                                   {value("contrast", 100.0)});
+  assert(executor.renderReference(contrast_vector, image(64, 128, 192), inputs, result));
+  // PP-CONTRAST-001 golden vector: amount=2 around the 0.5 midpoint.
+  assert(result.image.pixels[0] == 1 && result.image.pixels[1] == 129 && result.image.pixels[2] == 255);
 
   auto filter = operation("color.global", "color", "pixcake.filter",
                           {value("amount", 100.0)});

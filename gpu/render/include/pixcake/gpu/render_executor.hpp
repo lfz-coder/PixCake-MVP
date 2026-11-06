@@ -10,6 +10,9 @@
 #include <string_view>
 #include <vector>
 namespace pixcake::gpu {
+// Render pixels are normalized linear-light RGBA samples stored in an 8-bit
+// transport buffer for the current contract.  File encoders/decoders own any
+// sRGB or RAW transfer and must convert before handing a frame to this API.
 struct RgbaImage { std::uint32_t width = 0; std::uint32_t height = 0; std::uint32_t row_stride = 0; std::uint64_t revision = 0; std::vector<std::uint8_t> pixels; };
 struct RenderMask { std::string id; std::uint32_t width = 0; std::uint32_t height = 0; std::vector<std::uint8_t> alpha; };
 struct RenderLayer { RgbaImage image; std::string mask_id; float opacity = 1.0F; std::string blend_mode = "normal"; bool visible = true; std::uint32_t order = 0; };
