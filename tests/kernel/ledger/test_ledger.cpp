@@ -6,6 +6,7 @@
 
 #include <sqlite3.h>
 
+#include <chrono>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -305,7 +306,53 @@ void test_o12_repeated_success_is_deduplicated() {
   EXPECT(dedup != nullptr && dedup->phase == "task");
 }
 
+// P-23：当前状态快照随事件增量维护，与重开时全量折叠的结果一致（随机操作序列）。
+void test_p23_cached_snapshot_matches_full_fold() {
+  auto ledger = charged(version_930(), 500, 20);
+  unsigned seed = 7;
+  const auto next = [&seed]() { seed = seed * 1103515245u + 12345u; return (seed >> 8) % 1000u; };
+  const char* origins[] = {"官方", "工具包", "大师精选"};
+  for (int step = 0; step < 600; ++step) {
+    const std::string task = "t" + std::to_string(next() % 40);
+    switch (next() % 9) {
+      case 0: { auto q = quote_of(task, origins[next() % 3], static_cast<std::int64_t>(next() % 50)); q.tool_id = "tool"; q.member = next() % 2; q.subscribed = next() % 2; ledger.quote(q); break; }
+      case 1: ledger.enqueue(task); break;
+      case 2: ledger.start_generating(task); break;
+      case 3: ledger.accelerate(task); break;
+      case 4: ledger.cancel(task); break;
+      case 5: ledger.crash(task); break;
+      case 6: ledger.succeed(task); break;
+      case 7: ledger.stroke(task, "s" + std::to_string(next() % 60)); break;
+      default: ledger.settle_exports({pixcake::ExportProduct("e" + std::to_string(next() % 30), "o" + std::to_string(next() % 5), false, true)}); break;
+    }
+    const auto reopened = pixcake::CreditLedger::open(version_930(), ledger.events());
+    EXPECT(reopened.creative_points() == ledger.creative_points());
+    EXPECT(reopened.export_sheets() == ledger.export_sheets());
+    EXPECT(reopened.task_statuses() == ledger.task_statuses());
+  }
+}
+
+// P-23：余额查询与任务操作不随事件数线性变慢（2 万事件、2 万次查询，原实现每次全量折叠）。
+void test_p23_balance_queries_do_not_refold() {
+  auto ledger = charged(version_930(), 1000000, 0);
+  const auto began = std::chrono::steady_clock::now();
+  for (int index = 0; index < 5000; ++index) {
+    const std::string task = "task-" + std::to_string(index);
+    EXPECT(ledger.quote(quote_of(task, "官方", 1)) == pixcake::ResultCode::Ok);
+    EXPECT(ledger.enqueue(task) == pixcake::ResultCode::Ok);
+    EXPECT(ledger.start_generating(task) == pixcake::ResultCode::Ok);
+    EXPECT(ledger.succeed(task) == pixcake::ResultCode::Ok);
+  }
+  std::int64_t sum = 0;
+  for (int index = 0; index < 20000; ++index) sum += ledger.creative_points();
+  const auto elapsed = std::chrono::steady_clock::now() - began;
+  EXPECT(sum > 0);
+  EXPECT(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() < 1000);
+}
+
 int main() {
+  test_p23_cached_snapshot_matches_full_fold();
+  test_p23_balance_queries_do_not_refold();
   test_o09_cancel_position_and_charge_are_logged();
   test_o12_repeated_success_is_deduplicated();
   test_balances_stay_separate_and_queue_cancel_is_free();

@@ -4,6 +4,7 @@
 #include "pixcake/support/result_code.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -68,6 +69,11 @@ struct LedgerEvent {
 class CreditLedger {
  public:
   static CreditLedger open(FreeQueuePolicy policy, std::vector<LedgerEvent> events);
+  ~CreditLedger();
+  CreditLedger(const CreditLedger& other);
+  CreditLedger& operator=(const CreditLedger& other);
+  CreditLedger(CreditLedger&& other) noexcept;
+  CreditLedger& operator=(CreditLedger&& other) noexcept;
 
   // 日志可以为空。不为空时：生成任务成功、失败、取消写 ledger.task.terminal（phase 为转换前状态，
   // message 为终态，charged 为这个任务是否扣过点）；崩溃写 ledger.task.crash；同一任务编号、
@@ -96,8 +102,14 @@ class CreditLedger {
  private:
   CreditLedger(FreeQueuePolicy policy, std::vector<LedgerEvent> events);
 
+  // 当前状态快照（性能清单 P-23）：open 时折叠一次，之后每追加一条事件只应用这一条。
+  struct Snapshot;
+  static void apply(Snapshot& shot, const LedgerEvent& event);
+  void append(LedgerEvent event);
+
   FreeQueuePolicy policy_;
   std::vector<LedgerEvent> events_;
+  std::unique_ptr<Snapshot> snapshot_;
   LogSink* log_ = nullptr;
 
   bool task_charged(const std::string& task_id) const;
