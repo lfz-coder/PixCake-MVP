@@ -1,3 +1,4 @@
+#include "pixcake/ui/panels/slider_spec.hpp"
 #include "pixcake/ui/shell/shell_display.hpp"
 #include "pixcake_theme.hpp"
 #include "pixcake_widgets.hpp"
@@ -19,6 +20,7 @@
 #include <QStringList>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <optional>
 
 namespace {
 using pixcake::ResultCode;
@@ -261,31 +263,38 @@ class ShellWindow final : public QMainWindow {
         QStringLiteral("高光"), QStringLiteral("阴影"), QStringLiteral("白色"),
         QStringLiteral("黑色"), QStringLiteral("纹理"), QStringLiteral("清晰度"),
         QStringLiteral("祛雾"), QStringLiteral("鲜艳度"), QStringLiteral("饱和度")};
-    const auto add_disabled_slider = [&](QLayout* layout, const QString& label, const QString& accessible, int minimum, int maximum, int value, const QString& shown, const QString& object_name) {
+    // 范围、步进、默认值只来自内核参数模式（pixcake::ui::panels::slider_spec）。
+    const auto add_disabled_slider = [&](QLayout* layout, const pixcake::ui::panels::SliderSpec& spec, const QString& object_name) {
       auto* row = new QWidget(modules);
       auto* row_layout = new QHBoxLayout(row);
       row_layout->setContentsMargins(0, 0, 0, 0);
       row_layout->setSpacing(6);
-      auto* name = text(label);
+      auto* name = text(QString::fromStdString(spec.label));
       name->setEnabled(false);
       auto* slider = new QSlider(Qt::Horizontal, row);
       if (!object_name.isEmpty()) slider->setObjectName(object_name);
-      slider->setRange(minimum, maximum);
+      slider->setRange(0, spec.tick_count);
       slider->setSingleStep(1);
-      slider->setValue(value);
+      slider->setValue(spec.default_tick);
       slider->setEnabled(false);
-      slider->setAccessibleName(accessible);
-      auto* reading = text(shown);
+      slider->setAccessibleName(QString::fromStdString(spec.accessible_name));
+      auto* reading = text(QString::fromStdString(spec.default_text));
       reading->setEnabled(false);
       row_layout->addWidget(name);
       row_layout->addWidget(slider, 1);
       row_layout->addWidget(reading);
       layout->addWidget(row);
     };
-    const auto add_centered = [&](const QString& label) {
-      add_disabled_slider(color_layout, label,
-                          QStringLiteral("%1，范围 -100 到 100，步进 1，默认 0").arg(label),
-                          -100, 100, 0, QStringLiteral("0"), QString());
+    // 色彩面板顶层的白平衡、影调滑杆：按显示名绑定内核参数。
+    const auto add_top_level = [&](const QString& label) {
+      add_disabled_slider(color_layout,
+                          pixcake::ui::panels::slider_spec(label.toStdString(),
+                                                           pixcake::ui::panels::refine_color_binding(label.toStdString())),
+                          QString());
+    };
+    // 子分组滑杆：内核还没有它们的参数模式，不显示范围。
+    const auto add_unbound = [&](const QString& label, const QString& object_name = QString()) {
+      add_disabled_slider(color_layout, pixcake::ui::panels::slider_spec(label.toStdString(), std::nullopt), object_name);
     };
     const auto add_title = [&](const QString& label) {
       auto* name = text(label);
@@ -304,31 +313,21 @@ class ShellWindow final : public QMainWindow {
         QStringLiteral("青色"), QStringLiteral("洋红"), QStringLiteral("黄色"), QStringLiteral("黑色")};
     for (const auto& label : color_names) {
       if (ranged_sliders.contains(label)) {
-        add_centered(label);
+        add_top_level(label);
         continue;
       }
       add_title(label);
       if (label == QStringLiteral("色阶")) {
-        add_disabled_slider(color_layout, QStringLiteral("黑场"),
-                            QStringLiteral("黑场，范围 0 到 255，步进 1，默认 0"),
-                            0, 255, 0, QStringLiteral("0"), QString());
-        add_disabled_slider(color_layout, QStringLiteral("灰场"),
-                            QStringLiteral("灰场，范围 -1.0 到 1.0，步进 0.01，默认 0"),
-                            -100, 100, 0, QStringLiteral("0.00"), QStringLiteral("refine-levels-gray"));
-        add_disabled_slider(color_layout, QStringLiteral("白场"),
-                            QStringLiteral("白场，范围 0 到 255，步进 1，默认 255"),
-                            0, 255, 255, QStringLiteral("255"), QString());
-        add_disabled_slider(color_layout, QStringLiteral("输出黑场"),
-                            QStringLiteral("输出黑场，范围 0 到 255，步进 1，默认 0"),
-                            0, 255, 0, QStringLiteral("0"), QString());
-        add_disabled_slider(color_layout, QStringLiteral("输出白场"),
-                            QStringLiteral("输出白场，范围 0 到 255，步进 1，默认 255"),
-                            0, 255, 255, QStringLiteral("255"), QString());
+        add_unbound(QStringLiteral("黑场"));
+        add_unbound(QStringLiteral("灰场"), QStringLiteral("refine-levels-gray"));
+        add_unbound(QStringLiteral("白场"));
+        add_unbound(QStringLiteral("输出黑场"));
+        add_unbound(QStringLiteral("输出白场"));
       } else if (label == QStringLiteral("曲线")) {
         for (const auto& item : {QStringLiteral("中间调域值"), QStringLiteral("亮调"), QStringLiteral("亮调域值"),
                                  QStringLiteral("暗调"), QStringLiteral("暗调域值"), QStringLiteral("阴影"),
                                  QStringLiteral("高光")}) {
-          add_centered(item);
+          add_unbound(item);
         }
         for (const auto& item : {QStringLiteral("RGB通道曲线"), QStringLiteral("亮度通道曲线"),
                                  QStringLiteral("红色通道曲线"), QStringLiteral("绿色通道曲线"),
@@ -337,11 +336,11 @@ class ShellWindow final : public QMainWindow {
         }
       } else if (label == QStringLiteral("HSL")) {
         for (const auto& tab : {QStringLiteral("色相"), QStringLiteral("饱和度"), QStringLiteral("明亮度")}) {
-          for (const auto& color : hsl_colors) add_centered(tab + QStringLiteral("-") + color);
+          for (const auto& color : hsl_colors) add_unbound(tab + QStringLiteral("-") + color);
         }
       } else if (label == QStringLiteral("色彩编辑器")) {
         for (const auto& item : {QStringLiteral("色相偏移"), QStringLiteral("饱和度偏移"), QStringLiteral("明亮度偏移")}) {
-          add_centered(item);
+          add_unbound(item);
         }
         for (const auto& item : {QStringLiteral("色彩平滑"), QStringLiteral("亮度平滑"),
                                  QStringLiteral("显示所选色彩范围"), QStringLiteral("反转色彩范围")}) {
@@ -353,11 +352,11 @@ class ShellWindow final : public QMainWindow {
                                  QStringLiteral("平衡"), QStringLiteral("混合"), QStringLiteral("阴影色相"),
                                  QStringLiteral("阴影饱和度"), QStringLiteral("高光亮度"), QStringLiteral("高光色相"),
                                  QStringLiteral("高光饱和度"), QStringLiteral("阴影亮度")}) {
-          add_centered(item);
+          add_unbound(item);
         }
       } else if (label == QStringLiteral("可选颜色")) {
         for (const auto& target : selective_targets) {
-          for (const auto& channel : selective_channels) add_centered(target + QStringLiteral("-") + channel);
+          for (const auto& channel : selective_channels) add_unbound(target + QStringLiteral("-") + channel);
         }
         add_title(QStringLiteral("相对"));
         add_title(QStringLiteral("绝对"));
@@ -366,19 +365,19 @@ class ShellWindow final : public QMainWindow {
                                  QStringLiteral("噪点消除"), QStringLiteral("噪点消除-对比度"), QStringLiteral("噪点消除-细节"),
                                  QStringLiteral("锐化"), QStringLiteral("锐化-半径"), QStringLiteral("锐化-细节"),
                                  QStringLiteral("AI降噪-程度")}) {
-          add_centered(item);
+          add_unbound(item);
         }
       } else if (label == QStringLiteral("颗粒")) {
         for (const auto& item : {QStringLiteral("总滑杆"), QStringLiteral("阴影颗粒度透明度"), QStringLiteral("中间调颗粒度透明度"),
                                  QStringLiteral("高光颗粒度透明度"), QStringLiteral("单个颗粒度大小"), QStringLiteral("颗粒边缘锐度")}) {
-          add_centered(item);
+          add_unbound(item);
         }
         add_title(QStringLiteral("颗粒颜色"));
         add_title(QStringLiteral("颗粒风格"));
       } else if (label == QStringLiteral("镜头调整")) {
         for (const auto& item : {QStringLiteral("手动-中点"), QStringLiteral("手动-扭曲度"), QStringLiteral("手动-晕影"),
                                  QStringLiteral("配置文件-扭曲度"), QStringLiteral("配置文件-晕影")}) {
-          add_centered(item);
+          add_unbound(item);
         }
         for (const auto& item : {QStringLiteral("自动约束裁剪开关"), QStringLiteral("配置文件-开关"),
                                  QStringLiteral("配置文件-厂商"), QStringLiteral("配置文件-镜头机型名称"),
@@ -389,7 +388,7 @@ class ShellWindow final : public QMainWindow {
         for (const auto& item : {QStringLiteral("垂直"), QStringLiteral("垂直偏移"), QStringLiteral("水平"),
                                  QStringLiteral("水平偏移"), QStringLiteral("旋转"), QStringLiteral("缩放"),
                                  QStringLiteral("长宽比")}) {
-          add_centered(item);
+          add_unbound(item);
         }
         for (const auto& item : {QStringLiteral("AI 透视矫正-开关"), QStringLiteral("引导线"),
                                  QStringLiteral("引导线模式开关"), QStringLiteral("辅助线开关"),
@@ -399,12 +398,10 @@ class ShellWindow final : public QMainWindow {
       } else if (label == QStringLiteral("校准")) {
         for (const auto& item : {QStringLiteral("红原色-色相"), QStringLiteral("红原色-饱和度"), QStringLiteral("绿原色-色相"),
                                  QStringLiteral("绿原色-饱和度"), QStringLiteral("蓝原色-色相"), QStringLiteral("蓝原色-饱和度")}) {
-          add_centered(item);
+          add_unbound(item);
         }
       } else if (label == QStringLiteral("创意色彩")) {
-        add_disabled_slider(color_layout, QStringLiteral("程度"),
-                            QStringLiteral("创意色彩程度，范围 0 到 100，步进 1，默认 0"),
-                            0, 100, 0, QStringLiteral("0"), QStringLiteral("refine-creative-color-amount"));
+        add_unbound(QStringLiteral("程度"), QStringLiteral("refine-creative-color-amount"));
       }
     }
     modules_layout->addWidget(color_labels);
@@ -431,9 +428,9 @@ class ShellWindow final : public QMainWindow {
       name->setEnabled(false);
       local_layout->addWidget(name);
     }
-    add_disabled_slider(local_layout, QStringLiteral("羽化"),
-                        QStringLiteral("羽化，范围 0 到 100，步进 1，默认 0"),
-                        0, 100, 0, QStringLiteral("0"), QString());
+    add_disabled_slider(local_layout,
+                        pixcake::ui::panels::slider_spec("羽化", pixcake::ui::panels::refine_local_binding("羽化")),
+                        QString());
     modules_layout->addWidget(local_labels);
     auto* post_labels = new QFrame(modules);
     post_labels->setObjectName(QStringLiteral("refine-post-color-labels"));
@@ -519,7 +516,8 @@ class ShellWindow final : public QMainWindow {
       auto* name = text(label);
       name->setEnabled(false);
       if (label == QStringLiteral("角度滑杆")) {
-        name->setAccessibleName(QStringLiteral("角度滑杆，范围 -45 到 45，默认和步进手册未写"));
+        name->setAccessibleName(QString::fromStdString(
+            pixcake::ui::panels::slider_spec("角度滑杆", pixcake::ui::panels::refine_crop_angle_binding()).accessible_name));
       }
       crop_layout->addWidget(name);
     }
@@ -567,6 +565,34 @@ class ShellWindow final : public QMainWindow {
   void render() { title_->setText(QString::fromUtf8(pixcake::ui::shell::page_label(display_.page()))); switch (display_.page()) { case Page::Login: render_login(); break; case Page::Home: render_home(); break; case Page::Library: render_library(); break; case Page::Refine: render_workspace(); break; case Page::Creative: render_creative(); break; } }
 };
 }
+// 精修色彩面板的滑杆只能来自参数模式：绑定的 14 支与内核规格一致，其余一律“范围待确认”。
+int check_refine_sliders(const QWidget& window) {
+  const auto* panel = window.findChild<QWidget*>(QStringLiteral("refine-color-labels"));
+  if (panel == nullptr) { qCritical("missing refine color panel"); return 4; }
+  int bound = 0;
+  bool exposure_ok = false;
+  for (const auto* slider : panel->findChildren<QSlider*>()) {
+    const QString name = slider->accessibleName();
+    const QString label = name.section(QStringLiteral("，"), 0, 0);
+    if (slider->isEnabled()) { qCritical("refine slider enabled: %s", qPrintable(name)); return 4; }
+    if (name.endsWith(QStringLiteral("，范围待确认"))) {
+      if (slider->maximum() != 0) { qCritical("unbound slider has ticks: %s", qPrintable(name)); return 4; }
+      continue;
+    }
+    const auto spec = pixcake::ui::panels::slider_spec(label.toStdString(),
+                                                       pixcake::ui::panels::refine_color_binding(label.toStdString()));
+    if (!spec.bound || name != QString::fromStdString(spec.accessible_name) || slider->minimum() != 0 ||
+        slider->maximum() != spec.tick_count || slider->value() != spec.default_tick) {
+      qCritical("refine slider not from parameter mode: %s", qPrintable(name));
+      return 4;
+    }
+    ++bound;
+    if (label == QStringLiteral("曝光")) exposure_ok = true;
+  }
+  if (bound != 14 || !exposure_ok) { qCritical("expected 14 parameter-mode sliders, found %d", bound); return 4; }
+  return 0;
+}
+
 int main(int argc, char** argv) {
-  QApplication app(argc, argv); pixcake::shell::PixCakeTheme::apply(app); QCoreApplication::setApplicationName(QStringLiteral("PixCake")); QCoreApplication::setApplicationVersion(QStringLiteral("0.1")); QCommandLineParser parser; parser.setApplicationDescription(QStringLiteral("PixCake desktop shell")); parser.addHelpOption(); QString default_page = QStringLiteral("login"); const auto executable = QFileInfo(QString::fromLocal8Bit(argv[0])).baseName(); for (const auto& page : {QStringLiteral("home"), QStringLiteral("library"), QStringLiteral("refine"), QStringLiteral("creative")}) if (executable.endsWith(QStringLiteral("-") + page)) default_page = page; QCommandLineOption page_option(QStringList() << QStringLiteral("page"), QStringLiteral("Display a read-only shell page: login, home, library, refine, creative."), QStringLiteral("page"), default_page); QCommandLineOption smoke_option(QStringList() << QStringLiteral("smoke"), QStringLiteral("Construct the selected page and exit without showing a window.")); parser.addOption(page_option); parser.addOption(smoke_option); parser.process(app); ShellWindow window(parse_page(parser.value(page_option))); if (parser.isSet(smoke_option)) { const auto bundled = QCoreApplication::applicationDirPath() + QStringLiteral("/../Resources/assets/"); for (const auto& relative : pixcake::shell::uploadedShellAssets()) { if (!QFileInfo::exists(bundled + relative) || pixcake::shell::loadAssetPixmap(relative, 16).isNull()) { qCritical("missing shell asset: %s", qPrintable(relative)); return 2; } } if (parse_page(parser.value(page_option)) == Page::Refine) { auto* crop = window.findChild<QWidget*>(QStringLiteral("refine-crop-labels")); const QStringList expected = {QStringLiteral("裁剪"), QStringLiteral("原始尺寸"), QStringLiteral("原照设置"), QStringLiteral("固定比例"), QStringLiteral("长*宽*分辨率"), QStringLiteral("自由尺寸"), QStringLiteral("证件照尺寸"), QStringLiteral("我的裁剪预设"), QStringLiteral("AI智能裁剪"), QStringLiteral("网格线"), QStringLiteral("分格数"), QStringLiteral("几何中心十字线"), QStringLiteral("旋转"), QStringLiteral("逆时针"), QStringLiteral("顺时针"), QStringLiteral("水平翻转"), QStringLiteral("垂直翻转"), QStringLiteral("角度滑杆"), QStringLiteral("AI水平矫正")}; QStringList found; if (crop != nullptr) { for (auto* label : crop->findChildren<QLabel*>()) { found.append(label->text()); if (label->isEnabled()) { qCritical("refine crop label enabled"); return 3; } } } if (crop == nullptr || found != expected) { qCritical("missing refine crop labels"); return 3; } auto* history = window.findChild<QWidget*>(QStringLiteral("refine-history-labels")); const QStringList history_expected = {QStringLiteral("历史记录"), QStringLiteral("暂无已加载照片")}; QStringList history_found; if (history != nullptr) { for (auto* label : history->findChildren<QLabel*>()) { history_found.append(label->text()); if (label->isEnabled()) { qCritical("refine history label enabled"); return 3; } } } if (history == nullptr || history_found != history_expected) { qCritical("missing refine history labels"); return 3; } } return 0; } window.show(); return app.exec();
+  QApplication app(argc, argv); pixcake::shell::PixCakeTheme::apply(app); QCoreApplication::setApplicationName(QStringLiteral("PixCake")); QCoreApplication::setApplicationVersion(QStringLiteral("0.1")); QCommandLineParser parser; parser.setApplicationDescription(QStringLiteral("PixCake desktop shell")); parser.addHelpOption(); QString default_page = QStringLiteral("login"); const auto executable = QFileInfo(QString::fromLocal8Bit(argv[0])).baseName(); for (const auto& page : {QStringLiteral("home"), QStringLiteral("library"), QStringLiteral("refine"), QStringLiteral("creative")}) if (executable.endsWith(QStringLiteral("-") + page)) default_page = page; QCommandLineOption page_option(QStringList() << QStringLiteral("page"), QStringLiteral("Display a read-only shell page: login, home, library, refine, creative."), QStringLiteral("page"), default_page); QCommandLineOption smoke_option(QStringList() << QStringLiteral("smoke"), QStringLiteral("Construct the selected page and exit without showing a window.")); parser.addOption(page_option); parser.addOption(smoke_option); parser.process(app); ShellWindow window(parse_page(parser.value(page_option))); if (parser.isSet(smoke_option)) { const auto bundled = QCoreApplication::applicationDirPath() + QStringLiteral("/../Resources/assets/"); for (const auto& relative : pixcake::shell::uploadedShellAssets()) { if (!QFileInfo::exists(bundled + relative) || pixcake::shell::loadAssetPixmap(relative, 16).isNull()) { qCritical("missing shell asset: %s", qPrintable(relative)); return 2; } } if (parse_page(parser.value(page_option)) == Page::Refine) { auto* crop = window.findChild<QWidget*>(QStringLiteral("refine-crop-labels")); const QStringList expected = {QStringLiteral("裁剪"), QStringLiteral("原始尺寸"), QStringLiteral("原照设置"), QStringLiteral("固定比例"), QStringLiteral("长*宽*分辨率"), QStringLiteral("自由尺寸"), QStringLiteral("证件照尺寸"), QStringLiteral("我的裁剪预设"), QStringLiteral("AI智能裁剪"), QStringLiteral("网格线"), QStringLiteral("分格数"), QStringLiteral("几何中心十字线"), QStringLiteral("旋转"), QStringLiteral("逆时针"), QStringLiteral("顺时针"), QStringLiteral("水平翻转"), QStringLiteral("垂直翻转"), QStringLiteral("角度滑杆"), QStringLiteral("AI水平矫正")}; QStringList found; if (crop != nullptr) { for (auto* label : crop->findChildren<QLabel*>()) { found.append(label->text()); if (label->isEnabled()) { qCritical("refine crop label enabled"); return 3; } } } if (crop == nullptr || found != expected) { qCritical("missing refine crop labels"); return 3; } auto* history = window.findChild<QWidget*>(QStringLiteral("refine-history-labels")); const QStringList history_expected = {QStringLiteral("历史记录"), QStringLiteral("暂无已加载照片")}; QStringList history_found; if (history != nullptr) { for (auto* label : history->findChildren<QLabel*>()) { history_found.append(label->text()); if (label->isEnabled()) { qCritical("refine history label enabled"); return 3; } } } if (history == nullptr || history_found != history_expected) { qCritical("missing refine history labels"); return 3; } if (const int sliders = check_refine_sliders(window); sliders != 0) return sliders; } return 0; } window.show(); return app.exec();
 }

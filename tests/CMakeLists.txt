@@ -29,6 +29,10 @@ add_executable(test_color_adjustment_panel ui/test_color_adjustment_panel.cpp)
 target_link_libraries(test_color_adjustment_panel PRIVATE pixcake_ui_shell pixcake_warnings)
 add_test(NAME test_color_adjustment_panel COMMAND test_color_adjustment_panel)
 
+add_executable(test_slider_spec ui/test_slider_spec.cpp)
+target_link_libraries(test_slider_spec PRIVATE pixcake_ui_panels pixcake_capability pixcake_warnings)
+add_test(NAME test_slider_spec COMMAND test_slider_spec)
+
 add_executable(test_guide_copy kernel/workspace/test_guide_copy.cpp)
 target_link_libraries(test_guide_copy PRIVATE pixcake_workspace pixcake_warnings)
 add_test(NAME test_guide_copy COMMAND test_guide_copy)

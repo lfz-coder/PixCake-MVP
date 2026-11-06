@@ -30,6 +30,7 @@ set_target_properties(pixcake_app_shell PROPERTIES
 )
 target_link_libraries(pixcake_app_shell PRIVATE
   pixcake_ui_shell
+  pixcake_ui_panels
   pixcake_warnings
   Qt6::Core
   Qt6::Gui
