@@ -1,0 +1,32 @@
+# 测试清单 T-22、安全清单 S-34：仓库内第三方源码、补丁和许可证文本必须与锁定文件中的 SHA-256 一致，
+# 发布前阻塞项必须为空。任何一项不一致即失败（防止生成文件或许可证文本被悄悄改动）。
+include(${SOURCE_DIR}/third_party/glad.lock.cmake)
+
+set(failures "")
+macro(check_sha path expected)
+  if(NOT EXISTS "${SOURCE_DIR}/${path}")
+    string(APPEND failures "missing ${path}\n")
+  elseif("${expected}" STREQUAL "")
+    string(APPEND failures "no locked SHA-256 for ${path}\n")
+  else()
+    file(SHA256 "${SOURCE_DIR}/${path}" actual)
+    if(NOT actual STREQUAL "${expected}")
+      string(APPEND failures "${path}: ${actual} != locked ${expected}\n")
+    endif()
+  endif()
+endmacro()
+
+check_sha(third_party/glad/include/glad/gl.h "${PIXCAKE_GLAD_SHA256_GL_H}")
+check_sha(third_party/glad/include/KHR/khrplatform.h "${PIXCAKE_GLAD_SHA256_KHRPLATFORM_H}")
+check_sha(third_party/glad/src/gl.c "${PIXCAKE_GLAD_SHA256_GL_C}")
+check_sha(third_party/glad/patches/0001-gl-c-local-adjustments.patch "${PIXCAKE_GLAD_SHA256_PATCH_0001}")
+check_sha(third_party/glad/LICENSES/Apache-2.0.txt "${PIXCAKE_GLAD_SHA256_LICENSE_APACHE}")
+check_sha(third_party/glad/LICENSES/CC0-1.0.txt "${PIXCAKE_GLAD_SHA256_LICENSE_CC0}")
+if(NOT "${PIXCAKE_GLAD_RELEASE_BLOCKERS}" STREQUAL "")
+  string(APPEND failures "glad release blockers remain: ${PIXCAKE_GLAD_RELEASE_BLOCKERS}\n")
+endif()
+
+if(NOT failures STREQUAL "")
+  message(FATAL_ERROR "third-party lock check failed:\n${failures}")
+endif()
+message(STATUS "third-party locks verified")

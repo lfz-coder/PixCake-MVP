@@ -1,0 +1,2 @@
+# 补丁里的空白上下文行是 diff 格式的一部分，不做空白检查。
+third_party/**/patches/*.patch -whitespace

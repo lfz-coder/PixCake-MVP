@@ -245,6 +245,11 @@ add_test(
   COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P ${CMAKE_SOURCE_DIR}/tests/arch/check_capability_ownership.cmake
 )
 
+add_test(
+  NAME third_party_locks_T22
+  COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P ${CMAKE_SOURCE_DIR}/tests/arch/check_third_party_locks.cmake
+)
+
 add_executable(test_file_log_sink services/logging/test_file_log_sink.cpp)
 target_include_directories(test_file_log_sink PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 target_link_libraries(test_file_log_sink PRIVATE pixcake_logging pixcake_warnings)

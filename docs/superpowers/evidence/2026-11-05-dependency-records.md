@@ -24,6 +24,21 @@
 2. **许可证全文**：本机没有找到 Apache-2.0、CC0-1.0 的原文文件；我没有凭记忆写许可证全文。需要从官方来源取得后放进 `third_party/glad/LICENSES/`。
 3. **备选生成器比较**：补一份简短比较，例如与 glad 1.x、GLEW、libepoxy 的对比。
 
+**阻塞项处理结果（2026-11-06，用户授权联网）**
+
+1. **复现比对：已通过。** 在 scratchpad 独立虚拟环境安装 `glad2==2.0.8`（wheel SHA-256 `cfe84018…9d70b`，依赖 Jinja2 3.1.6、MarkupSafe 3.0.4；本机 python.org 版 Python 缺 CA 证书，安装时临时指定 `SSL_CERT_FILE=/etc/ssl/cert.pem`，未改系统）。按锁定命令行加 `--reproducible`（用 wheel 自带的 `gl.xml`）生成：`gl.h`、`khrplatform.h` 与仓库一致（`gl.h` 只差生成时间一行）；`gl.c` 有 9 行不同，是首次导入（`120c53b`）时随带的三处本地改动：`GLAD_UNUSED(&glad_gl_has_extension)`、Linux 分支追加 `libEGL.so.1`/`libEGL.so`、Linux 分支追加 `eglGetProcAddress` 回退。这些改动没有单独记录过，现整理为 `third_party/glad/patches/0001-gl-c-local-adjustments.patch`；“重新生成 + 打补丁”与仓库三个文件逐字节一致（除时间戳行）。对 Khronos 在线规范生成，结果与 `--reproducible` 相同。用项目的 `-Wall -Wextra -Werror` 编译未打补丁的 `gl.c` 也能通过，所以第一处改动不是为了消除警告；三处都不影响 macOS、Windows 代码路径。
+2. **许可证全文：已补。** SPDX `(WTFPL OR CC0-1.0) AND Apache-2.0` 取 CC0-1.0 与 Apache-2.0：`third_party/glad/LICENSES/Apache-2.0.txt`（https://www.apache.org/licenses/LICENSE-2.0.txt）、`CC0-1.0.txt`（https://creativecommons.org/publicdomain/zero/1.0/legalcode.txt），2026-11-06 下载，SHA-256 写入锁定文件。目前没有发布的应用链接 `pixcake_glad`（壳层只用 Qt 后端），所以还没有“随包”对象；哪个应用开始链接它，就要把 `LICENSES/` 放进应用包。
+3. **备选比较：已补**（GitHub API，2026-11-06）：
+
+| 候选 | 形态 | 许可证（GitHub 识别） | 最近发布 | 是否适合本项目 |
+| --- | --- | --- | --- | --- |
+| glad 2（Dav1dde/glad） | 按官方规范生成源码，可只生成 `gl:core=3.3` | 生成结果头部写明 SPDX；仓库为多许可（GitHub 记 NOASSERTION） | v2.0.8（2024-09-29，即所用版本） | 采用：源码进仓库、不引入运行时库、可按命令行复现 |
+| GLEW（nigels-com/glew） | 运行时库，面向扩展加载 | NOASSERTION | glew-2.3.1（2026-01-24） | 不采用：要多链接一个库，本项目不需要扩展加载 |
+| libepoxy（anholt/libepoxy） | 运行时库，自动管理函数指针 | NOASSERTION | 1.5.10（2022-03-18） | 不采用：运行时库依赖，发布节奏慢 |
+| gl3w（skaslev/gl3w） | 生成核心档加载器的脚本 | Unlicense | 无发布标签 | 不采用：没有可锁定的版本号，只能锁提交 |
+
+锁定文件 `PIXCAKE_GLAD_RELEASE_BLOCKERS` 已清空。新增 CTest `third_party_locks_T22`（`tests/arch/check_third_party_locks.cmake`）：核对 glad 三个文件、补丁、两份许可证文本的 SHA-256，并要求阻塞项为空；改动许可证文本一个字节即失败（已验证）。
+
 ## 二、`kernel/import/src/source_probe.cpp` 手写例外（规范 §4）
 
 | 规范 §4 要求 | 记录 |
