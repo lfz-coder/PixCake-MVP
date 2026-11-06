@@ -1,8 +1,10 @@
 
 #include "pixcake/preset/preset_library.hpp"
+#include "pixcake/capability/fragment_codec.hpp"
 #include "support/fake_file_system.hpp"
 
 #include <cstdio>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -18,6 +20,12 @@ void expect(bool cond, const char* text, int line) {
 }
 
 #define EXPECT(cond) expect(static_cast<bool>(cond), #cond, __LINE__)
+
+// 能力片段的合法编码，里面只有一条测试用的未知记录（类型 77）带着标记字节。
+// 预设、同步、粘贴经能力模块校验片段，裸字节不再被接受。
+std::vector<std::uint8_t> marked(std::uint8_t n) {
+  return pixcake::encode_fragment_records({{77, {n}}});
+}
 
 const char* kPath = "docs/img.pxedit";
 
@@ -70,13 +78,13 @@ void test_c43_type_and_module_must_match() {
   EXPECT(library.save(wrong, false) == pixcake::ResultCode::StateConflict);
 
   auto mixed = portrait_named("mixed", han(1));
-  mixed.fragments.push_back(pixcake::PresetFragment{"color.global", 1, {1}});
+  mixed.fragments.push_back(pixcake::PresetFragment{"color.global", 1, marked(1)});
   EXPECT(library.save(mixed, false) == pixcake::ResultCode::StateConflict);
 
   auto pet = portrait_named("pet", han(1));
   pet.type = pixcake::kPresetCombo;
   pet.modules = {"人像", "色彩"};
-  pet.fragments.push_back(pixcake::PresetFragment{"pet", 1, {1}});
+  pet.fragments.push_back(pixcake::PresetFragment{"pet", 1, marked(1)});
   EXPECT(library.save(pet, false) == pixcake::ResultCode::StateConflict);
 
   auto one = portrait_named("one", han(1));
@@ -113,10 +121,10 @@ void test_overwrite_and_import_do_not_change_old_rows() {
 
 void test_c43_color_replaces_and_ai_color_stacks() {
   auto document = *pixcake::EditDocument::create("img-1");
-  document.store_fragment("color.global", 1, {1});
-  document.store_fragment("color.local", 1, {2});
-  document.store_fragment("portrait.blemish", 1, {3});
-  document.store_fragment("color.match", 1, {4});
+  document.store_fragment("color.global", 1, marked(1));
+  document.store_fragment("color.local", 1, marked(2));
+  document.store_fragment("portrait.blemish", 1, marked(3));
+  document.store_fragment("color.match", 1, marked(4));
   pixcake::test::FakeFileSystem files;
   EXPECT(document.write_snapshot(files, kPath) == pixcake::ResultCode::Ok);
 
@@ -124,7 +132,7 @@ void test_c43_color_replaces_and_ai_color_stacks() {
   color.id = "color";
   color.name = han(1);
   color.type = pixcake::kPresetColor;
-  color.fragments.push_back(pixcake::PresetFragment{"color.global", 1, {9}});
+  color.fragments.push_back(pixcake::PresetFragment{"color.global", 1, marked(9)});
 
   pixcake::PresetLibrary library;
   Latch latch;
@@ -136,7 +144,7 @@ void test_c43_color_replaces_and_ai_color_stacks() {
   ai.id = "ai";
   ai.name = han(1);
   ai.type = pixcake::kPresetAiColor;
-  ai.fragments.push_back(pixcake::PresetFragment{"color.style", 1, {8}});
+  ai.fragments.push_back(pixcake::PresetFragment{"color.style", 1, marked(8)});
   const auto ai_check = library.check_apply(document, ai);
   EXPECT(ai_check.code == pixcake::ResultCode::Ok);
   EXPECT(!ai_check.overwrite_color);
@@ -146,15 +154,15 @@ void test_c43_color_replaces_and_ai_color_stacks() {
   latch.on = false;
   EXPECT(library.apply(document, color, 0, files, kPath, latch) == pixcake::ResultCode::Ok);
   EXPECT(document.revision() == 1);
-  EXPECT(document.fragment("color.global")->inner == std::vector<std::uint8_t>({9}));
+  EXPECT(document.fragment("color.global")->inner == marked(9));
   EXPECT(!document.fragment("color.local").has_value());
-  EXPECT(document.fragment("portrait.blemish")->inner == std::vector<std::uint8_t>({3}));
-  EXPECT(document.fragment("color.match")->inner == std::vector<std::uint8_t>({4}));
+  EXPECT(document.fragment("portrait.blemish")->inner == marked(3));
+  EXPECT(document.fragment("color.match")->inner == marked(4));
   EXPECT(document.preset_refs().empty());
 
   EXPECT(library.apply(document, ai, 1, files, kPath, latch) == pixcake::ResultCode::Ok);
-  EXPECT(document.fragment("color.global")->inner == std::vector<std::uint8_t>({9}));
-  EXPECT(document.fragment("color.style")->inner == std::vector<std::uint8_t>({8}));
+  EXPECT(document.fragment("color.global")->inner == marked(9));
+  EXPECT(document.fragment("color.style")->inner == marked(8));
 
   const auto saved = files.files[kPath];
   EXPECT(library.apply(document, color, 0, files, kPath, latch) == pixcake::ResultCode::StateConflict);
@@ -169,7 +177,40 @@ void test_c43_color_replaces_and_ai_color_stacks() {
 
 }  // namespace
 
+// C-31：预设经能力模块写入。取值不符合参数模式时整次拒绝、文档不变；目标片段比本能力新时保留。
+void test_c31_preset_apply_validates_through_capability_modules() {
+  auto document = *pixcake::EditDocument::create("img-1");
+  document.store_fragment("color.global", 1, marked(1));
+  document.store_fragment("color.local", 2, marked(2));
+  pixcake::test::FakeFileSystem files;
+  EXPECT(document.write_snapshot(files, kPath) == pixcake::ResultCode::Ok);
+  pixcake::PresetLibrary library;
+  Latch latch;
+
+  pixcake::Preset bad;
+  bad.id = "bad";
+  bad.name = han(1);
+  bad.type = pixcake::kPresetColor;
+  bad.fragments.push_back(pixcake::PresetFragment{
+      "color.global", 1,
+      pixcake::encode_fragment_records({{pixcake::kFragmentParameterRecord,
+                                         pixcake::encode_parameter_record("vibrance", "500")}})});
+  const auto saved = files.files[kPath];
+  EXPECT(library.apply(document, bad, 0, files, kPath, latch) == pixcake::ResultCode::StateConflict);
+  EXPECT(document.revision() == 0 && document.fragment("color.global")->inner == marked(1));
+  EXPECT(files.files[kPath] == saved);
+
+  pixcake::Preset good = bad;
+  good.fragments[0].inner = pixcake::encode_fragment_records(
+      {{pixcake::kFragmentParameterRecord, pixcake::encode_parameter_record("vibrance", "10")}});
+  EXPECT(library.apply(document, good, 0, files, kPath, latch) == pixcake::ResultCode::Ok);
+  EXPECT(document.committed_parameter("color.global", "vibrance") == std::optional<std::string>("10"));
+  // color.local 的片段来自更新的版本：替换整个色彩模块时也不删它。
+  EXPECT(document.fragment("color.local") && document.fragment("color.local")->version == 2);
+}
+
 int main() {
+  test_c31_preset_apply_validates_through_capability_modules();
   test_c44_name_counts_characters_not_bytes();
   test_c43_type_and_module_must_match();
   test_overwrite_and_import_do_not_change_old_rows();

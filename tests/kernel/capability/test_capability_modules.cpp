@@ -360,9 +360,48 @@ void test_c31_invalid_or_too_new_values_are_reported() {
   EXPECT(compiled.diagnostics.size() == 1 && !compiled.diagnostics[0].blocking);
 }
 
+// C-31：预设、同步、粘贴经模块把来源片段写到目标（迁移 + 提取 + 取值校验）。
+void test_c31_transfer_replaces_with_validated_source() {
+  const auto source = fragment_of({{"vibrance", "10"}, {"future_param", "x"}}, {{9, {1}}});
+  const auto target = fragment_of({{"saturation", "5"}});
+  const auto moved = pixcake::transfer_fragment("color.global", source, target);
+  EXPECT(moved.code == pixcake::ResultCode::Ok && !moved.keep_target);
+  EXPECT(moved.fragment && *moved.fragment == source);
+  const auto cleared = pixcake::transfer_fragment("color.global", std::nullopt, target);
+  EXPECT(cleared.code == pixcake::ResultCode::Ok && !cleared.keep_target && !cleared.fragment);
+  // 没有登记模块的标识：原样复制，保留片段。
+  const auto unknown = pixcake::transfer_fragment("future.capability", source, std::nullopt);
+  EXPECT(unknown.code == pixcake::ResultCode::Ok && unknown.fragment && *unknown.fragment == source);
+}
+
+void test_c31_transfer_copies_too_new_source() {
+  const auto newer = fragment_of({{"vibrance", "999"}}, {}, 2);
+  const auto moved = pixcake::transfer_fragment("color.global", newer, std::nullopt);
+  EXPECT(moved.code == pixcake::ResultCode::Ok && moved.fragment && *moved.fragment == newer);
+}
+
+void test_c31_transfer_leaves_too_new_target() {
+  const auto moved =
+      pixcake::transfer_fragment("color.global", fragment_of({{"vibrance", "1"}}), fragment_of({}, {}, 2));
+  EXPECT(moved.code == pixcake::ResultCode::Ok && moved.keep_target);
+}
+
+void test_c31_transfer_rejects_corrupt_or_invalid_source() {
+  const pixcake::FragmentBytes corrupt{1, {1, 0, 0}};
+  EXPECT(pixcake::transfer_fragment("color.global", corrupt, std::nullopt).code == pixcake::ResultCode::DocumentCorrupt);
+  EXPECT(pixcake::transfer_fragment("color.global", fragment_of({{"vibrance", "500"}}), std::nullopt).code ==
+         pixcake::ResultCode::StateConflict);
+  EXPECT(pixcake::transfer_fragment("color.global", fragment_of({{"vibrance", "1"}}, {}, 0), std::nullopt).code ==
+         pixcake::ResultCode::StateConflict);
+}
+
 }  // namespace
 
 int main() {
+  test_c31_transfer_replaces_with_validated_source();
+  test_c31_transfer_copies_too_new_source();
+  test_c31_transfer_leaves_too_new_target();
+  test_c31_transfer_rejects_corrupt_or_invalid_source();
   test_c31_every_registered_capability_has_a_module();
   test_c31_write_back_replaces_or_overlays_and_keeps_unknown_fields();
   test_c31_extract_returns_known_values_and_the_fragment();

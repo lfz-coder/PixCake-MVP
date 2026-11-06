@@ -94,4 +94,41 @@ const CapabilityModule* find_capability_module(std::string_view capability_id) {
   return nullptr;
 }
 
+FragmentTransfer transfer_fragment(std::string_view capability_id, const std::optional<FragmentBytes>& source,
+                                   const std::optional<FragmentBytes>& target) {
+  FragmentTransfer result;
+  const CapabilityModule* module = find_capability_module(capability_id);
+  if (module == nullptr) {
+    result.fragment = source;
+    return result;
+  }
+  if (target && target->version > module->current_version()) {
+    result.keep_target = true;
+    return result;
+  }
+  if (!source) return result;
+  if (source->version > module->current_version()) {
+    result.fragment = source;
+    return result;
+  }
+  const FragmentResult migrated = module->migrate(*source);
+  if (migrated.code != ResultCode::Ok) {
+    result.code = migrated.code;
+    return result;
+  }
+  const ExtractResult extracted = module->extract(migrated.fragment);
+  if (extracted.code != ResultCode::Ok) {
+    result.code = extracted.code;
+    return result;
+  }
+  for (const auto& value : extracted.values) {
+    if (!validate_parameter_display_value(module->id(), value.parameter_id, value.display_value)) {
+      result.code = ResultCode::StateConflict;
+      return result;
+    }
+  }
+  result.fragment = migrated.fragment;
+  return result;
+}
+
 }  // namespace pixcake

@@ -1,11 +1,13 @@
 #include "pixcake/sync/sync_batch.hpp"
 
+#include "pixcake/capabilities/module_set.hpp"
 #include "pixcake/capability/capability_sync.hpp"
 #include "pixcake/mask/mask_sync.hpp"
 #include "pixcake/persist/write_lock.hpp"
 
 #include <cstddef>
 #include <map>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -61,6 +63,13 @@ bool checked_capabilities(const std::vector<std::string>& checked, std::vector<s
   return true;
 }
 
+std::optional<FragmentBytes> bytes_of(const std::optional<FragmentView>& view) {
+  if (!view) return std::nullopt;
+  return FragmentBytes{view->version, view->inner};
+}
+
+std::optional<FragmentBytes> bytes_of(const FragmentView& view) { return FragmentBytes{view.version, view.inner}; }
+
 ResultCode apply_one(const EditDocument& source, const std::string& source_path,
                      const std::vector<std::string>& capability_ids, const SyncTarget& target) {
   if (target.document == nullptr || target.files == nullptr || target.path.empty() ||
@@ -70,15 +79,12 @@ ResultCode apply_one(const EditDocument& source, const std::string& source_path,
   std::vector<FragmentView> replacements;
   std::vector<std::string> removable_ids;
   for (const auto& id : capability_ids) {
-    const auto existing = target.document->fragment(id);
-    const auto source_fragment = source.fragment(id);
-    if (existing && existing->version > 1) {
-      // Preserve a fragment from a newer producer even when the selected
-      // source has no replacement for it.
-      continue;
-    }
+    // 经能力模块写入（架构 7.2）：目标片段比本能力新时保留；来源迁移、提取、取值校验，不通过则整项失败。
+    const FragmentTransfer moved = transfer_fragment(id, bytes_of(source.fragment(id)), bytes_of(target.document->fragment(id)));
+    if (moved.code != ResultCode::Ok) return moved.code;
+    if (moved.keep_target) continue;
     removable_ids.push_back(id);
-    if (source_fragment) replacements.push_back(*source_fragment);
+    if (moved.fragment) replacements.push_back(FragmentView{id, moved.fragment->version, moved.fragment->inner});
   }
   if (removable_ids.empty() && replacements.empty()) return ResultCode::Ok;
   WriteScope scope(*target.files, target.path, target.latch);
@@ -182,16 +188,25 @@ ResultCode paste_committed(EditDocument& target, const EffectClipboard& clipboar
     return ResultCode::Ok;
   }
   std::vector<std::string> ids;
+  std::vector<FragmentView> replacements;
   ids.reserve(clipboard.fragments.size());
   for (const auto& fragment : clipboard.fragments) {
     if (fragment.capability_id.empty()) {
       return ResultCode::StateConflict;
     }
+    const FragmentTransfer moved = transfer_fragment(fragment.capability_id, bytes_of(fragment),
+                                                     bytes_of(target.fragment(fragment.capability_id)));
+    if (moved.code != ResultCode::Ok) return moved.code;
+    if (moved.keep_target) continue;
     ids.push_back(fragment.capability_id);
+    if (moved.fragment) {
+      replacements.push_back(FragmentView{fragment.capability_id, moved.fragment->version, moved.fragment->inner});
+    }
   }
+  if (ids.empty()) return ResultCode::Ok;
   WriteScope scope(files, path, latch);
   if (!scope) return scope.code();
-  return target.commit_fragment_replacement(expected_revision, ids, clipboard.fragments, files, path);
+  return target.commit_fragment_replacement(expected_revision, ids, replacements, files, path);
 }
 
 }  // namespace pixcake

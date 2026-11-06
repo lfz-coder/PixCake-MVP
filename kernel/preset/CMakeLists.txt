@@ -2,4 +2,4 @@ add_library(pixcake_preset
   src/preset_library.cpp
 )
 target_include_directories(pixcake_preset PUBLIC include)
-target_link_libraries(pixcake_preset PUBLIC pixcake_editdoc pixcake_warnings)
+target_link_libraries(pixcake_preset PUBLIC pixcake_editdoc pixcake_warnings PRIVATE pixcake_capability_modules)

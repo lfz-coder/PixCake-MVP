@@ -1,8 +1,10 @@
 #include "pixcake/preset/preset_library.hpp"
 
+#include "pixcake/capabilities/module_set.hpp"
 #include "pixcake/capability/capability_registry.hpp"
 #include "pixcake/persist/write_lock.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -244,15 +246,29 @@ ResultCode PresetLibrary::apply(EditDocument& document, const Preset& preset,
       remove_ids.push_back(capability_id);
     }
   }
-  std::vector<FragmentView> replacements;
+  // 每个能力经自己的模块写入（架构 7.2）：来源迁移、提取、取值校验；目标片段比本能力新时保留。
+  std::vector<std::string> touched = remove_ids;
   for (const auto& fragment : preset.fragments) {
-    FragmentView view;
-    view.capability_id = fragment.capability_id;
-    view.version = fragment.version;
-    view.inner = fragment.inner;
-    replacements.push_back(std::move(view));
+    if (std::find(touched.begin(), touched.end(), fragment.capability_id) == touched.end()) {
+      touched.push_back(fragment.capability_id);
+    }
   }
-  return document.commit_fragment_replacement(expected_revision, remove_ids, replacements, files, path);
+  std::vector<std::string> removals;
+  std::vector<FragmentView> replacements;
+  for (const auto& capability_id : touched) {
+    std::optional<FragmentBytes> source;
+    for (const auto& fragment : preset.fragments) {
+      if (fragment.capability_id == capability_id) source = FragmentBytes{fragment.version, fragment.inner};
+    }
+    std::optional<FragmentBytes> target;
+    if (const auto existing = document.fragment(capability_id)) target = FragmentBytes{existing->version, existing->inner};
+    const FragmentTransfer moved = transfer_fragment(capability_id, source, target);
+    if (moved.code != ResultCode::Ok) return moved.code;
+    if (moved.keep_target) continue;
+    if (target) removals.push_back(capability_id);
+    if (moved.fragment) replacements.push_back(FragmentView{capability_id, moved.fragment->version, moved.fragment->inner});
+  }
+  return document.commit_fragment_replacement(expected_revision, removals, replacements, files, path);
 }
 
 const std::vector<Preset>& PresetLibrary::presets() const { return presets_; }

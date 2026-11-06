@@ -25,7 +25,7 @@
 
 ## Review Focus
 
-1. 预设与同步改走模块后，目标片段里的未知字段保留；来源片段过新时原样复制；目标片段过新时不动。
+1. 预设与同步改走模块后：来源片段经迁移、提取、取值校验后替换目标；来源片段过新时原样复制；目标片段过新时不动；来源损坏或取值越界时拒绝且目标不变。
 2. 只有 `portrait.body` 会因坏片不可用；人像五个能力在检测未完成时不画。
 3. 非纯色背景下光影均匀不画、不报错（需求第 905 行）。
 4. 提交失败时不记“已编辑”；状态记录失败不改变提交结果，但写日志。
@@ -36,7 +36,7 @@
 - [x] **Task 1**：Q-06 收尾（`layer_document.cpp:711`）+ 账本移动语义。测试 `test_p23_moved_from_ledger_is_empty`；Q-06 用变异验证（把 `mask/selection_feather` 上限改成 900，解码 1000 的用例应失败）。
 - [x] **Task 2**：模块声明与图片条件。测试 `test_c31_only_body_reports_broken_image`、`test_c31_portrait_needs_detection`、`test_c31_sky_needs_assets`、`test_c31_solid_background_parameter_has_no_effect_on_other_backgrounds`、`test_c31_generation_entries_compile_to_jumps`。
 - [x] **Task 3**：20 个能力目录与工厂表。测试 `test_c31_every_capability_has_its_own_directory`；门禁对能力目录的链接检查改到工厂函数。
-- [ ] **Task 4**：预设、同步、粘贴经模块写回。测试 `test_c31_transfer_keeps_target_unknown_fields`、`test_c31_transfer_copies_too_new_source`、`test_c31_transfer_leaves_too_new_target`，以及预设、同步模块里的对应集成测试。
+- [x] **Task 4**：预设、同步、粘贴经模块写回。测试 `test_c31_transfer_replaces_with_validated_source`、`test_c31_transfer_copies_too_new_source`、`test_c31_transfer_leaves_too_new_target`、`test_c31_transfer_rejects_corrupt_or_invalid_source`，以及预设、同步模块里的对应集成测试。
 - [ ] **Task 5**：状态接线。测试 `test_p12_commit_marks_photo_edited`、`test_p12_failed_commit_does_not_mark_edited`、`test_p12_exported_products_mark_photos_exported`。
 - [ ] **Task 6**：第七轮复审。
 
@@ -48,3 +48,4 @@
 - 参数模式仍集中在 `kernel/capability/src/capability_registry.cpp`：`editdoc`、`layerdoc`、界面都要查参数模式，而能力目录链接 `pixcake_capability`，把参数模式移进能力目录会形成环。代价：加参数时要改两处（参数模式表、必要时能力声明）。
 - 图片条件（检测是否完成、背景是否纯色、素材是否在本机）在渲染里还没有来源，`render::compile` 的读取方返回“全部满足”。代价：在接上检测与素材模块之前，渲染端不会因这些条件跳过能力；模块与测试已就绪。
 - 拍摄时间不在本计划：内核不读 EXIF（依赖记录第二节只允许读文件头固定位置），解码适配器（libvips）还没有接入。
+- 预设、同步、粘贴的语义是“用来源的这一能力替换目标”，所以替换后的片段就是来源片段（经模块迁移），而不是“只写已登记参数、保留目标未知字段”。后者会让还没登记参数模式的能力（多数人像能力）同步后什么都不变。模块在这里负责的是：版本检查、迁移、解码、取值校验。代价：目标片段里来源没有的未知字段被替换掉，这与改走模块之前的行为相同。
