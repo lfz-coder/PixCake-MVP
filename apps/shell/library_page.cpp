@@ -1,3 +1,4 @@
+#include "export_dialog.hpp"
 #include "pages.hpp"
 #include "pixcake_theme.hpp"
 #include "pixcake_widgets.hpp"
@@ -35,7 +36,7 @@ QWidget* buildLibraryPage(const PageContext& context) {
   top_layout->addLayout(tabs);
   top_layout->addStretch();
   for (const auto& entry : ui::shell::page_list("library-toolbar")) {
-    top_layout->addWidget(itemAction("library-toolbar", entry, top));
+    top_layout->addWidget(toolbarAction("library-toolbar", entry, top, actions));
   }
   outer->addWidget(top);
 

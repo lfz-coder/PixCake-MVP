@@ -25,7 +25,7 @@
 
 - 带蒙版的操作（局部调整的语义蒙版要在全分辨率上重算，exportd 还没有分割模型）；
 - 要求水印（水印图片与位置还没接入）；
-- 格式“原始”（原文件事务，不经过 RGBA 编码，未实现）。
+- ~~格式“原始”~~：2026-11-07 起按原图容器写（JPEG→JPG、PNG→PNG、TIFF→TIFF8，其余→JPG），见 `2026-11-07-shell-export-flow.md`。
 
 解码只接受 JPEG、PNG、TIFF、BMP、RAW；HEIF 等与 renderd 一样拒绝。
 

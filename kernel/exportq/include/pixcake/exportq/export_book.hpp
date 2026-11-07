@@ -21,8 +21,13 @@ class ExportEventLog {
 
 class ExportBook {
  public:
+  // Recover: run crash recovery (architecture 11) on open.  Only the process
+  // that runs exports may do so: recovery fails a task caught writing its
+  // temporary file, which, seen from another process, is a task in progress.
+  // The shell reads the book with Skip while exportd runs.
+  enum class Recovery { Recover, Skip };
   static ResultCode open(std::string cache_directory, ExportEventLog& log, FileSystem& files,
-                         std::unique_ptr<ExportBook>& out);
+                         std::unique_ptr<ExportBook>& out, Recovery recovery = Recovery::Recover);
   ExportQueue& queue();
 
  private:

@@ -12,7 +12,9 @@ namespace pixcake::platform {
 // Only project types cross this header; CoreFoundation stays inside
 // platform/macos (architecture rule 19).
 
-enum class MacEncodeFormat { Jpeg, Tiff };
+// Tiff16 widens the 8-bit pixels to 16 bits per channel (v * 257): the file
+// has 16-bit samples, the precision is still that of the 8-bit pipeline.
+enum class MacEncodeFormat { Jpeg, Tiff, Tiff16, Png };
 
 struct MacEncodeRequest {
   MacEncodeFormat format = MacEncodeFormat::Jpeg;

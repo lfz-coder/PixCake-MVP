@@ -107,5 +107,5 @@ void test_b101_reopen_folds_to_last_save() {
 
 int main() {
   test_b101_reopen_folds_to_last_save();
-  return 0;
+  return g_failures == 0 ? 0 : 1;
 }

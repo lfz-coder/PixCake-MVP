@@ -274,7 +274,8 @@ endif()
 
 add_executable(test_exportd apps/test_exportd.cpp)
 target_include_directories(test_exportd PRIVATE ${CMAKE_SOURCE_DIR}/tests)
-target_link_libraries(test_exportd PRIVATE pixcake_exportd_service pixcake_platform_macos_image pixcake_warnings)
+target_link_libraries(test_exportd PRIVATE pixcake_exportd_service pixcake_platform_macos_image pixcake_warnings
+  "-framework CoreFoundation" "-framework CoreGraphics" "-framework ImageIO")
 add_test(NAME test_exportd COMMAND test_exportd)
 
 add_executable(test_generated apps/test_generated.cpp)
@@ -368,6 +369,17 @@ if(APPLE)
   add_dependencies(test_thumbnail_service pixcake_app_renderd)
   add_test(NAME test_thumbnail_service COMMAND test_thumbnail_service)
   set_tests_properties(test_thumbnail_service PROPERTIES TIMEOUT 120)
+endif()
+
+if(APPLE)
+  # Against the real exportd (ImageIO decode and encode).
+  add_executable(test_export_session services/export_session/test_export_session.cpp)
+  target_link_libraries(test_export_session PRIVATE pixcake_export_session pixcake_warnings)
+  target_compile_definitions(test_export_session PRIVATE PIXCAKE_EXPORTD_EXE="$<TARGET_FILE:pixcake_app_exportd>"
+    PIXCAKE_TEST_WORK_DIR="${CMAKE_CURRENT_BINARY_DIR}")
+  add_dependencies(test_export_session pixcake_app_exportd)
+  add_test(NAME test_export_session COMMAND test_export_session)
+  set_tests_properties(test_export_session PROPERTIES TIMEOUT 120)
 endif()
 
 add_executable(test_project_session services/project_session/test_project_session.cpp)

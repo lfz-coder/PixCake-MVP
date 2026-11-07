@@ -9,6 +9,8 @@
 #include "pixcake/platform/mac_image_encoder.hpp"
 #include "support/temp_dir.hpp"
 
+#include <ImageIO/ImageIO.h>
+
 #include <algorithm>
 #include <cassert>
 #include <cstdio>
@@ -54,6 +56,18 @@ pixcake::platform::MacDecodedImage decode(const std::string& path) {
   std::string diagnostic;
   assert(pixcake::platform::mac_decode_image(path, options, image, diagnostic) == ResultCode::Ok);
   return image;
+}
+
+// Bits per sample of an encoded image, read back through ImageIO.
+int bits_per_sample(const std::vector<std::uint8_t>& bytes) {
+  CFDataRef data = CFDataCreate(nullptr, bytes.data(), static_cast<CFIndex>(bytes.size()));
+  CGImageSourceRef source = CGImageSourceCreateWithData(data, nullptr);
+  CGImageRef image = source != nullptr ? CGImageSourceCreateImageAtIndex(source, 0, nullptr) : nullptr;
+  const int bits = image != nullptr ? static_cast<int>(CGImageGetBitsPerComponent(image)) : 0;
+  if (image != nullptr) CGImageRelease(image);
+  if (source != nullptr) CFRelease(source);
+  CFRelease(data);
+  return bits;
 }
 
 double mean_red(const std::vector<std::uint8_t>& rgba) {
@@ -134,10 +148,46 @@ int main() {
     auto other_space = work("bad-3", source, dir.path() + "/x.jpg", dir.path());
     other_space.encode.color_space = "Adobe RGB";
     assert(service.submit(std::move(other_space), diagnostic) == ResultCode::StateConflict);
-    auto original_format = work("bad-4", source, dir.path() + "/x.jpg", dir.path());
-    original_format.encode.format = ExportFormat::Original;
-    assert(service.submit(std::move(original_format), diagnostic) == ResultCode::UnsupportedFormat);
     assert(service.pending_count() == 0);
+  }
+
+  // "Original format" keeps the original's container: a JPEG stays JPEG, a PNG
+  // stays PNG.  TIFF 16-bit writes 16 bits per sample.
+  {
+    ExportService service;
+    auto jpeg = work("orig-1", source, dir.path() + "/o.jpg", dir.path());
+    jpeg.encode.format = ExportFormat::Original;
+    assert(service.submit(std::move(jpeg), diagnostic) == ResultCode::Ok);
+    auto product = service.process_next();
+    assert(product.code == ResultCode::Ok && product.format == ExportFormat::Jpeg);
+    assert(product.product[0] == 0xFF && product.product[1] == 0xD8);
+
+    const std::string png = dir.path() + "/original.png";
+    {
+      std::vector<std::uint8_t> rgba(16 * 8 * 4, 128);
+      pixcake::platform::MacEncodeRequest request;
+      request.format = pixcake::platform::MacEncodeFormat::Png;
+      std::vector<std::uint8_t> bytes;
+      assert(pixcake::platform::mac_encode_image(request, 16, 8, 16 * 4, rgba.data(), rgba.size(), bytes,
+                                                 diagnostic) == ResultCode::Ok);
+      pixcake::PosixFileSystem files;
+      assert(files.write_new(png, bytes).ok);
+    }
+    ExportService png_service;
+    auto from_png = work("orig-2", png, dir.path() + "/o.png", dir.path());
+    from_png.encode.format = ExportFormat::Original;
+    assert(png_service.submit(std::move(from_png), diagnostic) == ResultCode::Ok);
+    product = png_service.process_next();
+    assert(product.code == ResultCode::Ok && product.format == ExportFormat::Png);
+    assert(product.product.size() > 8 && product.product[1] == 'P' && product.product[2] == 'N');
+
+    ExportService tiff_service;
+    auto wide = work("tiff16-1", source, dir.path() + "/o.tif", dir.path());
+    wide.encode.format = ExportFormat::Tiff16;
+    assert(tiff_service.submit(std::move(wide), diagnostic) == ResultCode::Ok);
+    product = tiff_service.process_next();
+    assert(product.code == ResultCode::Ok && product.format == ExportFormat::Tiff16);
+    assert(bits_per_sample(product.product) == 16);
   }
 
   // Without a queue: the product comes back, full size, one EV brighter; the

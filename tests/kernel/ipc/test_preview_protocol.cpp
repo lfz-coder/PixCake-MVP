@@ -109,7 +109,25 @@ void test_c30_process_messages_round_trip() {
   pixcake::ipc::ExportProgressMessage export_out;
   EXPECT(pixcake::ipc::decode_export_progress(bytes, export_out) == pixcake::ResultCode::Ok);
   EXPECT(export_out.export_id == "exp-1" && export_out.status == "导出中" && export_out.completed == 3 &&
-         export_out.total == 10 && export_out.code == pixcake::ResultCode::DiskFull);
+         export_out.total == 10 && export_out.code == pixcake::ResultCode::DiskFull && export_out.reason.empty());
+  EXPECT(pixcake::ipc::is_export_progress(bytes) && !pixcake::ipc::is_export_start(bytes));
+  exported.reason = "磁盘已满";
+  EXPECT(pixcake::ipc::encode_export_progress(exported, bytes) == pixcake::ResultCode::Ok);
+  EXPECT(pixcake::ipc::decode_export_progress(bytes, export_out) == pixcake::ResultCode::Ok);
+  EXPECT(export_out.reason == "磁盘已满");
+
+  // Shell -> exportd: start a queued task with the resolved original path.
+  pixcake::ipc::ExportStartMessage start;
+  start.export_id = "exp-2";
+  start.source_path = "/照片/a.jpg";
+  EXPECT(pixcake::ipc::encode_export_start(start, bytes) == pixcake::ResultCode::Ok);
+  EXPECT(pixcake::ipc::is_export_start(bytes) && !pixcake::ipc::is_task_cancel(bytes));
+  pixcake::ipc::ExportStartMessage start_out;
+  EXPECT(pixcake::ipc::decode_export_start(bytes, start_out) == pixcake::ResultCode::Ok);
+  EXPECT(start_out.export_id == "exp-2" && start_out.source_path == "/照片/a.jpg");
+  EXPECT(pixcake::ipc::decode_export_progress(bytes, export_out) != pixcake::ResultCode::Ok);
+  start.source_path.clear();
+  EXPECT(pixcake::ipc::encode_export_start(start, bytes) == pixcake::ResultCode::StateConflict);
 
   pixcake::ipc::GenerationProgressMessage generated;
   generated.task_id = "task-1";

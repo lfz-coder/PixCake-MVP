@@ -12,6 +12,7 @@ constexpr std::uint32_t kExportProgress = 4;
 constexpr std::uint32_t kGenerationProgress = 5;
 constexpr std::uint32_t kTaskCancel = 6;
 constexpr std::uint32_t kHeartbeat = 7;
+constexpr std::uint32_t kExportStart = 12;
 constexpr std::size_t kMaxId = 1024;
 constexpr std::size_t kMaxText = 4096;
 
@@ -37,6 +38,7 @@ ResultCode encode_export_progress(const ExportProgressMessage& message, std::vec
   if (!writer.text(1, message.export_id, kMaxId) || !writer.text(2, message.status, kMaxText)) {
     return ResultCode::StateConflict;
   }
+  if (!writer.text(6, message.reason, kMaxText, true)) return ResultCode::StateConflict;
   writer.u32(3, message.completed);
   writer.u32(4, message.total);
   writer.u32(5, static_cast<std::uint32_t>(message.code));
@@ -53,13 +55,49 @@ ResultCode decode_export_progress(const std::vector<std::uint8_t>& bytes, Export
   ExportProgressMessage message;
   if (!reader.text(1, message.export_id, kMaxId) || !reader.text(2, message.status, kMaxText) ||
       !reader.u32(3, message.completed) || !reader.u32(4, message.total) || !reader.u32(5, code) ||
-      !valid_code(code) || message.completed > message.total) {
+      !valid_code(code) || message.completed > message.total ||
+      (reader.has(6) && !reader.text(6, message.reason, kMaxText, true))) {
     return ResultCode::StateConflict;
   }
   message.code = static_cast<ResultCode>(code);
   out = std::move(message);
   return ResultCode::Ok;
 }
+
+ResultCode encode_export_start(const ExportStartMessage& message, std::vector<std::uint8_t>& out) {
+  out.clear();
+  if (message.protocol_version != kProcessProtocolVersion) return ResultCode::StateConflict;
+  MessageWriter writer(kExportStart, message.protocol_version);
+  if (!writer.text(1, message.export_id, kMaxId) || !writer.text(2, message.source_path, kMaxText)) {
+    return ResultCode::StateConflict;
+  }
+  return finish(writer, out);
+}
+
+ResultCode decode_export_start(const std::vector<std::uint8_t>& bytes, ExportStartMessage& out) {
+  MessageReader reader;
+  if (const ResultCode opened = reader.open(bytes, kExportStart, kProcessProtocolVersion, kMaxProcessMessageBytes);
+      opened != ResultCode::Ok) {
+    return opened;
+  }
+  ExportStartMessage message;
+  if (!reader.text(1, message.export_id, kMaxId) || !reader.text(2, message.source_path, kMaxText)) {
+    return ResultCode::StateConflict;
+  }
+  out = std::move(message);
+  return ResultCode::Ok;
+}
+
+namespace {
+bool kind_is(const std::vector<std::uint8_t>& bytes, std::uint32_t expected) {
+  std::uint32_t kind = 0, version = 0;
+  return detail::peek_kind(bytes, kind, version) && kind == expected;
+}
+}  // namespace
+
+bool is_export_start(const std::vector<std::uint8_t>& bytes) { return kind_is(bytes, kExportStart); }
+bool is_export_progress(const std::vector<std::uint8_t>& bytes) { return kind_is(bytes, kExportProgress); }
+bool is_task_cancel(const std::vector<std::uint8_t>& bytes) { return kind_is(bytes, kTaskCancel); }
 
 ResultCode encode_generation_progress(const GenerationProgressMessage& message, std::vector<std::uint8_t>& out) {
   out.clear();

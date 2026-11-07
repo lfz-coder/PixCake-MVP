@@ -27,6 +27,10 @@ class MacExportDecoder final : public ExportDecoder {
       diagnostic = "image type is not supported: " + image.type_identifier;
       return ResultCode::UnsupportedFormat;
     }
+    out.kind = image.kind == platform::MacImageKind::Jpeg  ? SourceKind::Jpeg
+               : image.kind == platform::MacImageKind::Png ? SourceKind::Png
+               : image.kind == platform::MacImageKind::Tiff ? SourceKind::Tiff
+                                                            : SourceKind::Other;
     out.pixels.width = image.width;
     out.pixels.height = image.height;
     out.pixels.stride = image.stride;
@@ -47,7 +51,13 @@ class MacExportEncoder final : public ExportEncoder {
     code = validate_rgba_source(source, diagnostic);
     if (code != ResultCode::Ok) return code;
     platform::MacEncodeRequest mac;
-    mac.format = request.format == ExportFormat::Jpeg ? platform::MacEncodeFormat::Jpeg : platform::MacEncodeFormat::Tiff;
+    switch (request.format) {
+      case ExportFormat::Jpeg: mac.format = platform::MacEncodeFormat::Jpeg; break;
+      case ExportFormat::Tiff: mac.format = platform::MacEncodeFormat::Tiff; break;
+      case ExportFormat::Tiff16: mac.format = platform::MacEncodeFormat::Tiff16; break;
+      case ExportFormat::Png: mac.format = platform::MacEncodeFormat::Png; break;
+      case ExportFormat::Original: return ResultCode::UnsupportedFormat;  // validated above
+    }
     mac.quality = request.quality / 14.0;
     if (request.color_space.empty()) mac.icc_profile = request.source_icc_profile;
     mac.has_alpha = request.has_alpha;

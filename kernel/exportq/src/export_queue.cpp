@@ -19,6 +19,7 @@ struct JobView {
   bool commit_begun = false;
   std::uint64_t checksum = 0;
   ResultCode failure_code = ResultCode::Ok;
+  std::string failure_text;
 };
 
 struct Fold {
@@ -111,6 +112,8 @@ Fold fold(const std::vector<ExportEvent>& events) {
     } else if (event.kind == "fail") {
       job.status = "失败";
       job.failure_code = event.failure_code;
+      // Failures the queue records itself carry their kind as the phase.
+      job.failure_text = event.phase == "fail" ? std::string() : event.phase;
     } else if (event.kind == "cleanup-pending") {
       job.status = "待清理临时文件";
       job.failure_code = event.failure_code;
@@ -259,6 +262,12 @@ ResultCode ExportQueue::failure_reason(const std::string& export_id) const {
   return found->second.failure_code;
 }
 
+std::string ExportQueue::failure_text(const std::string& export_id) const {
+  const auto shot = fold(events_);
+  const auto found = shot.jobs.find(export_id);
+  return found == shot.jobs.end() || found->second.status != "失败" ? std::string() : found->second.failure_text;
+}
+
 bool ExportQueue::find_job(const std::string& export_id, ExportJob& out) const {
   const auto shot = fold(events_);
   const auto found = shot.jobs.find(export_id);
@@ -372,7 +381,9 @@ ResultCode ExportQueue::start_rendering(const std::string& export_id) {
   return note(std::move(event));
 }
 
-ResultCode ExportQueue::fail(const std::string& export_id) {
+ResultCode ExportQueue::fail(const std::string& export_id) { return fail(export_id, ResultCode::Ok, {}); }
+
+ResultCode ExportQueue::fail(const std::string& export_id, ResultCode code, const std::string& reason) {
   const auto shot = fold(events_);
   const auto found = shot.jobs.find(export_id);
   if (found == shot.jobs.end()) {
@@ -387,6 +398,8 @@ ResultCode ExportQueue::fail(const std::string& export_id) {
   ExportEvent event;
   event.kind = "fail";
   event.export_id = export_id;
+  event.failure_code = code;
+  event.phase = reason;
   return note(std::move(event));
 }
 

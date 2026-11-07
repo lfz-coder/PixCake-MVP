@@ -29,6 +29,9 @@
 #include <QSlider>
 #include <QSocketNotifier>
 #include <QStringList>
+#include <QTabBar>
+#include <QTableWidget>
+#include <QTimer>
 
 #include <algorithm>
 #include <cstdio>
@@ -179,6 +182,17 @@ std::string renderd_executable() {
 #endif
 }
 
+// exportd 同 renderd：同一个 .app 的 Contents/MacOS 里；开发构建退回构建目录里的 exportd。
+std::string exportd_executable() {
+  const QString bundled = QCoreApplication::applicationDirPath() + QStringLiteral("/pixcake_app_exportd");
+  if (QFileInfo(bundled).isExecutable()) return bundled.toStdString();
+#ifdef PIXCAKE_EXPORTD_DEV_PATH
+  return PIXCAKE_EXPORTD_DEV_PATH;
+#else
+  return bundled.toStdString();
+#endif
+}
+
 pixcake::preview_channel::PreviewSessionOptions preview_options() {
   pixcake::preview_channel::PreviewSessionOptions options;
   options.renderd_executable = renderd_executable();
@@ -203,6 +217,12 @@ void attach_projects(pixcake::shell::ShellWindow& window, const pixcake::Session
     return;
   }
   window.controller().attach_projects(std::move(projects), preview_options());
+  // 导出（需求第 19 节）：导出日志在 <数据目录>/exports，导出进程第一次导出时启动。
+  pixcake::export_session::ExportOptions exports;
+  exports.exportd_executable = exportd_executable();
+  exports.log_directory = pixcake::logging::default_log_directory();
+  exports.data_directory = data_directory.toStdString();
+  window.controller().attach_exports(session, std::move(exports));
 }
 
 #ifdef PIXCAKE_DEV_PAGES
@@ -223,7 +243,7 @@ QListWidget* library_photos(QWidget& window) {
 void screenshot(QWidget& window, const char* name) {
   const char* shot = std::getenv("PIXCAKE_SMOKE_SCREENSHOT");
   if (shot == nullptr || *shot == '\0') return;
-  window.resize(1386, 800);
+  if (window.isWindow() && qobject_cast<QDialog*>(&window) == nullptr) window.resize(1386, 800);
   QCoreApplication::processEvents();
   QString path = QString::fromLocal8Bit(shot);
   path.insert(path.lastIndexOf(QLatin1Char('.')), QLatin1Char('-') + QLatin1String(name));
@@ -265,6 +285,87 @@ bool wait_frames(const pixcake::shell::ShellWindow& window, std::uint64_t count,
 // 标成已编辑 → 图库列出照片 → 回主页看到项目 → 重新打开项目，曝光仍在。
 int smoke_open_photo(pixcake::shell::ShellWindow& window);
 int smoke_icon_drop(pixcake::shell::ShellWindow& window, const std::vector<std::string>& imported);
+
+// 导出（需求第 19 节）：精修里顶栏“导出”打开弹窗；未接入的项置灰并带原因；选 JPG、指定文件夹后导出，
+// 导出进程写出成品，导出列表显示成功；成品带着精修的曝光（和画面一样偏红亮）。
+int smoke_export(pixcake::shell::ShellWindow& window, const QString& folder) {
+  auto& controller = window.controller();
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  const QString label = QString::fromStdString(pixcake::ui::shell::page_item("refine-global", "export").text);
+  QPushButton* button = nullptr;
+  for (auto* candidate : window.findChildren<QPushButton*>()) {
+    if (candidate->accessibleName() == label && candidate->isVisibleTo(&window)) button = candidate;
+  }
+  if (button == nullptr || !button->isEnabled() || !controller.export_target()) {
+    qCritical("the refine export button is missing or disabled with a photo selected (%d %d %d %d)", button != nullptr,
+              button != nullptr && button->isEnabled(), controller.has_exports(), controller.export_target().has_value());
+    return 10;
+  }
+  QString problem;
+  QTimer::singleShot(0, [&] {
+    auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+    if (dialog == nullptr || dialog->objectName() != QStringLiteral("export-dialog")) {
+      problem = QStringLiteral("no export dialog");
+      return;
+    }
+    auto* tabs = dialog->findChild<QTabBar*>(QStringLiteral("export-tabs"));
+    auto* watermark = dialog->findChild<QWidget*>(QStringLiteral("export-watermark"));
+    auto* format = dialog->findChild<QComboBox*>(QStringLiteral("export-format"));
+    auto* path = dialog->findChild<QLineEdit*>(QStringLiteral("export-folder"));
+    if (tabs == nullptr || tabs->count() != 3 || tabs->isTabEnabled(2) || tabs->tabToolTip(2).isEmpty() ||
+        watermark == nullptr || watermark->isEnabled() || watermark->toolTip().isEmpty() || format == nullptr ||
+        format->count() != 4 || path == nullptr) {
+      problem = QStringLiteral("export dialog controls differ from the observed dialog");
+      dialog->reject();
+      return;
+    }
+    screenshot(*dialog, "export-quick");
+    tabs->setCurrentIndex(1);
+    for (auto* fold : dialog->findChildren<QAbstractButton*>(QStringLiteral("export-advanced"))) fold->setChecked(true);
+    screenshot(*dialog, "export-custom");
+    format->setCurrentIndex(format->findData(QStringLiteral("jpg")));
+    path->setText(folder);
+    for (auto* submit : dialog->findChildren<QPushButton*>()) {
+      if (submit->objectName() == QStringLiteral("primary")) submit->click();
+    }
+    if (dialog->isVisible()) {
+      problem = QStringLiteral("export dialog did not accept");
+      dialog->reject();
+    }
+  });
+  button->click();
+  if (!problem.isEmpty()) {
+    qCritical("%s", qPrintable(problem));
+    return 10;
+  }
+  QElapsedTimer timer;
+  timer.start();
+  std::vector<pixcake::export_session::ExportRow> rows;
+  for (;;) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    rows = controller.export_rows();
+    if (!rows.empty() && (rows.front().succeeded || rows.front().can_retry)) break;
+    if (timer.elapsed() > 60'000) break;
+  }
+  if (rows.empty() || !rows.front().succeeded) {
+    qCritical("export did not succeed: %s", rows.empty() ? "no task" : rows.front().reason.c_str());
+    return 10;
+  }
+  const QString product = QString::fromStdString(rows.front().destination_path);
+  const QImage image = QImage(product).convertToFormat(QImage::Format_RGBA8888);
+  const double red = mean_red(image);
+  auto* list = window.findChild<QDialog*>(QStringLiteral("export-list-dialog"));
+  auto* table = list != nullptr ? list->findChild<QTableWidget*>(QStringLiteral("export-list")) : nullptr;
+  if (!product.startsWith(folder) || !product.endsWith(QStringLiteral(".jpg")) || !(red > 200) || table == nullptr ||
+      table->rowCount() < 1) {
+    qCritical("export product or list wrong: %s, red %.1f", qPrintable(product), red);
+    return 10;
+  }
+  screenshot(*list, "export-list");
+  list->close();
+  std::printf("export ok: %s, red %.1f\n", qPrintable(product), red);
+  return 0;
+}
 
 int smoke_import_flow(pixcake::shell::ShellWindow& window, const std::vector<std::string>& paths,
                       const std::string& expected_project) {
@@ -395,6 +496,10 @@ int smoke_import_flow(pixcake::shell::ShellWindow& window, const std::vector<std
   if (!(red > 200)) {
     qCritical("reopened photo lost its edit (red %.1f)", red);
     return 9;
+  }
+  {
+    QTemporaryDir exported;
+    if (const int code = smoke_export(window, exported.path()); code != 0) return code;
   }
   if (const int dropped = smoke_icon_drop(window, paths); dropped != 0) return dropped;
   std::printf("import flow ok: project %s, %zu photo(s), reopened red %.1f, thumbnails edited %.1f original %.1f\n",

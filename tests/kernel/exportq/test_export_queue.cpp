@@ -167,7 +167,7 @@ void test_b66_snapshot_and_fast_export_stay() {
 void test_b32_b47_export_settings_parse_strictly() {
   pixcake::ExportSettings settings;
   for (const char* accepted : {"", "format=jpg;quality=14", "format=jpg;size_limit_kb=500", "copies=2",
-                               "format=tiff;srgb=1"}) {
+                               "format=tiff;srgb=1", "format=tiff16"}) {
     if (pixcake::parse_export_settings(accepted, settings) != pixcake::ResultCode::Ok) {
       std::fprintf(stderr, "rejected valid export settings: %s\n", accepted);
       EXPECT(false);
@@ -187,6 +187,9 @@ void test_b32_b47_export_settings_parse_strictly() {
   EXPECT(!settings.size_limit_kb.has_value());
   EXPECT(settings.convert_to_srgb);
   EXPECT(settings.print_copies == 3);
+  EXPECT(pixcake::parse_export_settings("format=tiff16", settings) == pixcake::ResultCode::Ok);
+  EXPECT(settings.format == pixcake::ExportFormat::Tiff16);
+  EXPECT(pixcake::encode_export_settings(settings) == "format=tiff16");
 }
 
 void test_b32_enqueue_rejects_duplicate_quality() {

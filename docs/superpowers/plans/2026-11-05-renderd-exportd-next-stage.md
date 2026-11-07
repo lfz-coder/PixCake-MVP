@@ -57,6 +57,7 @@ Task 0 结果：项目顶层只冻结 C++17 和现有 CMake 目标；`kernel/imp
 - Task 3（renderd 部分）：ImageIO 解码、预览源/结果消息、传输层、`PreviewServer` 与 `--socket` 已实现并测试（同一证据 §4）。exportd 的全分辨率解码与编码、壳层启动 renderd 和显示帧仍未做。
 - 后续（2026-11-06）：壳层启动 renderd 并显示帧已在壳层任务里完成；renderd 预览改为 GPU 优先。
 - Task 3（exportd 部分，2026-11-06）：ImageIO 全分辨率解码（含原图 ICC）、GPU 分块绘制（失败回退参考）、ImageIO 编码 JPG/TIFF（品质 0–14、色彩空间原始/sRGB）、经 `ExportQueue` 提交产品已实现并测试；证据 `docs/superpowers/evidence/2026-11-06-exportd-full-resolution.md`。壳层导出弹窗与到 exportd 的进程通信、蒙版、水印、原始格式仍未做。
+- 壳层导出（2026-11-07）：导出弹窗（快速导出 / 自定设置；未接入项置灰带原因）、壳层↔exportd 进程通信（`ExportStartMessage`、进度带原因）、导出列表（状态、失败原因、重试、取消）、原始格式与 TIFF16 已实现并测试；证据 `docs/superpowers/evidence/2026-11-07-shell-export-flow.md`。仍未做：蒙版、水印、文件大小限制、排版印刷、扣张数、跨卷导出、.app 打包 exportd。
 
 ## 启动条件
 

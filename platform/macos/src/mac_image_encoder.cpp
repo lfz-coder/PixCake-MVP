@@ -40,13 +40,32 @@ ResultCode mac_encode_image(const MacEncodeRequest& request, std::uint32_t width
     diagnostic = "encode quality is outside 0..1";
     return ResultCode::StateConflict;
   }
-  const CGBitmapInfo info = (request.has_alpha ? kCGImageAlphaPremultipliedLast : kCGImageAlphaNoneSkipLast) |
-                            kCGBitmapByteOrder32Big;
+  const bool wide = request.format == MacEncodeFormat::Tiff16;
+  const CGImageAlphaInfo alpha = request.has_alpha ? kCGImageAlphaPremultipliedLast : kCGImageAlphaNoneSkipLast;
+  const CGBitmapInfo info = alpha | (wide ? kCGBitmapByteOrder16Host : kCGBitmapByteOrder32Big);
+  // 16-bit TIFF: every 8-bit sample v becomes v * 257 (0 -> 0, 255 -> 65535).
+  std::vector<std::uint16_t> widened;
+  const void* pixels = rgba;
+  std::size_t pixel_bytes = bytes;
+  std::size_t row_bytes = stride;
+  if (wide) {
+    widened.resize(static_cast<std::size_t>(width) * height * 4);
+    for (std::uint32_t y = 0; y < height; ++y) {
+      const std::uint8_t* row = rgba + static_cast<std::size_t>(y) * stride;
+      std::uint16_t* out_row = widened.data() + static_cast<std::size_t>(y) * width * 4;
+      for (std::uint32_t i = 0; i < width * 4; ++i) out_row[i] = static_cast<std::uint16_t>(row[i] * 257U);
+    }
+    pixels = widened.data();
+    pixel_bytes = widened.size() * sizeof(std::uint16_t);
+    row_bytes = static_cast<std::size_t>(width) * 8;
+  }
+  const std::size_t bits = wide ? 16 : 8;
   CfHolder<CGColorSpaceRef> srgb(CGColorSpaceCreateWithName(kCGColorSpaceSRGB));
-  CfHolder<CFDataRef> data(CFDataCreateWithBytesNoCopy(nullptr, rgba, static_cast<CFIndex>(bytes), kCFAllocatorNull));
+  CfHolder<CFDataRef> data(CFDataCreateWithBytesNoCopy(nullptr, static_cast<const UInt8*>(pixels),
+                                                       static_cast<CFIndex>(pixel_bytes), kCFAllocatorNull));
   CfHolder<CGDataProviderRef> provider(CGDataProviderCreateWithCFData(data.ref));
-  ImageHolder image{CGImageCreate(width, height, 8, 32, stride, srgb.ref, info, provider.ref, nullptr, false,
-                                  kCGRenderingIntentDefault)};
+  ImageHolder image{CGImageCreate(width, height, bits, bits * 4, row_bytes, srgb.ref, info, provider.ref, nullptr,
+                                  false, kCGRenderingIntentDefault)};
   if (image.ref == nullptr) {
     diagnostic = "cannot wrap the pixels as an image";
     return ResultCode::IoFailed;
@@ -63,7 +82,7 @@ ResultCode mac_encode_image(const MacEncodeRequest& request, std::uint32_t width
       diagnostic = "the colour profile to keep is not an RGB ICC profile";
       return ResultCode::StateConflict;
     }
-    CGContextRef context = CGBitmapContextCreate(nullptr, width, height, 8, 0, target.ref, info);
+    CGContextRef context = CGBitmapContextCreate(nullptr, width, height, bits, 0, target.ref, info);
     if (context == nullptr) {
       diagnostic = "cannot create a bitmap in the original colour space";
       return ResultCode::IoFailed;
@@ -79,7 +98,9 @@ ResultCode mac_encode_image(const MacEncodeRequest& request, std::uint32_t width
   }
 
   CfHolder<CFMutableDataRef> encoded(CFDataCreateMutable(nullptr, 0));
-  const CFStringRef type = request.format == MacEncodeFormat::Jpeg ? CFSTR("public.jpeg") : CFSTR("public.tiff");
+  const CFStringRef type = request.format == MacEncodeFormat::Jpeg  ? CFSTR("public.jpeg")
+                           : request.format == MacEncodeFormat::Png ? CFSTR("public.png")
+                                                                    : CFSTR("public.tiff");
   CfHolder<CGImageDestinationRef> destination(CGImageDestinationCreateWithData(encoded.ref, type, 1, nullptr));
   if (destination.ref == nullptr) {
     diagnostic = "ImageIO cannot create the encoder";

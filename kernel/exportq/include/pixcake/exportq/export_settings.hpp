@@ -8,7 +8,9 @@
 
 namespace pixcake {
 
-enum class ExportFormat { Original, Jpg, Tiff };
+// 原始格式、JPG、TIFF8位、TIFF16位（2026-11-06 在 test 版导出弹窗读到的四项，
+// docs/superpowers/evidence/2026-11-06-export-dialog-observation.md）。
+enum class ExportFormat { Original, Jpg, Tiff, Tiff16 };
 
 // 导出设置（需求第 19 节）。品质与文件大小限制二选一：最多给一个。
 struct ExportSettings {

@@ -26,7 +26,11 @@ ResultCode ExportService::validate_work(const ExportWork& work, std::string& dia
     diagnostic = "export job has no original file";
     return ResultCode::StateConflict;
   }
-  const ResultCode settings = validate_encode_request(work.encode, diagnostic);
+  // "Original format" is resolved once the original is decoded; validate the
+  // rest of the settings as if it were JPG.
+  ExportEncodeRequest settings_request = work.encode;
+  if (settings_request.format == ExportFormat::Original) settings_request.format = ExportFormat::Jpeg;
+  const ResultCode settings = validate_encode_request(settings_request, diagnostic);
   if (settings != ResultCode::Ok) return settings;
   diagnostic.clear();
   return ResultCode::Ok;
@@ -111,6 +115,8 @@ ExportResult ExportService::produce(const ExportWork& work) {
   pixels.stride = rendered.image.row_stride == 0 ? rendered.image.width * 4 : rendered.image.row_stride;
   pixels.rgba = std::move(rendered.image.pixels);
   ExportEncodeRequest request = work.encode;
+  if (request.format == ExportFormat::Original) request.format = resolve_original_format(source.kind);
+  result.format = request.format;
   request.source_icc_profile = std::move(source.icc_profile);
   request.has_alpha = source.has_alpha;
   EncodedProduct product;
@@ -169,10 +175,11 @@ ExportResult ExportService::process_next(ExportQueue& queue, FileSystem& files) 
     result.code = committed;
     result.diagnostic = "export queue could not commit the product";
   }
-  const ResultCode failed = queue.fail(work.job.export_id);
+  const ResultCode failed = queue.fail(work.job.export_id, result.code, result.diagnostic);
   if (failed != ResultCode::Ok) {
-    result.code = failed;
-    result.diagnostic = "export queue rejected the failure transition";
+    // Keep the original cause: it is what the user needs to see.
+    result.diagnostic += " (export queue rejected the failure transition: " +
+                         std::string(result_code_label(failed)) + ")";
   }
   return result;
 }

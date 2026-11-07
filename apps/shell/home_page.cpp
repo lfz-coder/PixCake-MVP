@@ -1,3 +1,4 @@
+#include "export_dialog.hpp"
 #include "pages.hpp"
 #include "pixcake_widgets.hpp"
 #include "shell_icons.hpp"
@@ -113,7 +114,7 @@ QWidget* buildHomePage(const PageContext& context) {
   top->addWidget(search);
   top->addStretch();
   for (const auto& entry : ui::shell::page_list("home-toolbar")) {
-    auto* button = itemAction("home-toolbar", entry, content);
+    auto* button = toolbarAction("home-toolbar", entry, content, &context.actions);
     button->setObjectName(QStringLiteral("home-toolbar"));
     button->setToolTip(qs(entry.text));
     top->addWidget(button);

@@ -4,6 +4,16 @@
 
 namespace pixcake::exportd {
 
+ExportFormat resolve_original_format(SourceKind kind) {
+  switch (kind) {
+    case SourceKind::Png: return ExportFormat::Png;
+    case SourceKind::Tiff: return ExportFormat::Tiff;
+    case SourceKind::Jpeg:
+    case SourceKind::Other: break;
+  }
+  return ExportFormat::Jpeg;
+}
+
 ResultCode validate_encode_request(const ExportEncodeRequest& request, std::string& diagnostic) {
   if (request.format == ExportFormat::Original) {
     diagnostic = "original export is a source-file transaction, not an RGBA encode";

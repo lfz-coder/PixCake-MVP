@@ -9,11 +9,23 @@
 
 namespace pixcake::exportd {
 
+// Requirement 19 / the test build's dialog: original format, JPG, TIFF 8-bit,
+// TIFF 16-bit.  Png is what "original format" becomes for a PNG original.
 enum class ExportFormat {
   Original,
   Jpeg,
   Tiff,
+  Tiff16,
+  Png,
 };
+
+// The original's container, as the decoder recognised it.
+enum class SourceKind { Jpeg, Png, Tiff, Other };
+
+// "Original format" keeps the original's container where the encoder writes
+// it (JPEG, PNG, TIFF 8-bit) and writes JPG for everything else (RAW, BMP) --
+// a project choice: what the official build writes for those is not observed.
+ExportFormat resolve_original_format(SourceKind kind);
 
 struct ExportEncodeLimits {
   std::uint64_t max_output_bytes = 0;
@@ -50,6 +62,7 @@ struct EncodedProduct {
 // The original, decoded at full resolution: sRGB RGBA8 (premultiplied when
 // it has alpha), upright after EXIF orientation, with its ICC profile.
 struct DecodedSource {
+  SourceKind kind = SourceKind::Other;
   RgbaSource pixels;
   bool has_alpha = false;
   std::vector<std::uint8_t> icc_profile;

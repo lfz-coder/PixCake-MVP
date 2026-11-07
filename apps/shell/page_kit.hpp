@@ -2,6 +2,7 @@
 
 // 页面构建的公共部件（代码质量清单 Q-12）：页面文件只画控件，状态变化经 PageActions 交给
 // ShellController。文字来自 ui/shell 的文案表，图标按“组/条目编号”查。
+#include "pixcake/export_session/export_session.hpp"
 #include "pixcake/ui/panels/histogram.hpp"
 #include "pixcake/ui/panels/slider_spec.hpp"
 #include "pixcake/ui/shell/page_copy.hpp"
@@ -28,6 +29,9 @@ namespace pixcake::shell {
 using ui::shell::CopyItem;
 using ui::shell::Page;
 using ui::shell::ShellDisplay;
+using export_session::ExportDefaults;
+using export_session::ExportRequest;
+using export_session::ExportRow;
 
 // 画布要显示的东西：最新一帧和它的直方图，或者一行状态（生成中、失败原因）。
 struct PreviewView {
@@ -46,6 +50,14 @@ struct PhotoEntry {
   std::string file_name;
   std::string presence;     // 原图异常时的状态（如“原文件缺失”）；正常为空
   std::string edit_status;  // “已编辑”或空
+};
+
+// 导出弹窗要的东西（需求第 19 节）：选中的照片、项目名、第一张原图所在的文件夹、记住的默认值。
+struct ExportTarget {
+  std::vector<std::int64_t> photo_ids;
+  std::string project_name;
+  std::string original_folder;
+  ExportDefaults defaults;
 };
 
 // 页面发出的请求。实现方（ShellController）改显示模型；页面不直接改。
@@ -81,6 +93,20 @@ class PageActions {
   // 缩略图（renderd 生成，按已提交的编辑绘制）。还没有时返回空图；生成后经 watch_thumbnails 回调。
   virtual QImage thumbnail(std::int64_t) const { return {}; }
   virtual void watch_thumbnails(QObject*, std::function<void(std::int64_t, const QImage&)>) {}
+
+  // 导出（需求第 19 节）。没有选中照片或导出不可用时 export_target 为空，导出按钮禁用。
+  virtual std::optional<ExportTarget> export_target() const { return std::nullopt; }
+  virtual bool has_exports() const { return false; }
+  // 排进导出队列并交给导出进程；返回逐张的拒绝说明（“文件名: 原因”），队列不可用时 ok 为假。
+  virtual std::vector<std::string> request_export(const ExportRequest&, const ExportDefaults&, bool& ok) {
+    ok = false;
+    return {};
+  }
+  virtual std::vector<ExportRow> export_rows() const { return {}; }
+  virtual void request_export_retry(const std::string&) {}
+  virtual void request_export_cancel(const std::string&) {}
+  // 导出进度变化时回调（导出列表刷新）；owner 删除后不再回调。
+  virtual void watch_exports(QObject*, std::function<void()>) {}
 };
 
 struct PageContext {

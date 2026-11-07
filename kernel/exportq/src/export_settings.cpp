@@ -26,6 +26,8 @@ const char* format_name(ExportFormat format) {
       return "jpg";
     case ExportFormat::Tiff:
       return "tiff";
+    case ExportFormat::Tiff16:
+      return "tiff16";
     case ExportFormat::Original:
       break;
   }
@@ -54,6 +56,8 @@ ResultCode parse_export_settings(const std::string& text, ExportSettings& out) {
         parsed.format = ExportFormat::Jpg;
       } else if (value == "tiff") {
         parsed.format = ExportFormat::Tiff;
+      } else if (value == "tiff16") {
+        parsed.format = ExportFormat::Tiff16;
       } else {
         return ResultCode::StateConflict;
       }

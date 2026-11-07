@@ -33,6 +33,8 @@ struct ExportResult {
   std::uint32_t width = 0;
   std::uint32_t height = 0;
   bool drawn_on_gpu = false;
+  // The format written ("original format" resolved to the original's).
+  ExportFormat format = ExportFormat::Original;
 };
 
 // Owns only process-local admission and the pixels of one export: decode the
@@ -56,6 +58,9 @@ class ExportService {
   ExportResult process_next(ExportQueue& queue, FileSystem& files);
   ResultCode retry_pending(ExportQueue& queue, std::string& diagnostic);
   std::size_t pending_count() const;
+  // Forgets every pending task (the export server builds one per start message
+  // and keeps no failed task for retry_pending; the queue keeps the record).
+  void clear_pending() { pending_.clear(); }
 
   // Limits of the decoded original, checked before pixels are allocated.
   static constexpr std::uint32_t kMaxSourceEdge = 65535;

@@ -2,6 +2,7 @@
 
 #include "page_kit.hpp"
 
+#include "pixcake/export_session/export_session.hpp"
 #include "pixcake/preview_channel/preview_session.hpp"
 #include "pixcake/preview_channel/thumbnail_service.hpp"
 #include "pixcake/project_session/project_session.hpp"
@@ -38,6 +39,16 @@ class ShellController final : public PageActions {
   // 登录后接上项目库；preview 是打开照片时的 renderd 设置（文档目录由项目库给）。
   void attach_projects(std::unique_ptr<project_session::ProjectSession> projects,
                        preview_channel::PreviewSessionOptions preview);
+  // 接上导出（需求第 19 节）：<数据目录>/exports 的导出日志，导出进程按需启动。上次没交出去的任务接着交。
+  void attach_exports(const SessionState& session, export_session::ExportOptions options);
+  std::optional<ExportTarget> export_target() const override;
+  bool has_exports() const override { return exports_ != nullptr; }
+  std::vector<std::string> request_export(const ExportRequest& request, const ExportDefaults& defaults,
+                                          bool& ok) override;
+  std::vector<ExportRow> export_rows() const override;
+  void request_export_retry(const std::string& export_id) override;
+  void request_export_cancel(const std::string& export_id) override;
+  void watch_exports(QObject* owner, std::function<void()> changed) override;
   bool can_import() const override { return projects_ != nullptr; }
   void request_import(const std::vector<std::string>& paths) override;
   // 需求 §3.2：文件拖到应用图标（程序坞或访达里的 .app）。按当前页面和模态层决定去向，返回实际采取的去向。
@@ -78,6 +89,10 @@ class ShellController final : public PageActions {
   // Opens the selected photo (or the project's first) in the preview session unless it already is.
   void show_selected_photo();
   void show_notices(const std::vector<std::string>& notices, NoticeScene scene, ResultCode code);
+  // Follows exportd's connection: a notifier on its fd while it runs.
+  void watch_exportd();
+  void read_exports();
+  void exports_changed();
 
   ShellDisplay display_;
   std::function<void()> changed_;
@@ -97,6 +112,10 @@ class ShellController final : public PageActions {
   std::map<std::int64_t, QImage> thumbnail_cache_;
   std::set<std::int64_t> thumbnail_requested_;
   std::vector<std::pair<QPointer<QObject>, std::function<void(std::int64_t, const QImage&)>>> thumbnail_watchers_;
+  // After projects_: holds a reference to it and is destroyed first.
+  std::unique_ptr<export_session::ExportSession> exports_;
+  std::unique_ptr<QSocketNotifier> export_notifier_;
+  std::vector<std::pair<QPointer<QObject>, std::function<void()>>> export_watchers_;
 };
 
 }  // namespace pixcake::shell

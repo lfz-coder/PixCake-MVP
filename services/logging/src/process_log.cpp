@@ -16,6 +16,8 @@ std::optional<ProcessArguments> parse_process_arguments(int argc, char** argv) {
       directory_given = true;
     } else if (argument == "--socket" && i + 1 < argc && parsed.socket_path.empty() && argv[i + 1][0] != '\0') {
       parsed.socket_path = argv[++i];
+    } else if (argument == "--data-dir" && i + 1 < argc && parsed.data_directory.empty() && argv[i + 1][0] != '\0') {
+      parsed.data_directory = argv[++i];
     } else {
       return std::nullopt;
     }

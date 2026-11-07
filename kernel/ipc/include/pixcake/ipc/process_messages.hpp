@@ -23,6 +23,16 @@ struct ExportProgressMessage {
   std::uint32_t completed = 0;
   std::uint32_t total = 0;
   ResultCode code = ResultCode::Ok;
+  // 失败时给用户看的原因（需求第 19 节：失败要保留原因）；成功时为空。
+  std::string reason;
+};
+
+// 壳层 → 导出进程：开始一个已排进导出队列的任务。任务本身（文档快照、目标路径、设置）在
+// 导出队列的事件里，消息只带编号和壳层解析书签后得到的原图路径。
+struct ExportStartMessage {
+  std::uint32_t protocol_version = kProcessProtocolVersion;
+  std::string export_id;
+  std::string source_path;
 };
 
 // 生成进度。state 是 kernel/generate 的任务状态；结果文件与校验和随成功一起带回。
@@ -54,6 +64,12 @@ struct HeartbeatMessage {
 
 ResultCode encode_export_progress(const ExportProgressMessage& message, std::vector<std::uint8_t>& out);
 ResultCode decode_export_progress(const std::vector<std::uint8_t>& bytes, ExportProgressMessage& out);
+ResultCode encode_export_start(const ExportStartMessage& message, std::vector<std::uint8_t>& out);
+ResultCode decode_export_start(const std::vector<std::uint8_t>& bytes, ExportStartMessage& out);
+// The message kind in the envelope, so a reader can dispatch before decoding.
+bool is_export_start(const std::vector<std::uint8_t>& bytes);
+bool is_export_progress(const std::vector<std::uint8_t>& bytes);
+bool is_task_cancel(const std::vector<std::uint8_t>& bytes);
 ResultCode encode_generation_progress(const GenerationProgressMessage& message, std::vector<std::uint8_t>& out);
 ResultCode decode_generation_progress(const std::vector<std::uint8_t>& bytes, GenerationProgressMessage& out);
 ResultCode encode_task_cancel(const TaskCancelMessage& message, std::vector<std::uint8_t>& out);

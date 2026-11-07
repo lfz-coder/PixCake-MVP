@@ -1,3 +1,4 @@
+#include "export_dialog.hpp"
 #include "pages.hpp"
 #include "pixcake_theme.hpp"
 #include "pixcake_widgets.hpp"
@@ -281,7 +282,7 @@ QWidget* buildRefinePage(const PageContext& context) {
   top_layout->addLayout(tabs);
   top_layout->addStretch();
   for (const auto& entry : ui::shell::page_list("refine-global")) {
-    top_layout->addWidget(itemAction("refine-global", entry, top));
+    top_layout->addWidget(toolbarAction("refine-global", entry, top, &context.actions));
   }
   outer->addWidget(top);
 

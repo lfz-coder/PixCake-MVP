@@ -361,4 +361,104 @@ void ShellController::read_frames() {
   if (changed) publish();
 }
 
+void ShellController::attach_exports(const SessionState& session, export_session::ExportOptions options) {
+  if (!projects_) return;
+  std::string diagnostic;
+  if (export_session::ExportSession::open(*projects_, session, std::move(options), exports_, diagnostic) !=
+      ResultCode::Ok) {
+    qWarning("exports unavailable: %s", diagnostic.c_str());
+    return;
+  }
+  // Tasks queued by an earlier session (or left by a crash, now failed and retryable).
+  if (exports_->resume(diagnostic) != ResultCode::Ok) qWarning("export resume: %s", diagnostic.c_str());
+  watch_exportd();
+}
+
+std::optional<ExportTarget> ShellController::export_target() const {
+  if (!exports_ || !current_project_ || !selected_photo_) return std::nullopt;
+  ExportTarget target;
+  target.photo_ids = {*selected_photo_};
+  for (const auto& entry : projects()) {
+    if (entry.id == *current_project_) target.project_name = entry.name;
+  }
+  std::string path;
+  std::string diagnostic;
+  if (projects_->resolve_photo(*selected_photo_, path, diagnostic) == ResultCode::Ok) {
+    const auto slash = path.rfind('/');
+    target.original_folder = slash == std::string::npos || slash == 0 ? "/" : path.substr(0, slash);
+  }
+  target.defaults = exports_->defaults();
+  return target;
+}
+
+std::vector<std::string> ShellController::request_export(const ExportRequest& request,
+                                                         const ExportDefaults& defaults, bool& ok) {
+  ok = false;
+  std::vector<std::string> notices;
+  if (!exports_) return notices;
+  std::string diagnostic;
+  if (exports_->remember_defaults(defaults) != ResultCode::Ok) qWarning("export defaults not saved");
+  const ResultCode code = exports_->submit(request, notices, diagnostic);
+  if (code != ResultCode::Ok && !diagnostic.empty()) qWarning("export: %s", diagnostic.c_str());
+  ok = code == ResultCode::Ok;
+  watch_exportd();
+  exports_changed();
+  return notices;
+}
+
+std::vector<ExportRow> ShellController::export_rows() const {
+  return exports_ ? exports_->rows() : std::vector<ExportRow>{};
+}
+
+void ShellController::request_export_retry(const std::string& export_id) {
+  if (!exports_) return;
+  std::string diagnostic;
+  if (exports_->retry(export_id, diagnostic) != ResultCode::Ok) qWarning("export retry: %s", diagnostic.c_str());
+  watch_exportd();
+  exports_changed();
+}
+
+void ShellController::request_export_cancel(const std::string& export_id) {
+  if (!exports_) return;
+  std::string diagnostic;
+  if (exports_->cancel(export_id, diagnostic) != ResultCode::Ok) qWarning("export cancel: %s", diagnostic.c_str());
+  exports_changed();
+}
+
+void ShellController::watch_exports(QObject* owner, std::function<void()> changed) {
+  export_watchers_.emplace_back(owner, std::move(changed));
+}
+
+void ShellController::watch_exportd() {
+  const int fd = exports_ ? exports_->fd() : -1;
+  if (export_notifier_ && static_cast<int>(export_notifier_->socket()) == fd) return;
+  if (export_notifier_) {
+    // Possibly called from the notifier's own signal: let Qt delete it later.
+    export_notifier_->setEnabled(false);
+    export_notifier_.release()->deleteLater();
+  }
+  if (fd < 0) return;
+  export_notifier_ = std::make_unique<QSocketNotifier>(fd, QSocketNotifier::Read);
+  QObject::connect(export_notifier_.get(), &QSocketNotifier::activated, export_notifier_.get(),
+                   [this] { read_exports(); });
+}
+
+void ShellController::read_exports() {
+  if (!exports_) return;
+  const bool changed = exports_->read_progress();
+  watch_exportd();  // exportd may have gone
+  if (changed) exports_changed();
+}
+
+void ShellController::exports_changed() {
+  for (auto it = export_watchers_.begin(); it != export_watchers_.end();) {
+    if (it->first.isNull()) {
+      it = export_watchers_.erase(it);
+      continue;
+    }
+    it->second();
+    ++it;
+  }
+}
+
 }  // namespace pixcake::shell

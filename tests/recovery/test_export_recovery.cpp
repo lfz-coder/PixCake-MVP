@@ -443,7 +443,61 @@ void test_failure_reason_survives_reopen_and_other_jobs_continue() {
   EXPECT(reopened->queue().status("exp-good") == "成功");
 }
 
+// The shell reads the book while exportd runs a task: a reader that skips
+// recovery leaves the task in progress (recovering would fail it and remove
+// its temporary file, which is what exportd is writing).
+void test_reader_without_recovery_leaves_running_task_alone() {
+  pixcake::test::TempDir dir;
+  const std::string path = dir.path() + "/export.db";
+  pixcake::test::FakeFileSystem files;
+  std::unique_ptr<pixcake::SqliteExportLog> log;
+  EXPECT(pixcake::SqliteExportLog::open(path, log) == pixcake::ResultCode::Ok);
+  std::unique_ptr<pixcake::ExportBook> running;
+  EXPECT(pixcake::ExportBook::open("/cache/exports", *log, files, running) == pixcake::ResultCode::Ok);
+  reach_render(running->queue(), job_of("exp-1", "orig-1", "/out/a.jpg"));
+  files.rename_error = pixcake::ResultCode::IoFailed;  // stop between the temporary file and the rename
+  EXPECT(running->queue().commit_product("exp-1", kBytes, files) == pixcake::ResultCode::IoFailed);
+  EXPECT(running->queue().status("exp-1") == "提交到目标路径");
+  files.rename_error = pixcake::ResultCode::Ok;
+
+  std::unique_ptr<pixcake::SqliteExportLog> reader_log;
+  EXPECT(pixcake::SqliteExportLog::open(path, reader_log) == pixcake::ResultCode::Ok);
+  std::unique_ptr<pixcake::ExportBook> reader;
+  EXPECT(pixcake::ExportBook::open("/cache/exports", *reader_log, files, reader,
+                                   pixcake::ExportBook::Recovery::Skip) == pixcake::ResultCode::Ok);
+  EXPECT(reader->queue().status("exp-1") == "提交到目标路径");
+  EXPECT(files.exists("/cache/exports/exp-1"));
+  EXPECT(!files.exists("/out/a.jpg"));
+}
+
+// A failure reported with its reason keeps the reason across a reopen; a
+// retry clears it.
+void test_failure_text_survives_reopen() {
+  pixcake::test::TempDir dir;
+  const std::string path = dir.path() + "/export.db";
+  pixcake::test::FakeFileSystem files;
+  {
+    std::unique_ptr<pixcake::SqliteExportLog> log;
+    EXPECT(pixcake::SqliteExportLog::open(path, log) == pixcake::ResultCode::Ok);
+    std::unique_ptr<pixcake::ExportBook> book;
+    EXPECT(pixcake::ExportBook::open("/cache/exports", *log, files, book) == pixcake::ResultCode::Ok);
+    reach_render(book->queue(), job_of("exp-1", "orig-1", "/out/a.jpg"));
+    EXPECT(book->queue().fail("exp-1", pixcake::ResultCode::ImageCorrupt, "原图已损坏") == pixcake::ResultCode::Ok);
+  }
+  std::unique_ptr<pixcake::SqliteExportLog> log;
+  EXPECT(pixcake::SqliteExportLog::open(path, log) == pixcake::ResultCode::Ok);
+  std::unique_ptr<pixcake::ExportBook> book;
+  EXPECT(pixcake::ExportBook::open("/cache/exports", *log, files, book) == pixcake::ResultCode::Ok);
+  EXPECT(book->queue().status("exp-1") == "失败");
+  EXPECT(book->queue().failure_reason("exp-1") == pixcake::ResultCode::ImageCorrupt);
+  EXPECT(book->queue().failure_text("exp-1") == "原图已损坏");
+  EXPECT(book->queue().retry("exp-1") == pixcake::ResultCode::Ok);
+  EXPECT(book->queue().failure_text("exp-1").empty());
+}
+
 int main() {
+  test_reader_without_recovery_leaves_running_task_alone();
+  test_failure_text_survives_reopen();
   test_b95_b96_b97_rename_failure_and_crash_points();
   test_b113_reopen_repairs_cache_and_finishes_rename();
   test_recover_returns_sync_error_after_unlinking_mismatched_destination();
@@ -453,5 +507,5 @@ int main() {
   test_recovery_rejects_persisted_path_escape_without_touching_user_file();
   test_p11_failed_temp_cleanup_remains_retryable_after_reopen();
   test_failure_reason_survives_reopen_and_other_jobs_continue();
-  return 0;
+  return g_failures == 0 ? 0 : 1;
 }

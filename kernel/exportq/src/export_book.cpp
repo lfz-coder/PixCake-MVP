@@ -72,7 +72,7 @@ ExportBook::ExportBook(ExportEventLog& log, ExportQueue queue)
 ExportQueue& ExportBook::queue() { return queue_; }
 
 ResultCode ExportBook::open(std::string cache_directory, ExportEventLog& log, FileSystem& files,
-                            std::unique_ptr<ExportBook>& out) {
+                            std::unique_ptr<ExportBook>& out, Recovery recovery) {
   out.reset();
   std::vector<ExportEvent> events;
   std::optional<ExportCache> cache;
@@ -91,6 +91,10 @@ ResultCode ExportBook::open(std::string cache_directory, ExportEventLog& log, Fi
   if (opened != ResultCode::Ok) return opened;
   ExportQueue queue = ExportQueue::open(std::move(cache_directory), std::move(events));
   auto book = std::unique_ptr<ExportBook>(new ExportBook(log, std::move(queue)));
+  if (recovery == Recovery::Skip) {
+    out = std::move(book);
+    return ResultCode::Ok;
+  }
   const ResultCode recovered = book->queue_.recover(files);
   // Recovery is task-local.  A missing directory, permission error or
   // collision leaves that task retryable, but must not hide unrelated queue

@@ -2,11 +2,14 @@ add_library(pixcake_exportd_service
   src/image_io.cpp
   src/export_service.cpp
   src/system_image_codec.cpp
+  src/export_server.cpp
 )
 target_include_directories(pixcake_exportd_service PUBLIC include)
 target_link_libraries(pixcake_exportd_service PUBLIC
   pixcake_editdoc
   pixcake_exportq
+  pixcake_ipc
+  pixcake_preview_channel
   pixcake_gpu_render
   pixcake_gpu_backend_native
   pixcake_render
@@ -20,5 +23,6 @@ if(APPLE)
 endif()
 
 add_executable(pixcake_app_exportd main.cpp)
-target_link_libraries(pixcake_app_exportd PRIVATE pixcake_exportd_service pixcake_logging pixcake_warnings)
+target_link_libraries(pixcake_app_exportd PRIVATE pixcake_exportd_service pixcake_logging pixcake_storage
+                      pixcake_warnings)
 target_compile_features(pixcake_app_exportd PRIVATE cxx_std_17)

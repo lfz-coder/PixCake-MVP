@@ -42,6 +42,18 @@ struct PixCakeTheme final {
       QWidget#login-panel { background: #0b0b0b; }
       QFrame#workspace-top, QFrame#workspace-tools, QFrame#workspace-thumbs,
       QFrame#workspace-side, QFrame#home-sidebar, QFrame#home-content { background: #141414; }
+      QDialog#export-dialog, QDialog#export-list-dialog { background: #141414; }
+      QDialog#export-dialog QScrollArea, QDialog#export-dialog QScrollArea > QWidget, QWidget#export-form { background: #141414; }
+      QDialog#export-dialog QTabBar::tab { background: #1d1d1d; color: #a4a4a4; padding: 8px 28px; border: none; }
+      QDialog#export-dialog QTabBar::tab:selected { background: #2a2a2a; color: #f4f4f4; }
+      QDialog#export-dialog QTabBar::tab:disabled { color: #555555; }
+      QDialog#export-dialog QSpinBox { min-width: 64px; }
+      QDialog#export-dialog QSpinBox, QDialog#export-dialog QDoubleSpinBox {
+        background: #101010; color: #f4f4f4; border: 1px solid #383838; border-radius: 3px; padding: 2px 4px; }
+      QDialog#export-dialog QDoubleSpinBox:disabled { color: #555555; }
+      QToolButton#export-advanced { background: transparent; border: none; color: #f4f4f4; padding: 4px 0; }
+      QDialog#export-list-dialog QTableWidget { background: #101010; gridline-color: #292929; }
+      QDialog#export-list-dialog QHeaderView::section { background: #1d1d1d; color: #a4a4a4; border: none; padding: 4px; }
       QFrame#workspace-top { border-bottom: 1px solid #292929; }
       QFrame#workspace-tools { border-bottom: 1px solid #292929; }
       QFrame#workspace-thumbs { border-top: 1px solid #292929; }

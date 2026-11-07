@@ -63,5 +63,5 @@ void test_recovered_empty_save_round_trips() {
 
 int main() {
   test_recovered_empty_save_round_trips();
-  return 0;
+  return g_failures == 0 ? 0 : 1;
 }

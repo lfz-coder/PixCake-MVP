@@ -94,6 +94,9 @@ class ExportQueue : public FastExportLatch {
   ResultCode commit_product(const std::string& export_id, const std::vector<std::uint8_t>& bytes,
                             FileSystem& files);
   ResultCode fail(const std::string& export_id);
+  // 同上，并记下失败的结果码和给用户看的原因（需求第 19 节：导出列表显示失败原因）。
+  // 原因存在 fail 事件的 phase 里，重启后仍在。
+  ResultCode fail(const std::string& export_id, ResultCode code, const std::string& reason);
   ResultCode cancel(const std::string& export_id);
   ResultCode retry(const std::string& export_id);
   ResultCode request_print(const std::string& export_id, bool printer_available, bool& unavailable);
@@ -101,6 +104,8 @@ class ExportQueue : public FastExportLatch {
 
   std::string status(const std::string& export_id) const;
   ResultCode failure_reason(const std::string& export_id) const;
+  // 最近一次失败记下的原因；没有失败或没记原因时为空。
+  std::string failure_text(const std::string& export_id) const;
   bool find_job(const std::string& export_id, ExportJob& out) const;
   std::vector<ExportProductFact> products() const;
   ExportCache cache() const;

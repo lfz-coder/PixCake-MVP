@@ -230,5 +230,5 @@ int main() {
   test_export_batch_identity_survives_sqlite_reopen();
   test_b103_b105_generating_cancel_and_crash_do_not_refund();
   test_o12_replayed_stroke_is_counted_once_charged();
-  return 0;
+  return g_failures == 0 ? 0 : 1;
 }

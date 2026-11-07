@@ -138,6 +138,48 @@ Texts build_texts() {
   t["region.creative-layers"] = "图层面板";
   t["creative.empty"] = "暂无图片或图层";
   t["creative.empty.hint"] = "将照片拖入画布后开始创作";
+
+  // 导出弹窗与导出列表（需求第 19 节；字样与默认值见
+  // docs/superpowers/evidence/2026-11-06-export-dialog-observation.md）。
+  t["export.heading"] = "选择一个预设应用到 %1 张图片并导出";
+  t["export.preset"] = kWordPreset;
+  t["export.preset.placeholder"] = "请选择一个预设";
+  t["export.to"] = "导出至";
+  t["export.choose"] = "选择文件夹";
+  t["export.folder.suffix"] = "_导出";
+  t["export.upload"] = "上传选片交付";
+  t["export.advanced"] = "高级设置";
+  t["export.location"] = "导出位置";
+  t["export.location.default"] = "设为默认导出路径";
+  t["export.location.project"] = "新建项目文件夹存储";
+  t["export.location.keep"] = "保留导入时的完整路径";
+  t["export.format"] = "图片格式";
+  t["export.format.default"] = "设为默认格式";
+  t["export.quality.group"] = "品质（jpg）";
+  t["export.size_limit"] = "文件大小限制";
+  t["export.quality"] = "品质";
+  t["export.quality.small"] = "小文件";
+  t["export.quality.large"] = "大文件";
+  t["export.color"] = "色彩空间";
+  t["export.srgb"] = "转换为sRGB";
+  t["export.overlay"] = "保留叠加层";
+  t["export.watermark"] = "水印";
+  t["export.cancel"] = "取消";
+  t["export.submit"] = kExport;
+  t["export.queued"] = "已加入导出列表";
+  t["export.refused"] = "以下照片没有加入导出列表";
+  t["export.queue.unavailable"] = "导出队列不可用，请稍后重试";
+  t["export.why.preset"] = "预设还没有接入导出";
+  t["export.why.upload"] = "上传选片交付需要云端服务，还没有接入";
+  t["export.why.watermark"] = "导出水印还没有接入";
+  t["export.why.size_limit"] = "按文件大小限制导出还没有接入，请改用品质";
+  t["export.why.overlay"] = "保留叠加层的作用还没有核实，暂不可用";
+  t["export.why.print"] = "排版印刷还没有接入";
+  t["export.why.keep_path"] = "保留导入时的完整路径还没有接入";
+  t["export.list.empty"] = "暂无导出任务";
+  t["export.list.retry"] = "重试";
+  t["export.list.cancel"] = "取消任务";
+  t["export.list.open"] = "打开所在文件夹";
   return t;
 }
 
@@ -726,6 +768,14 @@ Lists build_lists() {
       item("pet-17", "宠物美化-眼睛-虹膜增强-左"),
       item("pet-18", "宠物美化-身型-祛碎毛"),
   };
+  lists["export-tabs"] = {item("quick", "快速导出"), item("custom", "自定设置"), item("print", "排版印刷")};
+  lists["export-destinations"] = {item("folder", "指定文件夹"), item("original", "原始照片所在的文件夹")};
+  // 原始格式、JPG、TIFF8位、TIFF16位；编号与 kernel/exportq 设置快照里的格式名一致。
+  lists["export-formats"] = {item("original", "原始格式"), item("jpg", "JPG"), item("tiff", "TIFF8位"),
+                             item("tiff16", "TIFF16位")};
+  lists["export-quality-levels"] = {item("low", "低"), item("medium", "中"), item("high", "高"), item("best", "最佳")};
+  lists["export-list-columns"] = {item("file", "文件名"), item("status", "状态"), item("reason", "失败原因"),
+                                  item("destination", "导出位置")};
   return lists;
 }
 
