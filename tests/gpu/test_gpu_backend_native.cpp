@@ -186,9 +186,47 @@ int main() {
     op.values = std::move(values);
     return op;
   };
+  const auto colour = [](const char* capability, const char* program, std::vector<RenderValue> values,
+                          std::vector<std::string> masks = {}, const char* blend = "normal") {
+    pixcake::render::RenderOperation op;
+    op.capability_id = capability;
+    op.stage = "color";
+    op.program = program;
+    op.order = 5;
+    op.values = std::move(values);
+    op.mask_ids = std::move(masks);
+    op.blend_mode = blend;
+    return op;
+  };
+  // Masks and layers with soft edges, zeros and full values.
+  pixcake::gpu::RenderInputs extras;
+  for (int m = 0; m < 5; ++m) {
+    pixcake::gpu::RenderMask mask{"m" + std::to_string(m), frame.width, frame.height, {}};
+    mask.alpha.resize(static_cast<std::size_t>(frame.width) * frame.height);
+    for (std::uint32_t i = 0; i < mask.alpha.size(); ++i) {
+      const std::uint32_t x = i % frame.width, y = i / frame.width;
+      mask.alpha[i] = static_cast<std::uint8_t>(x < 8 ? 0 : x > 88 ? 255 : ((x * (13 + m * 7) + y * (5 + m)) % 256));
+    }
+    extras.masks.push_back(std::move(mask));
+  }
+  const auto layer = [&](std::uint32_t order, const char* mask, float opacity, const char* blend, bool visible) {
+    pixcake::gpu::RgbaImage image = frame;
+    image.revision = 0;
+    for (std::size_t i = 0; i < image.pixels.size(); ++i) {
+      image.pixels[i] = static_cast<std::uint8_t>(i % 4 == 3 ? (i / 4) % 3 == 0 ? 200 : 255 : (i * (7 + order)) % 256);
+    }
+    return pixcake::gpu::RenderLayer{image, mask, opacity, blend, visible, order};
+  };
+  pixcake::gpu::RenderInputs layered = extras;
+  layered.layers.push_back(layer(3, "m1", 0.7F, "normal", true));
+  layered.layers.push_back(layer(1, "", 0.5F, "multiply", true));
+  layered.layers.push_back(layer(2, "m2", 1.0F, "screen", true));
+  layered.layers.push_back(layer(4, "", 1.0F, "normal", false));
   struct Case {
     const char* name;
     std::vector<pixcake::render::RenderOperation> operations;
+    const pixcake::gpu::RenderInputs* inputs = nullptr;
+    bool on_gpu = true;
   };
   const Case cases[] = {
       {"tone", {global({v("temperature", -30), v("exposure", 0.4), v("brightness", 10), v("contrast", 25),
@@ -213,17 +251,36 @@ int main() {
                         v("grain_shadows", 70), v("grain_midtones", 100), v("grain_highlights", 40)})}},
       {"colour then grain", {global({v("exposure", 0.3), v("hsl_hue_red", 30), v("grading_global_saturation", 30)}),
                              grain({v("grain_amount", 60)})}},
+      {"local, one mask", {colour("color.local", "pixcake.color.local", {v("exposure", 0.6), v("saturation", 30),
+                                                                          v("temperature", 40)}, {"m0"})}, &extras},
+      {"local, 3 masks, mult", {colour("color.local", "pixcake.color.local", {v("contrast", 40), v("shadows", 50)},
+                                       {"m1", "m2", "m3"}, "multiply")}, &extras},
+      {"post, 4 masks, screen", {colour("color.post", "pixcake.color.post", {v("brightness", -20), v("vibrance", 50)},
+                                        {"m0", "m1", "m2", "m3"}, "screen")}, &extras},
+      {"AI match and style", {colour("color.match", "pixcake.color.match", {v("amount", 150)}),
+                              colour("color.style", "pixcake.color.style", {v("amount", 80)}, {"m4"})}, &extras},
+      {"global, masked, grain", {global({v("hsl_hue_red", 40), v("exposure", -0.3)}),
+                                 colour("color.local", "pixcake.color.local", {v("exposure", 0.8)}, {"m2"}),
+                                 grain({v("grain_amount", 40)})}, &extras},
+      {"layers", {global({v("contrast", 20)})}, &layered},
+      {"layers only", {}, &layered},
+      {"five masks (reference)", {colour("color.local", "pixcake.color.local", {v("exposure", 0.5)},
+                                         {"m0", "m1", "m2", "m3", "m4"})}, &extras, false},
   };
   for (const auto& item : cases) {
     pixcake::render::RenderDescription multi;
     multi.document_revision = 19;
     multi.operations = item.operations;
+    const pixcake::gpu::RenderInputs& case_inputs = item.inputs != nullptr ? *item.inputs : inputs;
     pixcake::gpu::RenderResult on_gpu;
     pixcake::gpu::RenderResult on_cpu;
-    const bool drawn = executor.execute(context, multi, frame, inputs, on_gpu, error);
+    const bool drawn = executor.execute(context, multi, frame, case_inputs, on_gpu, error);
     EXPECT(drawn);
-    EXPECT(!on_gpu.reference_fallback);
-    EXPECT(executor.renderReference(multi, frame, inputs, on_cpu));
+    if (on_gpu.reference_fallback == item.on_gpu) {
+      std::fprintf(stderr, "FAIL %s: expected %s\n", item.name, item.on_gpu ? "the GPU path" : "a reference fallback");
+      ++failures;
+    }
+    EXPECT(executor.renderReference(multi, frame, case_inputs, on_cpu));
     int worst = 0;
     std::size_t off = 0;
     if (drawn && on_gpu.image.pixels.size() == on_cpu.image.pixels.size()) {
@@ -239,7 +296,12 @@ int main() {
                 on_cpu.image.pixels.size());
     if (worst > 1) std::fprintf(stderr, "FAIL %s: GPU differs from reference by %d (%s)\n", item.name, worst, error.c_str());
     if (worst > 1) ++failures;
-    EXPECT(on_gpu.statuses.size() == on_cpu.statuses.size());
+    bool same_statuses = on_gpu.statuses.size() == on_cpu.statuses.size();
+    for (std::size_t i = 0; same_statuses && i < on_cpu.statuses.size(); ++i) {
+      same_statuses = on_gpu.statuses[i].status == on_cpu.statuses[i].status &&
+                      on_gpu.statuses[i].capability_id == on_cpu.statuses[i].capability_id;
+    }
+    EXPECT(same_statuses);
   }
   std::printf("native GPU backend active\n");
   return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

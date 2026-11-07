@@ -115,7 +115,7 @@ int main() {
   assert(frame.rgba[4] == 100);   // unmasked pixel: unchanged
   assert(segmenter->calls == 1);
   assert(std::any_of(frame.statuses.begin(), frame.statuses.end(), [](const auto& s) {
-    return s.capability_id == "color.local" && s.status == pixcake::gpu::PassStatus::ReferenceOnly;
+    return s.capability_id == "color.local" && s.status == pixcake::gpu::PassStatus::Implemented;
   }));
 
   // A slider drag on the same image reuses the segmentation.

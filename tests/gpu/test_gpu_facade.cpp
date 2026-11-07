@@ -103,7 +103,8 @@ int main() {
   auto filter_probe = operation("color.global", "color", "pixcake.filter", {});
   auto unknown_probe = operation("free", "free", "pixcake.curves", {});
   assert(pixcake::gpu::PassRegistry::classify(global_probe.operations[0]) == pixcake::gpu::PassStatus::Implemented);
-  assert(pixcake::gpu::PassRegistry::classify(local_probe.operations[0]) == pixcake::gpu::PassStatus::ReferenceOnly);
+  // Local colour shares the global tool's shader (readback in test_gpu_backend_C57_C60).
+  assert(pixcake::gpu::PassRegistry::classify(local_probe.operations[0]) == pixcake::gpu::PassStatus::Implemented);
   assert(pixcake::gpu::PassRegistry::classify(filter_probe.operations[0]) == pixcake::gpu::PassStatus::MissingResource);
   assert(pixcake::gpu::PassRegistry::classify(unknown_probe.operations[0]) == pixcake::gpu::PassStatus::Unregistered);
 
@@ -288,10 +289,18 @@ int main() {
   pixcake::gl::Context reference_context(reference_context_impl);
   pixcake::gpu::RenderResult execute_result;
   std::string execute_error;
-  assert(executor.execute(reference_context, empty, image(0, 0, 0), masked_layer,
-                          execute_result, execute_error));
+  // Work the shaders do not cover (a 3D LUT) falls back to the reference...
+  pixcake::gpu::RenderInputs lut_inputs;
+  lut_inputs.resources = &lut;
+  assert(executor.execute(reference_context, lut_filter, image(64, 128, 192), lut_inputs, execute_result,
+                          execute_error));
   assert(execute_result.reference_fallback);
-  assert(execute_result.image.pixels[0] >= 127 && execute_result.image.pixels[0] <= 129);
+  assert(execute_result.image.pixels[0] >= 190 && execute_result.image.pixels[0] <= 192);
   assert(!execute_result.diagnostics.empty());
+  // ...while a context that cannot make GPU resources fails with an error;
+  // renderd then draws with the reference itself.
+  execute_error.clear();
+  assert(!executor.execute(reference_context, empty, image(0, 0, 0), masked_layer, execute_result, execute_error));
+  assert(!execute_error.empty());
   return 0;
 }

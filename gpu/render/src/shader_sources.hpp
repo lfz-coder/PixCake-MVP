@@ -7,8 +7,44 @@
 // quantises between passes exactly as the reference writes 8-bit after every
 // operation.  Image row y is gl_FragCoord.y - 0.5: upload and readback both
 // keep row 0 first, so the grain hash sees the same coordinates.
+//
+// A fragment shader is kPrelude followed by one body.  The prelude holds the
+// operation's composite (composite() in render_executor.cpp): up to four
+// masks packed into the RGBA channels of one texture multiply into the
+// weight, then normal, multiply or screen blending by the pixel's alpha.
 
 namespace pixcake::gpu::shaders {
+
+inline constexpr const char* kPrelude = R"(#version 330 core
+out vec4 color;
+uniform sampler2D source;
+uniform sampler2D masks;
+uniform vec4 blend0;  // masks used (0..4), blend mode (0 normal, 1 multiply, 2 screen), -, -
+
+float clamp01(float v) { return clamp(v, 0.0, 1.0); }
+float luminance(vec3 p) { return 0.2126 * p.r + 0.7152 * p.g + 0.0722 * p.b; }
+vec4 composite(vec4 base, vec4 top, float opacity, float mode) {
+  opacity = clamp01(opacity) * top.a;
+  vec4 mixed = top;
+  if (mode > 0.5 && mode < 1.5) mixed = vec4(base.rgb * top.rgb, top.a);
+  if (mode > 1.5) mixed = vec4(1.0 - (1.0 - base.rgb) * (1.0 - top.rgb), top.a);
+  return base + (mixed - base) * clamp01(opacity);
+}
+float mask_weight() {
+  float weight = 1.0;
+  if (blend0.x > 0.5) {
+    vec4 m = texelFetch(masks, ivec2(gl_FragCoord.xy), 0);
+    weight *= m.r;
+    if (blend0.x > 1.5) weight *= m.g;
+    if (blend0.x > 2.5) weight *= m.b;
+    if (blend0.x > 3.5) weight *= m.a;
+  }
+  return weight;
+}
+vec4 finish(vec4 before, vec3 p) {
+  return clamp(composite(before, vec4(p, before.a), mask_weight(), blend0.y), 0.0, 1.0);
+}
+)";
 
 inline constexpr const char* kVertex = R"(#version 330 core
 void main() {
@@ -17,12 +53,12 @@ void main() {
 }
 )";
 
-// White balance, AI style tint and tone (ToneColor), then the colour
-// sub-groups (ColorGroups): levels, black-and-white or HSL, selective colour,
-// colour grading.
-inline constexpr const char* kColorGlobal = R"(#version 330 core
-out vec4 color;
-uniform sampler2D source;
+// White balance and AI style tint (the colour step), tone, then the colour
+// sub-groups of the global tool (ColorGroups): levels, black-and-white or
+// HSL, selective colour, colour grading.  stage0 says which steps run, as
+// PreparedOperation does for local, post and AI colour.
+inline constexpr const char* kColor = R"(
+uniform vec4 stage0;   // colour step, tone step, -, -
 uniform vec4 wb0;      // white balance matrix rows; wb0.w = 1 when it applies
 uniform vec4 wb1;
 uniform vec4 wb2;
@@ -57,8 +93,6 @@ uniform vec4 zone_tint1;
 uniform vec4 zone_tint2;
 uniform vec4 zone_tint3;
 
-float clamp01(float v) { return clamp(v, 0.0, 1.0); }
-float luminance(vec3 p) { return 0.2126 * p.r + 0.7152 * p.g + 0.0722 * p.b; }
 float max3(vec3 p) { return max(max(p.r, p.g), p.b); }
 float min3(vec3 p) { return min(min(p.r, p.g), p.b); }
 
@@ -204,7 +238,9 @@ vec3 grading(vec3 p) {
 
 void main() {
   vec4 before = texelFetch(source, ivec2(gl_FragCoord.xy), 0);
-  vec3 p = tone(white_balance_style(before.rgb));
+  vec3 p = before.rgb;
+  if (stage0.x > 0.5) p = white_balance_style(p);
+  if (stage0.y > 0.5) p = tone(p);
   if (groups0.x > 0.5) p = levels(p);
   if (groups0.y > 0.5) {
     p = monochrome(p);
@@ -213,20 +249,15 @@ void main() {
   }
   if (groups0.w > 0.5) p = selective(p);
   if (groups1.x > 0.5) p = grading(p);
-  // composite(before, after, 1, normal): mix by the pixel's own alpha.
-  vec4 after = vec4(p, before.a);
-  color = clamp(before + (after - before) * clamp01(after.a), 0.0, 1.0);
+  color = finish(before, p);
 }
 )";
 
 // Detail grain (Grain): lattice value noise mixed with per-pixel noise.
-inline constexpr const char* kGrain = R"(#version 330 core
-out vec4 color;
-uniform sampler2D source;
+inline constexpr const char* kGrain = R"(
 uniform vec4 grain0;  // amount, shadows, midtones, highlights
 uniform vec4 grain1;  // 1 / cell, roughness, colour, -
 
-float luminance(vec3 p) { return 0.2126 * p.r + 0.7152 * p.g + 0.0722 * p.b; }
 float hash01(uint x, uint y, uint channel) {
   uint h = x * 0x8da6b343u ^ y * 0xd8163841u ^ channel * 0xcb1ab31fu;
   h ^= h >> 16;
@@ -265,8 +296,20 @@ void main() {
     p.g += strength * (mono + (noise(x, y, 2u) - mono) * grain1.z);
     p.b += strength * (mono + (noise(x, y, 3u) - mono) * grain1.z);
   }
-  vec4 after = vec4(p, before.a);
-  color = clamp(before + (after - before) * clamp(after.a, 0.0, 1.0), 0.0, 1.0);
+  color = finish(before, p);
+}
+)";
+
+// A layer over the frame (composite_layers): opacity times its mask.
+inline constexpr const char* kLayer = R"(
+uniform sampler2D layer;
+uniform vec4 layer0;  // opacity, mask present, blend mode, -
+
+void main() {
+  vec4 before = texelFetch(source, ivec2(gl_FragCoord.xy), 0);
+  vec4 top = texelFetch(layer, ivec2(gl_FragCoord.xy), 0);
+  float amount = layer0.x * (layer0.y > 0.5 ? texelFetch(masks, ivec2(gl_FragCoord.xy), 0).r : 1.0);
+  color = clamp(composite(before, top, amount, layer0.z), 0.0, 1.0);
 }
 )";
 

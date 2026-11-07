@@ -511,7 +511,8 @@ Pixel apply_grain(Pixel p, std::uint32_t x, std::uint32_t y, const Grain& g) {
   return p;
 }
 
-enum class Blend { Normal, Multiply, Screen };
+// The values are the shaders' blend0.y / layer0.z codes.
+enum class Blend { Normal = 0, Multiply = 1, Screen = 2 };
 Blend blend_of(const std::string& mode) {
   if (mode == "multiply") return Blend::Multiply;
   if (mode == "screen") return Blend::Screen;
@@ -597,24 +598,37 @@ bool has_prefix(std::string_view text, std::string_view prefix) {
 // reference (test_gpu_backend_C57_C60, test_gpu_shader_path).  A channel
 // outside this list falls back to the reference.  The colour editor's offsets
 // are drawn by neither path (no target colour yet), so they do not block it.
+const std::set<std::string_view>& tone_channels() {
+  static const std::set<std::string_view> channels = {
+      "temperature", "tint",    "exposure", "contrast", "brightness", "highlights", "shadows",
+      "whites",      "blacks",  "clarity",  "texture",  "dehaze",     "vibrance",   "saturation"};
+  return channels;
+}
 bool gpu_channel(std::string_view capability, std::string_view channel) {
   if (capability == "detail") return has_prefix(channel, "grain_");
-  static const std::set<std::string_view> tone = {
-      "temperature", "tint",   "exposure", "contrast", "brightness", "highlights", "shadows",  "whites",
-      "blacks",      "clarity", "texture", "dehaze",   "vibrance",   "saturation", "amount",   "profile",
-      "selective_mode", "color_editor_hue_shift", "color_editor_saturation_shift",
+  if (capability == "color.local" || capability == "color.post") return tone_channels().count(channel) != 0;
+  if (capability == "color.style") return channel == "amount";
+  if (capability == "color.match") return channel == "amount" || channel == "precise";
+  static const std::set<std::string_view> global = {
+      "amount", "profile", "selective_mode", "color_editor_hue_shift", "color_editor_saturation_shift",
       "color_editor_luminance_shift"};
-  if (tone.count(channel) != 0) return true;
+  if (tone_channels().count(channel) != 0 || global.count(channel) != 0) return true;
   for (const char* prefix : {"levels_rgb_", "hsl_", "bw_mix_", "selective_", "grading_"}) {
     if (has_prefix(channel, prefix)) return true;
   }
   return false;
 }
 
+// Masks of one operation fit the four channels of one mask texture.
+constexpr std::size_t kGpuMasksPerOperation = 4;
+
 bool gpu_formula_supported(const pixcake::render::RenderOperation& operation) {
-  const bool global = operation.capability_id == "color.global" && operation.program == "pixcake.color.global";
-  const bool detail = operation.capability_id == "detail" && operation.program == "pixcake.detail";
-  if (!operation.enabled || !(global || detail) || operation.blend_mode != "normal" || !operation.mask_ids.empty()) {
+  static const std::set<std::pair<std::string_view, std::string_view>> programs = {
+      {"color.global", "pixcake.color.global"}, {"color.local", "pixcake.color.local"},
+      {"color.post", "pixcake.color.post"},     {"color.match", "pixcake.color.match"},
+      {"color.style", "pixcake.color.style"},   {"detail", "pixcake.detail"}};
+  if (!operation.enabled || programs.count({operation.capability_id, operation.program}) == 0 ||
+      operation.mask_ids.size() > kGpuMasksPerOperation) {
     return false;
   }
   for (const auto& value : operation.values) {
@@ -752,36 +766,65 @@ void draw_reference(const PreparedOperation& draw, RgbaImage& frame) {
   });
 }
 
-void composite_layers(const RenderInputs& inputs, RenderResult& result) {
-  const RgbaImage& input = result.image;
-  auto layers = inputs.layers;
-  std::sort(layers.begin(), layers.end(), [](const RenderLayer& a, const RenderLayer& b) { return a.order < b.order; });
-  for (const auto& layer : layers) {
-    const auto layer_stride = layer.image.row_stride == 0 ? layer.image.width * 4 : layer.image.row_stride;
-    const std::string layer_id = "layer:" + std::to_string(layer.order);
-    if (!layer.visible) { result.statuses.push_back({layer_id, "layer", PassStatus::Disabled, "图层已隐藏"}); continue; }
-    if (layer.image.width != input.width || layer.image.height != input.height || layer_stride < input.width * 4 || layer.image.pixels.size() < static_cast<std::size_t>(layer_stride) * layer.image.height) {
+// A visible, valid layer to composite over the frame, in order.
+struct PreparedLayer {
+  const RenderLayer* layer = nullptr;
+  const RenderMask* mask = nullptr;
+  Blend blend = Blend::Normal;
+};
+
+// Records every layer's status and diagnostics and lists those that draw.
+std::vector<PreparedLayer> prepare_layers(const RenderInputs& inputs, std::uint32_t width, std::uint32_t height,
+                                          RenderResult& result) {
+  std::vector<const RenderLayer*> layers;
+  for (const auto& layer : inputs.layers) layers.push_back(&layer);
+  std::stable_sort(layers.begin(), layers.end(), [](const RenderLayer* a, const RenderLayer* b) { return a->order < b->order; });
+  std::vector<PreparedLayer> drawn;
+  for (const auto* layer : layers) {
+    const auto layer_stride = layer->image.row_stride == 0 ? layer->image.width * 4 : layer->image.row_stride;
+    const std::string layer_id = "layer:" + std::to_string(layer->order);
+    if (!layer->visible) { result.statuses.push_back({layer_id, "layer", PassStatus::Disabled, "图层已隐藏"}); continue; }
+    if (layer->image.width != width || layer->image.height != height || layer_stride < width * 4 || layer->image.pixels.size() < static_cast<std::size_t>(layer_stride) * layer->image.height) {
       result.statuses.push_back({layer_id, "layer", PassStatus::MissingResource, "图层尺寸或行距无效，跳过图层"});
       result.diagnostics.push_back({layer_id, "图层尺寸或行距无效，跳过图层", false});
       continue;
     }
-    if (layer.blend_mode != "normal" && layer.blend_mode != "multiply" && layer.blend_mode != "screen") {
+    if (layer->blend_mode != "normal" && layer->blend_mode != "multiply" && layer->blend_mode != "screen") {
       result.statuses.push_back({layer_id, "layer", PassStatus::InvalidInput, "未知图层混合模式，跳过图层"});
       result.diagnostics.push_back({layer_id, "未知图层混合模式，跳过图层", false});
       continue;
     }
-    const auto* mask = layer.mask_id.empty() ? nullptr : mask_for(inputs, layer.mask_id);
-    if (!layer.mask_id.empty() && (mask == nullptr || mask->width != input.width || mask->height != input.height || mask->alpha.size() < static_cast<std::size_t>(input.width) * input.height)) { result.statuses.push_back({layer_id, "layer", PassStatus::MissingResource, "图层蒙版缺失或尺寸不匹配，跳过图层"}); result.diagnostics.push_back({layer_id, "图层蒙版缺失或尺寸不匹配，跳过图层", false}); continue; }
+    const auto* mask = layer->mask_id.empty() ? nullptr : mask_for(inputs, layer->mask_id);
+    if (!layer->mask_id.empty() && (mask == nullptr || mask->width != width || mask->height != height || mask->alpha.size() < static_cast<std::size_t>(width) * height)) { result.statuses.push_back({layer_id, "layer", PassStatus::MissingResource, "图层蒙版缺失或尺寸不匹配，跳过图层"}); result.diagnostics.push_back({layer_id, "图层蒙版缺失或尺寸不匹配，跳过图层", false}); continue; }
     result.statuses.push_back({layer_id, "layer", PassStatus::Implemented, {}});
-    const Blend layer_blend = blend_of(layer.blend_mode);
-    RgbaImage& frame = result.image;
-    for_rows(frame.width, frame.height, [&](std::uint32_t first, std::uint32_t end) {
-      for (std::uint32_t y = first; y < end; ++y) for (std::uint32_t x = 0; x < frame.width; ++x) {
-        const float amount = layer.opacity * (mask == nullptr ? 1.0F : mask->alpha[static_cast<std::size_t>(y) * frame.width + x] / 255.0F);
-        write(frame, x, y, composite(read(frame, x, y), read(layer.image, x, y), amount, layer_blend));
-      }
-    });
+    drawn.push_back({layer, mask, blend_of(layer->blend_mode)});
   }
+  return drawn;
+}
+
+void draw_layer_reference(const PreparedLayer& prepared, RgbaImage& frame) {
+  const RenderLayer& layer = *prepared.layer;
+  const RenderMask* mask = prepared.mask;
+  for_rows(frame.width, frame.height, [&](std::uint32_t first, std::uint32_t end) {
+    for (std::uint32_t y = first; y < end; ++y) for (std::uint32_t x = 0; x < frame.width; ++x) {
+      const float amount = layer.opacity * (mask == nullptr ? 1.0F : mask->alpha[static_cast<std::size_t>(y) * frame.width + x] / 255.0F);
+      write(frame, x, y, composite(read(frame, x, y), read(layer.image, x, y), amount, prepared.blend));
+    }
+  });
+}
+
+// Up to four masks in the R, G, B, A channels of one RGBA8 frame; unused
+// channels are 255 (weight 1).
+void pack_masks(const std::vector<const RenderMask*>& masks, std::uint32_t width, std::uint32_t height,
+                std::vector<std::uint8_t>& packed) {
+  packed.resize(static_cast<std::size_t>(width) * height * 4);
+  const std::size_t used = std::min(masks.size(), kGpuMasksPerOperation);
+  for_rows(width, height, [&](std::uint32_t first, std::uint32_t end) {
+    for (std::size_t i = static_cast<std::size_t>(first) * width; i < static_cast<std::size_t>(end) * width; ++i) {
+      std::uint8_t* out = packed.data() + i * 4;
+      for (std::size_t m = 0; m < 4; ++m) out[m] = m < used ? masks[m]->alpha[i] : 255;
+    }
+  });
 }
 
 // Uniforms of one GPU pass, set from the prepared operation.
@@ -791,14 +834,18 @@ bool set_color_uniforms(gl::Program& program, const PreparedOperation& draw, std
   const auto& m = t.white_balance_matrix.m;
   const float on = t.white_balance ? 1.0F : 0.0F;
   const auto flag = [](bool value) { return value ? 1.0F : 0.0F; };
-  bool ok = program.setVec4("wb0", {m[0][0], m[0][1], m[0][2], on}, error) &&
+  // Sub-groups only belong to the global tool (has_groups); elsewhere they stay off.
+  const bool colour_step = !draw.has_lut && draw.is_color, tone_step = !draw.has_lut && draw.is_tone;
+  bool ok = program.setVec4("stage0", {flag(colour_step), flag(tone_step), 0.0F, 0.0F}, error) &&
+            program.setVec4("wb0", {m[0][0], m[0][1], m[0][2], on}, error) &&
             program.setVec4("wb1", {m[1][0], m[1][1], m[1][2], 0.0F}, error) &&
             program.setVec4("wb2", {m[2][0], m[2][1], m[2][2], 0.0F}, error) &&
             program.setVec4("tone0", {t.style, t.exposure_gain, t.brightness, t.contrast_amount}, error) &&
             program.setVec4("tone1", {t.highlights, t.shadows, t.whites, t.blacks}, error) &&
             program.setVec4("tone2", {t.local, t.saturation, t.vibrance, 0.0F}, error) &&
-            program.setVec4("groups0", {flag(g.levels), flag(g.monochrome), flag(g.hsl), flag(g.selective)}, error) &&
-            program.setVec4("groups1", {flag(g.grading), flag(g.absolute), g.blending, 0.0F}, error) &&
+            program.setVec4("groups0", {flag(draw.has_groups && g.levels), flag(draw.has_groups && g.monochrome),
+                                        flag(draw.has_groups && g.hsl), flag(draw.has_groups && g.selective)}, error) &&
+            program.setVec4("groups1", {flag(draw.has_groups && g.grading), flag(g.absolute), g.blending, 0.0F}, error) &&
             program.setVec4("levels0", {g.in_black, g.in_white, g.gamma, g.out_black}, error) &&
             program.setVec4("levels1", {g.out_white, 0.0F, 0.0F, 0.0F}, error);
   const auto bands = [&](const char* a, const char* b, const float (&v)[8]) {
@@ -829,10 +876,11 @@ bool set_grain_uniforms(gl::Program& program, const PreparedOperation& draw, std
 PassStatus PassRegistry::classify(const pixcake::render::RenderOperation& operation) {
   if (!operation.enabled) return PassStatus::Disabled;
   if (operation.program.find("filter") != std::string::npos || operation.program.find("profile") != std::string::npos) return PassStatus::MissingResource;
-  if (operation.program == "pixcake.color.global" || operation.program == "pixcake.detail") {
+  if (operation.program == "pixcake.color.global" || operation.program == "pixcake.detail" ||
+      operation.program == "pixcake.color.local" || operation.program == "pixcake.color.post" ||
+      operation.program == "pixcake.color.match" || operation.program == "pixcake.color.style") {
     return gpuSupported(operation) ? PassStatus::Implemented : PassStatus::ReferenceOnly;
   }
-  if (operation.program == "pixcake.color.local" || operation.program == "pixcake.color.post" || operation.program == "pixcake.color.match" || operation.program == "pixcake.color.style") return PassStatus::ReferenceOnly;
   return PassStatus::Unregistered;
 }
 
@@ -840,9 +888,11 @@ bool PassRegistry::gpuSupported(const pixcake::render::RenderOperation& operatio
   // 2026-11-05: temperature, tint, exposure and contrast passed the
   // reference/readback comparison on native CGL and the Qt desktop platform.
   // 2026-11-06: the rest of the global colour tool (tone, levels, HSL,
-  // black-and-white, selective colour, grading) and detail grain joined, each
-  // group with its own readback comparison in test_gpu_backend_C57_C60.  The
-  // formula gate is the evidence gate: a new channel adds its readback first.
+  // black-and-white, selective colour, grading), detail grain, local, post
+  // and AI colour, masks (up to four per operation), the multiply and screen
+  // blends and layers joined, each with its own readback comparison in
+  // test_gpu_backend_C57_C60.  The formula gate is the evidence gate: a new
+  // channel adds its readback first.
   return gpu_formula_supported(operation);
 }
 
@@ -851,10 +901,41 @@ struct GpuCache {
   gl::Shader vertex{nullptr};
   gl::Program color_program{nullptr};
   gl::Program grain_program{nullptr};
+  gl::Program layer_program{nullptr};
   gl::Texture2D textures[2] = {gl::Texture2D{nullptr}, gl::Texture2D{nullptr}};
   gl::Framebuffer framebuffers[2] = {gl::Framebuffer{nullptr}, gl::Framebuffer{nullptr}};
+  gl::Texture2D masks{nullptr};
+  gl::Texture2D layer{nullptr};
   std::uint32_t width = 0, height = 0;
+  std::vector<std::uint8_t> packed;  // mask upload buffer
 };
+
+namespace {
+
+// Compiles kPrelude + body and links it with the cached vertex shader, once.
+bool ready_program(gl::Context& context, GpuCache& cache, gl::Program& program, const char* body, std::string& error) {
+  if (program.valid()) return true;
+  gl::Shader fragment = context.createShader();
+  gl::Program linked = context.createProgram();
+  const std::string source = std::string(shaders::kPrelude) + body;
+  if (!fragment.valid() || !linked.valid() || !fragment.compile(gl::ShaderStage::Fragment, source, error) ||
+      !linked.link(cache.vertex, fragment, error)) {
+    return false;
+  }
+  program = linked;
+  return true;
+}
+
+bool upload_masks(GpuCache& cache, gl::Context& context, const std::vector<const RenderMask*>& masks,
+                  std::uint32_t width, std::uint32_t height, std::string& error) {
+  if (!cache.masks.valid()) cache.masks = context.createTexture2D();
+  pack_masks(masks, width, height, cache.packed);
+  const gl::ImageView view{width, height, width * 4, gl::PixelFormat::Rgba8,
+                           reinterpret_cast<const std::byte*>(cache.packed.data()), cache.packed.size()};
+  return cache.masks.valid() && cache.masks.upload(view, error);
+}
+
+}  // namespace
 
 bool RenderExecutor::renderReference(const pixcake::render::RenderDescription& description,
                                      const RgbaImage& input, const RenderInputs& inputs,
@@ -862,7 +943,9 @@ bool RenderExecutor::renderReference(const pixcake::render::RenderDescription& d
   std::vector<PreparedOperation> draws;
   if (!prepare(description, input, inputs, result, draws)) return false;
   for (const auto& draw : draws) draw_reference(draw, result.image);
-  composite_layers(inputs, result);
+  for (const auto& layer : prepare_layers(inputs, input.width, input.height, result)) {
+    draw_layer_reference(layer, result.image);
+  }
   result.success = true;
   return true;
 }
@@ -874,23 +957,22 @@ bool RenderExecutor::execute(gl::Context& context, const pixcake::render::Render
   std::vector<PreparedOperation> draws;
   RenderResult prepared;
   const bool frame_ok = prepare(description, input, inputs, prepared, draws, false);
-  bool gpu_supported = frame_ok && inputs.layers.empty() && input.row_stride == input.width * 4;
+  bool gpu_supported = frame_ok && input.row_stride == input.width * 4;
   for (const auto& draw : draws) {
-    gpu_supported = gpu_supported && !draw.has_lut && draw.masks.empty() && gpu_formula_supported(*draw.operation);
+    gpu_supported = gpu_supported && !draw.has_lut && draw.masks.size() <= kGpuMasksPerOperation &&
+                    gpu_formula_supported(*draw.operation);
   }
   if (!gpu_supported) {
     const bool ok = renderReference(description, input, inputs, result);
     result.reference_fallback = true;
-    const std::string reason = (!inputs.layers.empty() || !inputs.masks.empty())
-                                   ? "图层或蒙版的 GPU 合成路径尚未接入，已回退 reference"
-                                   : "当前绘制描述包含 GPU 路径未覆盖的能力，已回退 reference";
-    result.diagnostics.push_back({"", reason, false});
+    result.diagnostics.push_back({"", "当前绘制描述包含 GPU 路径未覆盖的内容（3D LUT、超过四个蒙版或未登记的参数），已回退 reference", false});
     context.doneCurrent();
     if (!ok) error = "reference render failed";
     return ok;
   }
   result = std::move(prepared);
-  if (draws.empty()) {
+  const std::vector<PreparedLayer> layers = prepare_layers(inputs, input.width, input.height, result);
+  if (draws.empty() && layers.empty()) {
     result.image.pixels = input.pixels;
     context.doneCurrent();
     result.success = true;
@@ -917,31 +999,54 @@ bool RenderExecutor::execute(gl::Context& context, const pixcake::render::Render
     cache.width = ok ? input.width : 0;
     cache.height = ok ? input.height : 0;
   }
-  // Two RGBA8 textures ping-pong: each operation reads one and draws into
-  // the other, so every pass is quantised to 8 bits like the reference.
+  // Two RGBA8 textures ping-pong: each pass reads one and draws into the
+  // other, so every pass is quantised to 8 bits like the reference.
   const gl::ImageView view{input.width, input.height, input.row_stride, gl::PixelFormat::Rgba8,
                            reinterpret_cast<const std::byte*>(input.pixels.data()), input.pixels.size()};
   ok = ok && cache.textures[0].upload(view, error);
   int current = 0;
+  // A pass without masks still gives the mask sampler a complete texture
+  // (the frame it reads); the driver warns about an empty unit otherwise.
+  const auto pass = [&](gl::Program& program, bool masked, const auto& set_uniforms) {
+    const int next = 1 - current;
+    ok = ok && program.use(error) && cache.framebuffers[next].bind(error) &&
+         context.setViewport(input.width, input.height, error) && cache.textures[current].bind(0, error) &&
+         (masked || cache.textures[current].bind(1, error)) && program.setTextureUnit("source", 0, error) &&
+         set_uniforms() && context.drawTriangles(3, error);
+    current = next;
+  };
   for (const auto& draw : draws) {
     if (!ok) break;
     const bool grain = draw.is_detail;
     gl::Program& program = grain ? cache.grain_program : cache.color_program;
-    if (!program.valid()) {
-      gl::Shader fragment = context.createShader();
-      gl::Program linked = context.createProgram();
-      ok = fragment.valid() && linked.valid() &&
-           fragment.compile(gl::ShaderStage::Fragment, grain ? shaders::kGrain : shaders::kColorGlobal, error) &&
-           linked.link(cache.vertex, fragment, error);
-      if (ok) program = linked;
-    }
-    const int next = 1 - current;
-    ok = ok && program.use(error) && cache.framebuffers[next].bind(error) &&
-         context.setViewport(input.width, input.height, error) && cache.textures[current].bind(0, error) &&
-         program.setTextureUnit("source", 0, error) &&
-         (grain ? set_grain_uniforms(program, draw, error) : set_color_uniforms(program, draw, error)) &&
-         context.drawTriangles(3, error);
-    current = next;
+    ok = ready_program(context, cache, program, grain ? shaders::kGrain : shaders::kColor, error);
+    const auto masks = static_cast<float>(draw.masks.size());
+    // Upload first, bind after: an upload binds its texture to the active unit.
+    ok = ok && (draw.masks.empty() || upload_masks(cache, context, draw.masks, input.width, input.height, error)) &&
+         (draw.masks.empty() || cache.masks.bind(1, error));
+    pass(program, !draw.masks.empty(), [&] {
+      return program.setTextureUnit("masks", 1, error) &&
+             program.setVec4("blend0", {masks, static_cast<float>(draw.blend), 0.0F, 0.0F}, error) &&
+             (grain ? set_grain_uniforms(program, draw, error) : set_color_uniforms(program, draw, error));
+    });
+  }
+  for (const auto& layer : layers) {
+    if (!ok) break;
+    ok = ready_program(context, cache, cache.layer_program, shaders::kLayer, error);
+    if (ok && !cache.layer.valid()) cache.layer = context.createTexture2D();
+    const RgbaImage& image = layer.layer->image;
+    const gl::ImageView layer_view{image.width, image.height, image.row_stride, gl::PixelFormat::Rgba8,
+                                   reinterpret_cast<const std::byte*>(image.pixels.data()), image.pixels.size()};
+    // Upload first, bind after: an upload binds its texture to the active unit.
+    ok = ok && cache.layer.valid() && cache.layer.upload(layer_view, error) &&
+         (layer.mask == nullptr || upload_masks(cache, context, {layer.mask}, input.width, input.height, error)) &&
+         cache.layer.bind(2, error) && (layer.mask == nullptr || cache.masks.bind(1, error));
+    pass(cache.layer_program, layer.mask != nullptr, [&] {
+      return cache.layer_program.setTextureUnit("layer", 2, error) &&
+             cache.layer_program.setTextureUnit("masks", 1, error) &&
+             cache.layer_program.setVec4("layer0", {layer.layer->opacity, layer.mask != nullptr ? 1.0F : 0.0F,
+                                                    static_cast<float>(layer.blend), 0.0F}, error);
+    });
   }
   std::vector<std::byte> pixels;
   ok = ok && context.readPixels(input.width, input.height, pixels, error);

@@ -52,9 +52,21 @@ int main() {
   input.row_stride = input.width * 4;
   input.pixels.resize(static_cast<std::size_t>(input.row_stride) * input.height);
   for (std::size_t i = 0; i < input.pixels.size(); ++i) input.pixels[i] = static_cast<std::uint8_t>((i * 2654435761u) >> 24);
+  pixcake::gpu::RenderInputs masked;
+  masked.masks.push_back({"semantic:person.skin", input.width, input.height,
+                          std::vector<std::uint8_t>(static_cast<std::size_t>(input.width) * input.height, 180)});
+  pixcake::gpu::RenderInputs layered = masked;
+  layered.layers.push_back({input, "semantic:person.skin", 0.8F, "screen", true, 1});
+  layered.layers.back().image.revision = 0;
+  const auto local = [] {
+    auto description = op("color.local", "color", "pixcake.color.local", {value("exposure", 0.5)});
+    description.operations.back().mask_ids = {"semantic:person.skin"};
+    return description;
+  };
   struct Case {
     const char* name;
     RenderDescription description;
+    const pixcake::gpu::RenderInputs* inputs = nullptr;
   };
   const Case cases[] = {
       {"exposure (baseline)", op("color.global", "tone", "pixcake.color.global", {value("exposure", 0.5)})},
@@ -68,6 +80,8 @@ int main() {
                                {value("exposure", 0.5), value("levels_rgb_input_black", 20), value("hsl_hue_red", 40),
                                 value("selective_red_cyan", 40), value("grading_global_saturation", 40)})},
       {"grain", op("detail", "detail.grain", "pixcake.detail", {value("grain_amount", 60)})},
+      {"local, one mask", local(), &masked},
+      {"local + screen layer", local(), &layered},
   };
   auto context = pixcake::gl::native::create_context();
   const bool gpu = pixcake::gl::native::available() && context.valid() && context.makeCurrent();
@@ -77,13 +91,13 @@ int main() {
   for (const auto& item : cases) {
     pixcake::gpu::RenderResult result;
     const double reference = best_ms([&] {
-      return pixcake::gpu::RenderExecutor{}.renderReference(item.description, input, pixcake::gpu::RenderInputs{}, result);
+      return pixcake::gpu::RenderExecutor{}.renderReference(item.description, input, item.inputs ? *item.inputs : pixcake::gpu::RenderInputs{}, result);
     });
     double on_gpu = -1;
     if (gpu) {
       on_gpu = best_ms([&] {
         std::string error;
-        return executor.execute(context, item.description, input, pixcake::gpu::RenderInputs{}, result, error) &&
+        return executor.execute(context, item.description, input, item.inputs ? *item.inputs : pixcake::gpu::RenderInputs{}, result, error) &&
                !result.reference_fallback;
       });
     }
