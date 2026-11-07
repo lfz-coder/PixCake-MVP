@@ -20,7 +20,7 @@ add_library(pixcake_preview_session
   src/thumbnail_service.cpp
 )
 target_include_directories(pixcake_preview_session PUBLIC include)
-target_link_libraries(pixcake_preview_session PUBLIC pixcake_preview_client pixcake_command pixcake_editdoc
+target_link_libraries(pixcake_preview_session PUBLIC pixcake_preview_client pixcake_command pixcake_history pixcake_editdoc
   pixcake_persist pixcake_capability pixcake_warnings)
 
 # The shell's exportd process and connection (kernel/ipc process messages).

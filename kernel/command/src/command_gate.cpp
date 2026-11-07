@@ -165,6 +165,16 @@ CommandResult CommandGate::apply_preset(PresetLibrary& library, const Preset& pr
   });
 }
 
+CommandResult CommandGate::select_history(HistoryLog& history, std::size_t index, std::uint64_t revision) {
+  return run_document_command("history.select", revision, [&] {
+    EditDocument before = document_;
+    ResultCode code = history.select(document_.image_id(), document_, index, false);
+    if (code == ResultCode::Ok) code = document_.write_snapshot(files_, path_, &latch_);
+    if (code != ResultCode::Ok) document_ = std::move(before);
+    return code;
+  });
+}
+
 CommandResult CommandGate::paste(const EffectClipboard& clipboard, std::uint64_t revision) {
   return run_document_command("paste", revision, [&] {
     return paste_committed(document_, clipboard, revision, files_, path_, &latch_);

@@ -1103,6 +1103,50 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
     qCritical("grain amount did not draw or unblock its sliders");
     return 8;
   }
+  // History: original, exposure, profile, grain; the list shows them; undo, redo and a click walk the document.
+  {
+    auto& controller = window.controller();
+    const auto rows = controller.history();
+    QListWidget* steps = nullptr;
+    for (auto* candidate : window.findChildren<QListWidget*>(QStringLiteral("refine-history-list"))) {
+      if (candidate->isVisibleTo(&window)) steps = candidate;
+    }
+    const auto exposure_binding = panels::refine_color_binding(panels::slider_label_of(exposure->accessibleName().toStdString()));
+    if (rows.size() < 4 || !rows.back().current || steps == nullptr || steps->count() != static_cast<int>(rows.size()) ||
+        !exposure_binding) {
+      qCritical("history: %zu rows (last current %d), list %s with %d items", rows.size(), rows.back().current,
+                steps == nullptr ? "missing" : "present", steps != nullptr ? steps->count() : -1);
+      return 8;
+    }
+    const auto latest = controller.parameter_value(*exposure_binding);
+    controller.request_undo();
+    const auto undone = controller.history();
+    if (undone.size() != rows.size() || undone[undone.size() - 2].current == false || undone.back().current ||
+        controller.parameter_value(*exposure_binding) != latest) {  // exposure was committed before the last step
+      qCritical("history: undo did not move back one step");
+      return 8;
+    }
+    controller.request_redo();
+    if (!controller.history().back().current) {
+      qCritical("history: redo did not return to the last step");
+      return 8;
+    }
+    controller.request_history_step(0);  // the original: exposure is not set
+    if (!controller.history().front().current ||
+        controller.parameter_value(*exposure_binding) == latest) {
+      qCritical("history: the original step still carries the exposure");
+      return 8;
+    }
+    controller.request_history_step(rows.size() - 1);
+    if (!controller.history().back().current || controller.parameter_value(*exposure_binding) != latest) {
+      qCritical("history: could not return to the last step");
+      return 8;
+    }
+    if (!wait_current(window, 30'000)) {
+      qCritical("history: no frame after the jumps");
+      return 8;
+    }
+  }
   // Development aid: PIXCAKE_SMOKE_SCREENSHOT=<file.png> saves the window as rendered offscreen.
   if (const char* shot = std::getenv("PIXCAKE_SMOKE_SCREENSHOT"); shot != nullptr && *shot != '\0') {
     window.resize(1386, 800);

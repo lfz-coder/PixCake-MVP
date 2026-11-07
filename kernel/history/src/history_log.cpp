@@ -29,6 +29,8 @@ ResultCode HistoryLog::record_committed(const std::string& image_id, const EditD
   step.snapshot = document.encode();
 
   auto& image = images_[history_id];
+  // 回到较早的一步后再改：被撤销的后续步骤不能再重做，丢掉（修订号仍然只增不减，见 select）。
+  if (image.current && *image.current + 1 < image.steps.size()) image.steps.resize(*image.current + 1);
   image.steps.push_back(std::move(step));
   image.current = image.steps.size() - 1;
   return ResultCode::Ok;
@@ -61,6 +63,15 @@ ResultCode HistoryLog::select(const std::string& image_id, EditDocument& documen
   // must advance beyond the newest recorded step.
   document.set_revision(found->second.steps.back().revision);
   found->second.current = index;
+  return ResultCode::Ok;
+}
+
+ResultCode HistoryLog::begin_original(const std::string& image_id, const EditDocument& loaded) {
+  const ResultCode code = reopen_folded(image_id, loaded);
+  if (code != ResultCode::Ok) return code;
+  std::string history_id = loaded.editing_instance_id();
+  if (images_.find(history_id) == images_.end()) history_id = image_id;
+  images_[history_id].steps.front().label = kHistoryOriginalLabel;
   return ResultCode::Ok;
 }
 

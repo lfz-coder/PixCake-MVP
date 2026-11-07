@@ -186,8 +186,11 @@ void test_history_branch_keeps_monotonic_revision() {
   EXPECT(document.revision() == 3);
   EXPECT(history.record_committed("branch", document, "color.global", "exposure", "1.00", false) ==
          pixcake::ResultCode::Ok);
-  EXPECT(history.steps("branch")->size() == 3);
-  EXPECT(history.steps("branch")->at(2).revision == 3);
+  // The undone step (0.25) cannot be redone any more: the new edit replaces it.
+  EXPECT(history.steps("branch")->size() == 2);
+  EXPECT(history.steps("branch")->at(1).revision == 3);
+  EXPECT(history.steps("branch")->at(1).display_value == "1.00");
+  EXPECT(history.current_index("branch") == std::optional<std::size_t>(1));
 }
 
 

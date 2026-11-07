@@ -83,6 +83,19 @@ class PreviewSession {
   std::uint64_t latest_sequence() const { return sequence_; }
   // The request the last returned frame answers; equal to latest_sequence() once the newest frame is in.
   std::uint64_t shown_sequence() const { return shown_; }
+  // 历史（需求 §8.3）：本次打开以来的步骤；第一步是“原图”或“上一次保存”。
+  struct HistoryEntry {
+    std::string label;  // 第一步的名字；提交的步骤为空，由壳层按参数写
+    std::string capability_id;
+    std::string parameter_id;
+    std::string display_value;
+  };
+  std::vector<HistoryEntry> history() const;
+  std::size_t history_current() const;
+  // 回到第 index 步，写盘并重新显示。撤销和重做是它的两个特例；没有前一步或后一步时返回状态冲突。
+  ResultCode select_history(std::size_t index, std::string& diagnostic);
+  ResultCode undo(std::string& diagnostic);
+  ResultCode redo(std::string& diagnostic);
   // Called after each successful commit (e.g. to mark the photo edited).
   void on_committed(std::function<void()> callback) { committed_ = std::move(callback); }
 
@@ -110,6 +123,9 @@ class PreviewSession {
   std::uint64_t sequence_ = 0;
   std::uint64_t shown_ = 0;
   std::function<void()> committed_;
+  HistoryLog history_;
+  std::string last_capability_;
+  std::string last_parameter_;
 };
 
 }  // namespace pixcake::preview_channel

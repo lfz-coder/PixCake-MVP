@@ -9,6 +9,7 @@
 #include <cassert>
 #include <cstdio>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -86,9 +87,62 @@ int main() {
     std::unique_ptr<PreviewSession> session;
     assert(PreviewSession::open(photo, options, session, diagnostic) == ResultCode::Ok);
     assert(session->document().revision() == revision);
+    // History after reopening: the earlier steps are folded into one.
+    assert(session->history().size() == 1 && session->history()[0].label == kHistoryFoldedLabel);
+    assert(session->undo(diagnostic) == ResultCode::StateConflict && session->redo(diagnostic) == ResultCode::StateConflict);
     assert(session->preview("color.global", "temperature", "0", diagnostic) == ResultCode::Ok);
     assert(session->wait_latest_frame(frame, 15'000, diagnostic) == ResultCode::Ok);
     assert(frame.result.code == ResultCode::Ok && frame.rgba[0] == bright);
+  }
+
+  // History: undo, redo, jumping to a step, and a new edit after undo (requirement 8.3).
+  {
+    const std::string photo2 = base + "-h.bmp";
+    write_grey_bmp(photo2, 40, 20, 90);
+    std::unique_ptr<PreviewSession> session;
+    assert(PreviewSession::open(photo2, options, session, diagnostic) == ResultCode::Ok);
+    assert(session->history().size() == 1 && session->history()[0].label == kHistoryOriginalLabel);
+    assert(session->undo(diagnostic) == ResultCode::StateConflict);
+    int commits = 0;
+    session->on_committed([&commits] { ++commits; });
+    assert(session->commit("color.global", "exposure", "1.00", diagnostic) == ResultCode::Ok);
+    assert(session->wait_latest_frame(frame, 15'000, diagnostic) == ResultCode::Ok);
+    const int one = frame.rgba[0];
+    assert(session->commit("color.global", "exposure", "1.50", diagnostic) == ResultCode::Ok);
+    assert(session->wait_latest_frame(frame, 15'000, diagnostic) == ResultCode::Ok);
+    const int two = frame.rgba[0];
+    assert(two > one && one > 90 && commits == 2);
+    assert(session->history().size() == 3 && session->history_current() == 2);
+    assert(session->history()[2].capability_id == "color.global" && session->history()[2].display_value == "1.50");
+    const std::uint64_t last_revision = session->document().revision();
+
+    // Undo shows the first edit, redo the second; the revision never goes back.
+    assert(session->undo(diagnostic) == ResultCode::Ok && session->history_current() == 1);
+    assert(session->document().revision() == last_revision);
+    assert(session->document().effective_parameter("color.global", "exposure") == std::optional<std::string>("1.00"));
+    assert(session->wait_latest_frame(frame, 15'000, diagnostic) == ResultCode::Ok && frame.rgba[0] == one);
+    assert(session->redo(diagnostic) == ResultCode::Ok && session->history_current() == 2);
+    assert(session->wait_latest_frame(frame, 15'000, diagnostic) == ResultCode::Ok && frame.rgba[0] == two);
+    assert(session->redo(diagnostic) == ResultCode::StateConflict);
+
+    // The first step is the original: nothing applied, on screen and on disk.
+    const ResultCode jumped = session->select_history(0, diagnostic);
+    if (jumped != ResultCode::Ok) std::printf("jump to original: %s\n", diagnostic.c_str());
+    assert(jumped == ResultCode::Ok && session->history_current() == 0);
+    assert(session->wait_latest_frame(frame, 15'000, diagnostic) == ResultCode::Ok && frame.rgba[0] < one);
+    assert(session->undo(diagnostic) == ResultCode::StateConflict);
+    assert(session->select_history(9, diagnostic) == ResultCode::StateConflict);
+    assert(commits == 2 + 3);  // every jump counts as a change (thumbnail, edited state)
+
+    // A new edit after going back is a new step with a newer revision.
+    assert(session->commit("color.global", "exposure", "0.50", diagnostic) == ResultCode::Ok);
+    assert(session->document().revision() > last_revision);
+    assert(session->history_current() == 1 && session->history().size() == 2);  // original, new edit
+    assert(session->redo(diagnostic) == ResultCode::StateConflict);
+    assert(session->undo(diagnostic) == ResultCode::Ok);
+    assert(session->history_current() == 0 && !session->document().effective_parameter("color.global", "exposure"));
+    session.reset();
+    std::remove(photo2.c_str());
   }
 
   // Failures before any process is left behind.

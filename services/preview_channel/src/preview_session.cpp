@@ -1,5 +1,7 @@
 #include "pixcake/preview_channel/preview_session.hpp"
 
+#include "pixcake/capability/capability_registry.hpp"
+
 #include <signal.h>
 #include <spawn.h>
 #include <sys/stat.h>
@@ -147,6 +149,12 @@ ResultCode PreviewSession::open(const std::string& photo_path, const PreviewSess
     }
   }
   std::unique_ptr<PreviewSession> session(new PreviewSession(photo_path, std::move(*document), document_path, options));
+  // 历史：这次打开的第一步。已有提交的图折叠成“上一次保存”，没有的是“原图”（需求 §8.3）。
+  if (session->document_.revision() > 0) {
+    session->history_.reopen_folded(session->document_.image_id(), session->document_);
+  } else {
+    session->history_.begin_original(session->document_.image_id(), session->document_);
+  }
   ResultCode code = RenderdProcess::start(options.renderd_executable, options.log_directory,
                                           options.connect_timeout_ms, session->renderd_, session->client_, diagnostic);
   if (code != ResultCode::Ok) return code;
@@ -215,10 +223,91 @@ ResultCode PreviewSession::commit(const std::string& capability_id, const std::s
     diagnostic = std::string("commit refused: ") + result_code_label(result.code);
     return result.code;
   }
+  history_.record_committed(document_.image_id(), document_, capability_id, parameter_id, display_value, false);
+  last_capability_ = capability_id;
+  last_parameter_ = parameter_id;
   if (committed_) committed_();
   // New revision: renderd needs the committed document before the next request.
   if (const ResultCode code = send_source(diagnostic); code != ResultCode::Ok) return code;
   return send_request(capability_id, parameter_id, display_value, diagnostic);
+}
+
+namespace {
+
+// 参数的默认值写成显示值（小数位由步进推出，与滑杆一致）；枚举参数取默认选项。
+std::string default_display(const std::string& capability, const std::string& parameter) {
+  const ParameterMode* mode = find_parameter_mode(capability, parameter);
+  if (mode == nullptr) return {};
+  if (!mode->choices.empty()) return mode->default_choice;
+  int decimals = 0;
+  for (double step = mode->step; step > 0 && step < 1 - 1e-9 && decimals < 6; step *= 10) ++decimals;
+  char text[64];
+  std::snprintf(text, sizeof(text), "%.*f", decimals, mode->default_value);
+  return text;
+}
+
+}  // namespace
+
+std::vector<PreviewSession::HistoryEntry> PreviewSession::history() const {
+  std::vector<HistoryEntry> out;
+  const auto* steps = history_.steps(document_.editing_instance_id());
+  if (steps == nullptr) steps = history_.steps(document_.image_id());
+  if (steps == nullptr) return out;
+  for (const auto& step : *steps) {
+    out.push_back({step.label, step.capability_id, step.parameter_id, step.display_value});
+  }
+  return out;
+}
+
+std::size_t PreviewSession::history_current() const {
+  auto current = history_.current_index(document_.editing_instance_id());
+  if (!current) current = history_.current_index(document_.image_id());
+  return current.value_or(0);
+}
+
+ResultCode PreviewSession::select_history(std::size_t index, std::string& diagnostic) {
+  const auto steps = history();
+  const std::size_t from = history_current();
+  if (index >= steps.size() || index == from) {
+    diagnostic = "no such history step";
+    return ResultCode::StateConflict;
+  }
+  const CommandResult result = gate_->select_history(history_, index, document_.revision());
+  if (result.code != ResultCode::Ok) {
+    diagnostic = std::string("history refused: ") + result_code_label(result.code);
+    return result.code;
+  }
+  // renderd redraws the document as it is now: any step's parameter works as the request's anchor,
+  // with the value the document holds for it.
+  std::string capability = steps[index].capability_id;
+  std::string parameter = steps[index].parameter_id;
+  if (capability.empty()) {
+    capability = steps[from].capability_id.empty() ? last_capability_ : steps[from].capability_id;
+    parameter = steps[from].capability_id.empty() ? last_parameter_ : steps[from].parameter_id;
+  }
+  if (committed_) committed_();
+  if (const ResultCode code = send_source(diagnostic); code != ResultCode::Ok) return code;
+  if (capability.empty()) return ResultCode::Ok;  // nothing was ever edited: the frame on screen is the original
+  const auto value = document_.effective_parameter(capability, parameter);
+  return send_request(capability, parameter, value ? *value : default_display(capability, parameter), diagnostic);
+}
+
+ResultCode PreviewSession::undo(std::string& diagnostic) {
+  const std::size_t current = history_current();
+  if (current == 0) {
+    diagnostic = "nothing to undo";
+    return ResultCode::StateConflict;
+  }
+  return select_history(current - 1, diagnostic);
+}
+
+ResultCode PreviewSession::redo(std::string& diagnostic) {
+  const std::size_t current = history_current();
+  if (current + 1 >= history().size()) {
+    diagnostic = "nothing to redo";
+    return ResultCode::StateConflict;
+  }
+  return select_history(current + 1, diagnostic);
 }
 
 ResultCode PreviewSession::take_frame(PreviewFrame& out, std::string& diagnostic) {

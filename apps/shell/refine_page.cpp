@@ -7,9 +7,11 @@
 #include "pixcake/ui/panels/slider_spec.hpp"
 
 #include <QComboBox>
+#include <QListWidget>
 #include <QPointer>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QShortcut>
 #include <QSlider>
 #include <QStandardItemModel>
 #include <QTimer>
@@ -249,10 +251,30 @@ void addModules(QWidget* modules, QVBoxLayout* modules_layout, PageActions* acti
 
   auto* history = labelPanel(modules, modules_layout, "refine-history-labels", moduleDescription("history"));
   history->addWidget(disabledLabel(qs(copyItem("refine-history", "title").text)));
-  auto* history_empty = text(qs(copyItem("refine-history", "empty").text), true);
-  history_empty->setEnabled(false);
-  history_empty->setAccessibleName(qtext("refine.history.empty.name"));
-  history->addWidget(history_empty);
+  if (actions->has_photo()) {
+    // 本次打开以来的步骤，点某一步回到那一步；提交和撤销时刷新。
+    auto* steps = new QListWidget(modules);
+    steps->setObjectName(QStringLiteral("refine-history-list"));
+    steps->setAccessibleName(moduleDescription("history"));
+    const auto fill = [steps, actions] {
+      const QSignalBlocker block(steps);
+      steps->clear();
+      for (const auto& row : actions->history()) {
+        steps->addItem(row.text);
+        if (row.current) steps->setCurrentRow(steps->count() - 1);
+      }
+    };
+    fill();
+    actions->watch_history(steps, fill);
+    QObject::connect(steps, &QListWidget::itemClicked, steps,
+                     [steps, actions](QListWidgetItem*) { actions->request_history_step(static_cast<std::size_t>(steps->currentRow())); });
+    history->addWidget(steps);
+  } else {
+    auto* history_empty = text(qs(copyItem("refine-history", "empty").text), true);
+    history_empty->setEnabled(false);
+    history_empty->setAccessibleName(qtext("refine.history.empty.name"));
+    history->addWidget(history_empty);
+  }
 }
 
 }  // namespace
@@ -273,6 +295,13 @@ QWidget* buildRefinePage(const PageContext& context) {
   back->setAccessibleName(qs(copyItem("refine-top", "back").text));
   PageActions* actions = &context.actions;
   QObject::connect(back, &QPushButton::clicked, back, [actions] { actions->request_page(Page::Home); });
+  // 单图撤销 Cmd+Z、重做 Shift+Cmd+Z（需求 §8、§23.1；Qt 的 Ctrl 在 macOS 上就是 Cmd）。
+  auto* undo = new QShortcut(QKeySequence(QStringLiteral("Ctrl+Z")), page);
+  undo->setObjectName(QStringLiteral("refine-undo"));
+  QObject::connect(undo, &QShortcut::activated, page, [actions] { actions->request_undo(); });
+  auto* redo = new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+Z")), page);
+  redo->setObjectName(QStringLiteral("refine-redo"));
+  QObject::connect(redo, &QShortcut::activated, page, [actions] { actions->request_redo(); });
   top_layout->addWidget(back);
   top_layout->addWidget(itemAction("refine-top", copyItem("refine-top", "search"), top));
   top_layout->addWidget(itemAction("refine-top", copyItem("refine-top", "assistant"), top));

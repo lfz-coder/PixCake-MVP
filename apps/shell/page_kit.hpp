@@ -57,6 +57,11 @@ struct TrashItem {
   std::int64_t copy = 0;
   std::int64_t days_left = 0;
 };
+// 历史面板的一行（需求 §8.3）：当前这张图本次打开以来的步骤。
+struct HistoryRow {
+  QString text;
+  bool current = false;
+};
 struct PhotoEntry {
   std::int64_t id = 0;
   std::string file_name;
@@ -116,6 +121,12 @@ class PageActions {
   virtual void select_photos(const std::vector<std::int64_t>&, std::int64_t) {}
   // 选择变化时回调（导出按钮、“已选 N 张”跟着变）；owner 删除后不再回调。
   virtual void watch_selection(QObject*, std::function<void()>) {}
+  // 历史（需求 §8.3）：撤销、重做、点某一步回到那一步。步骤变了（提交、撤销）时回调 watch_history 登记的函数。
+  virtual std::vector<HistoryRow> history() const { return {}; }
+  virtual void request_history_step(std::size_t) {}
+  virtual void request_undo() {}
+  virtual void request_redo() {}
+  virtual void watch_history(QObject*, std::function<void()>) {}
   // 标记（需求 §6.1）：条目编号；副本记在原图上。旗标、色标传空串表示移除。
   virtual void request_rating(const std::vector<std::int64_t>&, int) {}
   virtual void request_flag(const std::vector<std::int64_t>&, const std::string&) {}

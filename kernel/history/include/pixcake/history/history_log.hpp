@@ -13,6 +13,7 @@
 namespace pixcake {
 
 inline constexpr char kHistoryFoldedLabel[] = "上一次保存";
+inline constexpr char kHistoryOriginalLabel[] = "原图";
 
 // 进程内的单图步骤。不写盘，撤销链不放进参数文档。
 struct HistoryStep {
@@ -32,6 +33,9 @@ class HistoryLog {
 
   ResultCode select(const std::string& image_id, EditDocument& document, std::size_t index,
                     bool batch_design_busy);
+
+  // 打开一张没有提交过的图：第一步是“原图”，之后的提交接在它后面。不写文件。
+  ResultCode begin_original(const std::string& image_id, const EditDocument& loaded);
 
   // 用已经从磁盘打开的文档替换这张图的步骤。不写文件。
   ResultCode reopen_folded(const std::string& image_id, const EditDocument& loaded);

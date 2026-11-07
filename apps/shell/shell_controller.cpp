@@ -338,6 +338,73 @@ void ShellController::request_photo_filter(const PhotoQuery& query) {
   if (changed_) changed_();
 }
 
+namespace {
+
+// 历史步骤的名字：第一步用内核的名字，其余是“滑杆名 值”；找不到滑杆名就写能力和参数编号。
+QString history_text(const preview_channel::PreviewSession::HistoryEntry& entry) {
+  if (!entry.label.empty()) return QString::fromStdString(entry.label);
+  QString name = QString::fromStdString(entry.capability_id + "/" + entry.parameter_id);
+  for (const auto& row : ui::panels::refine_color_rows()) {
+    if (row.binding && row.binding->capability_id == entry.capability_id &&
+        row.binding->parameter_id == entry.parameter_id) {
+      name = QString::fromStdString(row.label);
+      break;
+    }
+  }
+  return qtext("history.step").arg(name, QString::fromStdString(entry.display_value));
+}
+
+}  // namespace
+
+std::vector<HistoryRow> ShellController::history() const {
+  std::vector<HistoryRow> out;
+  if (!session_) return out;
+  const std::size_t current = session_->history_current();
+  const auto steps = session_->history();
+  for (std::size_t index = 0; index < steps.size(); ++index) out.push_back({history_text(steps[index]), index == current});
+  return out;
+}
+
+void ShellController::history_changed() {
+  for (auto it = history_watchers_.begin(); it != history_watchers_.end();) {
+    if (it->first.isNull()) {
+      it = history_watchers_.erase(it);
+      continue;
+    }
+    it->second();
+    ++it;
+  }
+}
+
+void ShellController::watch_history(QObject* owner, std::function<void()> changed) {
+  history_watchers_.emplace_back(owner, std::move(changed));
+}
+
+void ShellController::request_history_step(std::size_t index) {
+  if (!session_) return;
+  std::string diagnostic;
+  const ResultCode code = session_->select_history(index, diagnostic);
+  if (code != ResultCode::Ok) qWarning("history: %s", diagnostic.c_str());
+  view_.status = qtext("refine.preview.loading");
+  if (changed_) changed_();  // the sliders show the document as it is now
+}
+
+void ShellController::request_undo() {
+  if (!session_) return;
+  std::string diagnostic;
+  if (session_->undo(diagnostic) != ResultCode::Ok) return;  // nothing to undo is not an error
+  view_.status = qtext("refine.preview.loading");
+  if (changed_) changed_();
+}
+
+void ShellController::request_redo() {
+  if (!session_) return;
+  std::string diagnostic;
+  if (session_->redo(diagnostic) != ResultCode::Ok) return;
+  view_.status = qtext("refine.preview.loading");
+  if (changed_) changed_();
+}
+
 void ShellController::request_rating(const std::vector<std::int64_t>& photo_ids, int rating) {
   if (!projects_ || photo_ids.empty()) return;
   const ResultCode code = projects_->set_rating(photo_ids, rating);
@@ -457,6 +524,7 @@ void ShellController::open_project_photo(std::int64_t photo_id) {
     session_->on_committed([this, photo_id] {
       projects_->mark_edited(photo_id);
       request_thumbnail(photo_id);  // the thumbnail follows the committed edit
+      history_changed();
     });
   }
 }
@@ -475,6 +543,7 @@ ResultCode ShellController::open_photo(const std::string& photo_path,
   }
   notifier_ = std::make_unique<QSocketNotifier>(session_->fd(), QSocketNotifier::Read);
   QObject::connect(notifier_.get(), &QSocketNotifier::activated, notifier_.get(), [this] { read_frames(); });
+  session_->on_committed([this] { history_changed(); });  // a project photo replaces this with its own
   // First frame: the committed document as it is.
   const ui::panels::SliderBinding exposure{"color.global", "exposure"};
   const auto current = parameter_value(exposure);
