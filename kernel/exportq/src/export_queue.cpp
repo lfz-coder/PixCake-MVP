@@ -201,6 +201,13 @@ ResultCode remove_if_present(FileSystem& files, const std::string& path) {
   return ResultCode::Ok;
 }
 
+std::string parent_directory(const std::string& path);
+
+// A task's temporary file next to its destination ("." hides it in Finder).
+std::string staging_path(const ExportJob& job) {
+  return parent_directory(job.destination_path) + "/.pixcake-" + job.export_id + ".part";
+}
+
 std::string parent_directory(const std::string& path) {
   const auto slash = path.rfind('/');
   if (slash == std::string::npos || slash == 0) {
@@ -294,6 +301,16 @@ ExportCache ExportQueue::cache() const {
 
 std::string ExportQueue::temp_path(const std::string& export_id) const {
   return cache_directory_ + "/" + export_id;
+}
+
+std::string ExportQueue::temp_path_for(const ExportJob& job, FileSystem& files) const {
+  std::uint64_t cache_device = 0;
+  std::uint64_t target_device = 0;
+  if (files.device_of(cache_directory_, cache_device).ok &&
+      files.device_of(parent_directory(job.destination_path), target_device).ok && cache_device != target_device) {
+    return staging_path(job);
+  }
+  return temp_path(job.export_id);
 }
 
 ResultCode ExportQueue::note(ExportEvent event) {
@@ -519,7 +536,7 @@ ResultCode ExportQueue::commit_product_steps(const std::string& export_id, const
   if (began_temp != ResultCode::Ok) {
     return began_temp;
   }
-  const std::string temp = temp_path(export_id);
+  const std::string temp = temp_path_for(job, files);
   const ResultCode cleared = remove_if_present(files, temp);
   if (cleared != ResultCode::Ok) {
     const ResultCode noted = record_cleanup_pending(cleared);
@@ -659,7 +676,8 @@ ResultCode ExportQueue::recover_one(const std::string& export_id, FileSystem& fi
     return note(std::move(event));
   }
   if (job.status == "待清理临时文件") {
-    const ResultCode removed = remove_if_present(files, temp_path(export_id));
+    ResultCode removed = remove_if_present(files, temp_path(export_id));
+    if (removed == ResultCode::Ok) removed = remove_if_present(files, staging_path(job.job));
     if (removed != ResultCode::Ok) {
       return removed;
     }
@@ -667,10 +685,16 @@ ResultCode ExportQueue::recover_one(const std::string& export_id, FileSystem& fi
     failed.failure_code = job.failure_code;
     return note(std::move(failed));
   }
-  const std::string temp = temp_path(export_id);
+  // The temporary file is in the cache or next to the destination (see
+  // temp_path_for); the device may have changed since (a drive unplugged), so
+  // look for it rather than recompute the choice.
+  const std::string temp = files.exists(temp_path(export_id)) || !files.exists(staging_path(job.job))
+                               ? temp_path(export_id)
+                               : staging_path(job.job);
   if (!job.commit_begun) {
     if (!job.temp_done) {
-      const ResultCode removed = remove_if_present(files, temp);
+      ResultCode removed = remove_if_present(files, temp_path(export_id));
+      if (removed == ResultCode::Ok) removed = remove_if_present(files, staging_path(job.job));
       if (removed != ResultCode::Ok) {
         return removed;
       }

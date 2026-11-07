@@ -97,7 +97,29 @@ class FakeFileSystem : public FileSystem {
     if (files.find(to) != files.end()) {
       return io_error(ResultCode::StateConflict);
     }
+    // A link cannot cross devices (EXDEV).
+    if (device_for(from) != device_for(to)) return io_error(ResultCode::IoFailed);
     return rename_file(from, to);
+  }
+
+  // Directories on another device: path prefix -> device.  Everything else is device 1.
+  std::map<std::string, std::uint64_t> devices;
+
+  IoResult device_of(const std::string& directory, std::uint64_t& out) const override {
+    out = device_for(directory + "/");
+    return io_ok();
+  }
+
+  std::uint64_t device_for(const std::string& path) const {
+    std::uint64_t device = 1;
+    std::size_t longest = 0;
+    for (const auto& [prefix, id] : devices) {
+      if (path.rfind(prefix + "/", 0) == 0 && prefix.size() >= longest) {
+        device = id;
+        longest = prefix.size();
+      }
+    }
+    return device;
   }
 
   IoResult sync_file(const std::string& path) override {

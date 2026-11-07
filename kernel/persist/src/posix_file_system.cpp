@@ -78,6 +78,10 @@ IoResult FileSystem::path_within_root(const std::string& path, const std::string
   return io_ok();
 }
 
+IoResult FileSystem::device_of(const std::string&, std::uint64_t&) const {
+  return io_error(ResultCode::StateConflict);
+}
+
 IoResult FileSystem::identify(const std::string&, FileIdentity&) const {
   return io_error(ResultCode::StateConflict);
 }
@@ -230,6 +234,14 @@ IoResult PosixFileSystem::path_within_root(const std::string& path, const std::s
   if (relative.empty() || relative.string().rfind("..", 0) == 0 || relative.is_absolute()) {
     return io_error(ResultCode::StateConflict);
   }
+  return io_ok();
+}
+
+IoResult PosixFileSystem::device_of(const std::string& directory, std::uint64_t& out) const {
+  struct stat info;
+  if (::stat(directory.c_str(), &info) != 0) return from_errno(errno);
+  if (!S_ISDIR(info.st_mode)) return io_error(ResultCode::StateConflict);
+  out = static_cast<std::uint64_t>(info.st_dev);
   return io_ok();
 }
 

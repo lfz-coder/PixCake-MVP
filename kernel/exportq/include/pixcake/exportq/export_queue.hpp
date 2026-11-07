@@ -119,7 +119,13 @@ class ExportQueue : public FastExportLatch {
                                   FileSystem& files);
   void log_terminal(const ExportEvent& event) const;
   ResultCode recover_one(const std::string& export_id, FileSystem& files);
+  // The temporary file of a task.  It must be on the destination's device so
+  // publishing is a link and the published file is the temporary file (same
+  // identity): in the cache directory when that is on the destination's
+  // device, otherwise a hidden file next to the destination (an external
+  // drive).  Recovery looks in both places.
   std::string temp_path(const std::string& export_id) const;
+  std::string temp_path_for(const ExportJob& job, FileSystem& files) const;
 
   std::string cache_directory_;
   std::vector<ExportEvent> events_;

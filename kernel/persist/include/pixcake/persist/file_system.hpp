@@ -81,6 +81,10 @@ class FileSystem {
   virtual IoResult identify(const std::string& path, FileIdentity& out) const;
   virtual IoResult remove_if_identity(const std::string& path, const FileIdentity& expected);
   virtual FileWriteLockResult try_write_lock(const std::string& path) const;
+  // The device (volume) an existing directory is on.  publish_new links, so it
+  // only works within one device.  The default cannot tell and returns an
+  // error; callers then assume one device.
+  virtual IoResult device_of(const std::string& directory, std::uint64_t& out) const;
 };
 
 class PosixFileSystem : public FileSystem {
@@ -97,6 +101,7 @@ class PosixFileSystem : public FileSystem {
   IoResult create_directory(const std::string& path) override;
   IoResult path_within_root(const std::string& path, const std::string& root) const override;
   IoResult identify(const std::string& path, FileIdentity& out) const override;
+  IoResult device_of(const std::string& directory, std::uint64_t& out) const override;
   IoResult remove_if_identity(const std::string& path, const FileIdentity& expected) override;
   FileWriteLockResult try_write_lock(const std::string& path) const override;
 };

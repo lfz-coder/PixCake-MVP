@@ -11,6 +11,7 @@
 #include <cassert>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <iterator>
 #include <string>
@@ -83,7 +84,11 @@ int main() {
   const std::string shoot = root + "/shoot";
   ::mkdir(shoot.c_str(), 0700);
   write_bmp(shoot + "/a.bmp", 40, 30);
-  const std::string out = root + "/out";
+  // PIXCAKE_TEST_OTHER_VOLUME=<a folder on another volume> (a mounted disk
+  // image) checks exporting to an external drive with the real exportd.
+  const char* other = std::getenv("PIXCAKE_TEST_OTHER_VOLUME");
+  const std::string out = other != nullptr && *other != '\0' ? std::string(other) + "/out-" + std::to_string(::getpid())
+                                                              : root + "/out";
   ::mkdir(out.c_str(), 0700);
 
   Session session;

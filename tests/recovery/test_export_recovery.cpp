@@ -1,4 +1,5 @@
 // 测试清单 T-08：导出任务的崩溃点、换名失败、重开恢复（从 tests/kernel/exportq/test_export_queue.cpp 迁来）。
+#include <algorithm>
 #include "pixcake/command/command_gate.hpp"
 #include "pixcake/exportq/export_book.hpp"
 #include "pixcake/exportq/export_queue.hpp"
@@ -495,7 +496,68 @@ void test_failure_text_survives_reopen() {
   EXPECT(book->queue().failure_text("exp-1").empty());
 }
 
+// An external drive: the cache is on another device, so publishing (a link)
+// cannot reach the destination from the cache.  The temporary file is written
+// hidden next to the destination instead; nothing is left behind.
+void test_export_to_another_device() {
+  pixcake::test::FakeFileSystem files;
+  files.devices["/Volumes/USB"] = 2;
+  auto queue = pixcake::ExportQueue::open("/cache/exports");
+  reach_render(queue, job_of("exp-1", "orig-1", "/Volumes/USB/out/a.jpg"));
+  EXPECT(queue.commit_product("exp-1", kBytes, files) == pixcake::ResultCode::Ok);
+  EXPECT(queue.status("exp-1") == "成功");
+  EXPECT(files.files.count("/Volumes/USB/out/a.jpg") == 1);
+  EXPECT(files.files.count("/Volumes/USB/out/.pixcake-exp-1.part") == 0);
+  EXPECT(files.files.count("/cache/exports/exp-1") == 0);
+  EXPECT(std::find(files.writes.begin(), files.writes.end(), "/Volumes/USB/out/.pixcake-exp-1.part") !=
+         files.writes.end());
+
+  // The same device as the cache keeps the cache (no file in the destination folder while writing).
+  reach_render(queue, job_of("exp-2", "orig-2", "/out/b.jpg"));
+  EXPECT(queue.commit_product("exp-2", kBytes, files) == pixcake::ResultCode::Ok);
+  EXPECT(files.writes.back() == "/cache/exports/exp-2");
+}
+
+// A crash while the hidden temporary file is written: recovery removes it and
+// fails the task; a crash after it is complete: recovery publishes it.
+void test_crash_on_another_device() {
+  pixcake::test::FakeFileSystem files;
+  files.devices["/Volumes/USB"] = 2;
+  auto queue = pixcake::ExportQueue::open("/cache/exports");
+  reach_render(queue, job_of("exp-1", "orig-1", "/Volumes/USB/out/a.jpg"));
+  files.arm_crash_after(1);  // the write of the temporary file
+  bool crashed = false;
+  try {
+    queue.commit_product("exp-1", kBytes, files);
+  } catch (const pixcake::test::SimulatedCrash&) {
+    crashed = true;
+  }
+  files.crash_after = 0;
+  EXPECT(crashed && files.files.count("/Volumes/USB/out/.pixcake-exp-1.part") == 1);
+  auto restarted = pixcake::ExportQueue::open("/cache/exports", queue.events());
+  EXPECT(restarted.status("exp-1") == "写临时文件");
+  EXPECT(restarted.recover(files) == pixcake::ResultCode::Ok);
+  EXPECT(restarted.status("exp-1") == "失败");
+  EXPECT(files.files.count("/Volumes/USB/out/.pixcake-exp-1.part") == 0);
+  EXPECT(files.files.count("/Volumes/USB/out/a.jpg") == 0);
+
+  // Complete, not yet published (the publish fails): recovery publishes it.
+  auto second = pixcake::ExportQueue::open("/cache/exports");
+  reach_render(second, job_of("exp-2", "orig-2", "/Volumes/USB/out/b.jpg"));
+  files.rename_error = pixcake::ResultCode::IoFailed;
+  EXPECT(second.commit_product("exp-2", kBytes, files) == pixcake::ResultCode::IoFailed);
+  files.rename_error = pixcake::ResultCode::Ok;
+  EXPECT(second.status("exp-2") == "提交到目标路径");
+  auto reopened = pixcake::ExportQueue::open("/cache/exports", second.events());
+  EXPECT(reopened.recover(files) == pixcake::ResultCode::Ok);
+  EXPECT(reopened.status("exp-2") == "成功");
+  EXPECT(files.files.count("/Volumes/USB/out/b.jpg") == 1);
+  EXPECT(files.files.count("/Volumes/USB/out/.pixcake-exp-2.part") == 0);
+}
+
 int main() {
+  test_export_to_another_device();
+  test_crash_on_another_device();
   test_reader_without_recovery_leaves_running_task_alone();
   test_failure_text_survives_reopen();
   test_b95_b96_b97_rename_failure_and_crash_points();
