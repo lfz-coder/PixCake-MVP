@@ -219,6 +219,9 @@ add_test(NAME test_gpu_facade COMMAND test_gpu_facade)
 add_executable(test_reference_color_groups gpu/test_reference_color_groups.cpp)
 target_link_libraries(test_reference_color_groups PRIVATE pixcake_gpu_render pixcake_warnings)
 add_test(NAME test_reference_color_groups COMMAND test_reference_color_groups)
+# Not a test: frame time of the reference renderer at the preview's maximum size (run the Release build).
+add_executable(bench_reference_render gpu/bench_reference_render.cpp)
+target_link_libraries(bench_reference_render PRIVATE pixcake_gpu_render pixcake_warnings)
 
 add_executable(test_gpu_backend_qt gpu/test_gpu_backend_qt.cpp)
 target_link_libraries(test_gpu_backend_qt PRIVATE pixcake_gpu_backend_qt pixcake_warnings)

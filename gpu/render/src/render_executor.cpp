@@ -9,7 +9,9 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_set>
+#include <vector>
 
 namespace pixcake::gpu {
 namespace {
@@ -93,16 +95,6 @@ Mat3 white_balance_matrix(float temperature, float tint) {
                                                                    multiply(kBradford, kSrgbToXyz))));
 }
 
-Pixel white_balance(Pixel pixel, const std::map<std::string, float>& values) {
-  const float temperature = get(values, "temperature");
-  const float tint = get(values, "tint");
-  if (std::abs(temperature) < 1e-6F && std::abs(tint) < 1e-6F) return pixel;
-  const Vec3 adapted = mul(white_balance_matrix(temperature, tint), {pixel.r, pixel.g, pixel.b});
-  pixel.r = adapted.x;
-  pixel.g = adapted.y;
-  pixel.b = adapted.z;
-  return pixel;
-}
 float luminance(Pixel p) { return 0.2126F * p.r + 0.7152F * p.g + 0.0722F * p.b; }
 Pixel mix(Pixel a, Pixel b, float amount) {
   amount = clamp01(amount);
@@ -123,37 +115,66 @@ void write(RgbaImage& image, std::uint32_t x, std::uint32_t y, Pixel p) {
   image.pixels[i + 2] = static_cast<std::uint8_t>(std::lround(clamp01(p.b) * 255.0F));
   image.pixels[i + 3] = static_cast<std::uint8_t>(std::lround(clamp01(p.a) * 255.0F));
 }
-Pixel color(Pixel p, const std::map<std::string, float>& v) {
-  p = white_balance(p, v);
+// White balance, style tint and tone, read once per operation (the white
+// balance matrix and the exposure gain included) instead of once per pixel.
+// The float operations and their order are the same as the per-pixel form
+// they replace, so frames are bit-identical.
+struct ToneColor {
+  bool white_balance = false;
+  Mat3 white_balance_matrix{};
+  float style = 0;
+  float exposure_gain = 1, brightness = 0, contrast_amount = 1;
+  float highlights = 0, shadows = 0, whites = 0, blacks = 0, local = 0, saturation = 0, vibrance = 0;
+};
+ToneColor tone_color_of(const std::map<std::string, float>& v) {
+  ToneColor t;
+  const float temperature = get(v, "temperature");
+  const float tint = get(v, "tint");
+  t.white_balance = !(std::abs(temperature) < 1e-6F && std::abs(tint) < 1e-6F);
+  if (t.white_balance) t.white_balance_matrix = white_balance_matrix(temperature, tint);
   // 程度 100 是默认强度：AI 色彩风格 0..100，AI 追色 0..200（200 为两倍强度），与参数模式一致。
-  const float style = std::clamp(get(v, "amount") / 100.0F, 0.0F, 2.0F);
-  p.r += style * 0.04F; p.g += style * 0.01F; p.b -= style * 0.03F;
+  t.style = std::clamp(get(v, "amount") / 100.0F, 0.0F, 2.0F);
+  // PP-EXP-001: the EV gain, computed once (apply_exposure(1, ev) is exactly exp2(ev)).
+  t.exposure_gain = apply_exposure(1.0F, get(v, "exposure"));
+  t.brightness = get(v, "brightness") / 100.0F;
+  // PP-CONTRAST-001: W3C Filter Effects contrast() is an affine transfer
+  // around the 0.5 midpoint.  The project maps -100..100 to a 0..2 slope.
+  t.contrast_amount = 1.0F + get(v, "contrast") / 100.0F;
+  t.highlights = get(v, "highlights") / 100.0F;
+  t.shadows = get(v, "shadows") / 100.0F;
+  t.whites = get(v, "whites") / 100.0F;
+  t.blacks = get(v, "blacks") / 100.0F;
+  t.local = (get(v, "clarity") + get(v, "texture") + get(v, "dehaze")) / 300.0F * 0.35F;
+  t.saturation = get(v, "saturation") / 100.0F;
+  t.vibrance = get(v, "vibrance") / 100.0F;
+  return t;
+}
+Pixel color(Pixel p, const ToneColor& t) {
+  if (t.white_balance) {
+    const Vec3 adapted = mul(t.white_balance_matrix, {p.r, p.g, p.b});
+    p.r = adapted.x;
+    p.g = adapted.y;
+    p.b = adapted.z;
+  }
+  p.r += t.style * 0.04F; p.g += t.style * 0.01F; p.b -= t.style * 0.03F;
   return p;
 }
 // PP-EXP-001 and PP-CONTRAST-001 are source-backed reference effects here;
 // brightness/highlights/shadows and the detail controls remain provisional.
-Pixel tone(Pixel p, const std::map<std::string, float>& v) {
-  const float exposure = get(v, "exposure");
-  const float contrast = get(v, "contrast") / 100.0F;
-  const float brightness = get(v, "brightness") / 100.0F;
-  p.r = apply_exposure(p.r, exposure); p.g = apply_exposure(p.g, exposure); p.b = apply_exposure(p.b, exposure);
-  p.r += brightness; p.g += brightness; p.b += brightness;
-  // PP-CONTRAST-001: W3C Filter Effects contrast() is an affine transfer
-  // around the 0.5 midpoint.  The project maps -100..100 to a 0..2 slope.
-  const float contrast_amount = 1.0F + contrast;
-  p.r = (p.r - 0.5F) * contrast_amount + 0.5F;
-  p.g = (p.g - 0.5F) * contrast_amount + 0.5F;
-  p.b = (p.b - 0.5F) * contrast_amount + 0.5F;
+Pixel tone(Pixel p, const ToneColor& t) {
+  p.r *= t.exposure_gain; p.g *= t.exposure_gain; p.b *= t.exposure_gain;
+  p.r += t.brightness; p.g += t.brightness; p.b += t.brightness;
+  p.r = (p.r - 0.5F) * t.contrast_amount + 0.5F;
+  p.g = (p.g - 0.5F) * t.contrast_amount + 0.5F;
+  p.b = (p.b - 0.5F) * t.contrast_amount + 0.5F;
   const float l = luminance(p);
   const float hi = clamp01((l - 0.5F) * 2.0F), lo = clamp01((0.5F - l) * 2.0F);
-  const float lift = get(v, "highlights") / 100.0F * hi * 0.45F + get(v, "shadows") / 100.0F * lo * 0.45F +
-                     get(v, "whites") / 100.0F * hi * 0.2F + get(v, "blacks") / 100.0F * lo * 0.2F;
+  const float lift = t.highlights * hi * 0.45F + t.shadows * lo * 0.45F + t.whites * hi * 0.2F + t.blacks * lo * 0.2F;
   p.r += lift; p.g += lift; p.b += lift;
-  const float local = (get(v, "clarity") + get(v, "texture") + get(v, "dehaze")) / 300.0F * 0.35F;
-  p.r = (p.r - 0.5F) * (1.0F + local) + 0.5F;
-  p.g = (p.g - 0.5F) * (1.0F + local) + 0.5F;
-  p.b = (p.b - 0.5F) * (1.0F + local) + 0.5F;
-  const float saturation = 1.0F + get(v, "saturation") / 100.0F + get(v, "vibrance") / 100.0F * (1.0F - std::max({p.r, p.g, p.b}));
+  p.r = (p.r - 0.5F) * (1.0F + t.local) + 0.5F;
+  p.g = (p.g - 0.5F) * (1.0F + t.local) + 0.5F;
+  p.b = (p.b - 0.5F) * (1.0F + t.local) + 0.5F;
+  const float saturation = 1.0F + t.saturation + t.vibrance * (1.0F - std::max({p.r, p.g, p.b}));
   const float gray = luminance(p);
   p.r = gray + (p.r - gray) * saturation; p.g = gray + (p.g - gray) * saturation; p.b = gray + (p.b - gray) * saturation;
   return p;
@@ -484,12 +505,42 @@ Pixel apply_grain(Pixel p, std::uint32_t x, std::uint32_t y, const Grain& g) {
   return p;
 }
 
-Pixel composite(Pixel base, Pixel top, float opacity, const std::string& mode) {
+enum class Blend { Normal, Multiply, Screen };
+Blend blend_of(const std::string& mode) {
+  if (mode == "multiply") return Blend::Multiply;
+  if (mode == "screen") return Blend::Screen;
+  return Blend::Normal;
+}
+Pixel composite(Pixel base, Pixel top, float opacity, Blend mode) {
   opacity = clamp01(opacity) * top.a;
   Pixel mixed = top;
-  if (mode == "multiply") mixed = {base.r * top.r, base.g * top.g, base.b * top.b, top.a};
-  if (mode == "screen") mixed = {1.0F - (1.0F - base.r) * (1.0F - top.r), 1.0F - (1.0F - base.g) * (1.0F - top.g), 1.0F - (1.0F - base.b) * (1.0F - top.b), top.a};
+  if (mode == Blend::Multiply) mixed = {base.r * top.r, base.g * top.g, base.b * top.b, top.a};
+  if (mode == Blend::Screen) mixed = {1.0F - (1.0F - base.r) * (1.0F - top.r), 1.0F - (1.0F - base.g) * (1.0F - top.g), 1.0F - (1.0F - base.b) * (1.0F - top.b), top.a};
   return mix(base, mixed, opacity);
+}
+
+// Runs body(first_row, end_row) over the frame's rows, split across the
+// machine's cores when the frame is large.  Every pixel is read and written
+// only by the row that owns it, so the split does not change the result.
+template <typename Body>
+void for_rows(std::uint32_t width, std::uint32_t height, const Body& body) {
+  const std::uint64_t pixels = static_cast<std::uint64_t>(width) * height;
+  const unsigned cores = std::max(1U, std::thread::hardware_concurrency());
+  const unsigned workers = pixels < 262144U ? 1U : std::min<unsigned>(cores, height);
+  if (workers <= 1) {
+    body(0U, height);
+    return;
+  }
+  std::vector<std::thread> threads;
+  threads.reserve(workers - 1);
+  const std::uint32_t band = (height + workers - 1) / workers;
+  for (unsigned w = 1; w < workers; ++w) {
+    const std::uint32_t first = std::min(height, band * w);
+    const std::uint32_t end = std::min(height, first + band);
+    if (first < end) threads.emplace_back([&body, first, end] { body(first, end); });
+  }
+  body(0U, std::min(height, band));
+  for (auto& thread : threads) thread.join();
 }
 const RenderMask* mask_for(const RenderInputs& inputs, const std::string& id) {
   for (const auto& mask : inputs.masks) if (mask.id == id) return &mask;
@@ -645,21 +696,24 @@ bool RenderExecutor::renderReference(const pixcake::render::RenderDescription& d
     }
     const Grain grain = is_detail ? grain_of(values, input.width, input.height) : Grain{};
     if (is_detail && !grain.on) continue;
-    for (std::uint32_t y = 0; y < input.height; ++y) for (std::uint32_t x = 0; x < input.width; ++x) {
-      const Pixel before = read(result.image, x, y);
-      Pixel after = before;
-      if (has_lut) {
-        const float amount = values.find("amount") == values.end() ? 1.0F : clamp01(get(values, "amount") / 100.0F);
-        after = mix(before, lut_sample(lut, before), amount);
+    const ToneColor tone_color = tone_color_of(values);
+    const float lut_amount = values.find("amount") == values.end() ? 1.0F : clamp01(get(values, "amount") / 100.0F);
+    const Blend blend = blend_of(operation.blend_mode);
+    RgbaImage& frame = result.image;
+    for_rows(input.width, input.height, [&](std::uint32_t first, std::uint32_t end) {
+      for (std::uint32_t y = first; y < end; ++y) for (std::uint32_t x = 0; x < input.width; ++x) {
+        const Pixel before = read(frame, x, y);
+        Pixel after = before;
+        if (has_lut) after = mix(before, lut_sample(lut, before), lut_amount);
+        if (!has_lut && is_color) after = color(after, tone_color);
+        if (!has_lut && is_tone) after = tone(after, tone_color);
+        if (has_groups) after = apply_color_groups(after, groups);
+        if (is_detail) after = apply_grain(after, x, y, grain);
+        float weight = 1.0F;
+        for (const auto* mask : masks) weight *= mask->alpha[static_cast<std::size_t>(y) * input.width + x] / 255.0F;
+        write(frame, x, y, composite(before, after, weight, blend));
       }
-      if (!has_lut && is_color) after = color(after, values);
-      if (!has_lut && is_tone) after = tone(after, values);
-      if (has_groups) after = apply_color_groups(after, groups);
-      if (is_detail) after = apply_grain(after, x, y, grain);
-      float weight = 1.0F;
-      for (const auto* mask : masks) weight *= mask->alpha[static_cast<std::size_t>(y) * input.width + x] / 255.0F;
-      write(result.image, x, y, composite(before, after, weight, operation.blend_mode));
-    }
+    });
   }
   auto layers = inputs.layers;
   std::sort(layers.begin(), layers.end(), [](const RenderLayer& a, const RenderLayer& b) { return a.order < b.order; });
@@ -680,10 +734,14 @@ bool RenderExecutor::renderReference(const pixcake::render::RenderDescription& d
     const auto* mask = layer.mask_id.empty() ? nullptr : mask_for(inputs, layer.mask_id);
     if (!layer.mask_id.empty() && (mask == nullptr || mask->width != input.width || mask->height != input.height || mask->alpha.size() < static_cast<std::size_t>(input.width) * input.height)) { result.statuses.push_back({layer_id, "layer", PassStatus::MissingResource, "图层蒙版缺失或尺寸不匹配，跳过图层"}); result.diagnostics.push_back({layer_id, "图层蒙版缺失或尺寸不匹配，跳过图层", false}); continue; }
     result.statuses.push_back({layer_id, "layer", PassStatus::Implemented, {}});
-    for (std::uint32_t y = 0; y < input.height; ++y) for (std::uint32_t x = 0; x < input.width; ++x) {
-      const float amount = layer.opacity * (mask == nullptr ? 1.0F : mask->alpha[static_cast<std::size_t>(y) * input.width + x] / 255.0F);
-      write(result.image, x, y, composite(read(result.image, x, y), read(layer.image, x, y), amount, layer.blend_mode));
-    }
+    const Blend layer_blend = blend_of(layer.blend_mode);
+    RgbaImage& frame = result.image;
+    for_rows(input.width, input.height, [&](std::uint32_t first, std::uint32_t end) {
+      for (std::uint32_t y = first; y < end; ++y) for (std::uint32_t x = 0; x < input.width; ++x) {
+        const float amount = layer.opacity * (mask == nullptr ? 1.0F : mask->alpha[static_cast<std::size_t>(y) * input.width + x] / 255.0F);
+        write(frame, x, y, composite(read(frame, x, y), read(layer.image, x, y), amount, layer_blend));
+      }
+    });
   }
   result.success = true;
   return true;
