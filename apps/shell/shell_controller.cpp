@@ -12,13 +12,52 @@ ShellController::~ShellController() {
 void ShellController::request_page(Page target) {
   if (display_.navigate(target) != ResultCode::Ok) return;
   if (target == Page::Home) close_project();
-  // Refine from the library tab with nothing open yet: show the project's first photo.
-  if (target == Page::Refine && projects_ && current_project_ && !current_photo_) {
+  // The library opens on the grid (as 像素蛋糕 does); refine shows the selected photo.
+  if (target == Page::Library) display_.set_library_view("grid");
+  if (target == Page::Refine) show_selected_photo();
+  remember_place();
+  if (changed_) changed_();
+}
+
+void ShellController::remember_place() {
+  if (!projects_ || !current_project_) return;
+  const Page page = display_.page();
+  if (page != Page::Library && page != Page::Refine) return;  // creative is left through refine
+  project_session::ProjectPlace place;
+  place.workspace = page == Page::Library ? project_session::Workspace::Library : project_session::Workspace::Refine;
+  place.photo_id = selected_photo_;
+  projects_->remember_place(*current_project_, place);  // window state: a failure only loses the place
+}
+
+void ShellController::show_selected_photo() {
+  if (!projects_ || !current_project_) return;
+  if (!selected_photo_) {
     std::vector<PhotoRow> rows;
-    if (projects_->list_photos(*current_project_, rows) == ResultCode::Ok && !rows.empty()) {
-      open_project_photo(rows.front().id);
-    }
+    if (projects_->list_photos(*current_project_, rows) != ResultCode::Ok || rows.empty()) return;
+    selected_photo_ = rows.front().id;
   }
+  if (current_photo_ != selected_photo_ || !session_) open_project_photo(*selected_photo_);
+}
+
+void ShellController::select_photo(std::int64_t photo_id) {
+  if (!projects_ || !current_project_) return;
+  selected_photo_ = photo_id;
+  remember_place();
+}
+
+void ShellController::request_view_photo(std::int64_t photo_id) {
+  if (!projects_ || !current_project_ || display_.page() != Page::Library) return;
+  selected_photo_ = photo_id;
+  display_.set_library_view("single");
+  show_selected_photo();  // the large image is the rendered preview, edits included
+  remember_place();
+  if (changed_) changed_();
+}
+
+void ShellController::request_library_view(const std::string& view) {
+  if (view != "grid" && view != "single") return;  // the filter view is not built yet
+  if (display_.set_library_view(view) != ResultCode::Ok) return;
+  if (view == "single") show_selected_photo();
   if (changed_) changed_();
 }
 
@@ -36,6 +75,7 @@ void ShellController::close_project() {
   thumbnails_.reset();
   thumbnail_cache_.clear();
   thumbnail_requested_.clear();
+  selected_photo_.reset();
   current_project_.reset();
 }
 
@@ -138,6 +178,7 @@ void ShellController::request_import(const std::vector<std::string>& paths) {
     if (display_.open_project() == ResultCode::Ok) {
       current_project_ = outcome.project_id;
       open_project_photo(outcome.photo_ids.front());
+      remember_place();
     }
   }
   request_thumbnails();
@@ -166,10 +207,20 @@ std::vector<ProjectEntry> ShellController::projects() const {
 }
 
 void ShellController::request_open_project(std::int64_t project_id) {
-  // A click on a project shows its photos in the library; a double-click on a
-  // photo opens it in refine (user ruling 2026-11-06).  No photo is opened yet.
-  if (!projects_ || display_.open_project(Page::Library) != ResultCode::Ok) return;
+  // A project opens where it was left: the library (grid) or refine with the
+  // selected photo; refine when nothing was remembered (requirement 5.3).
+  // Evidence 2026-11-06-project-entry-observation.md.
+  if (!projects_) return;
+  const auto place = projects_->last_place(project_id);
+  const Page landing = place.workspace == project_session::Workspace::Library ? Page::Library : Page::Refine;
+  if (display_.open_project(landing) != ResultCode::Ok) return;
   current_project_ = project_id;
+  selected_photo_ = place.photo_id;
+  if (landing == Page::Library) {
+    display_.set_library_view("grid");
+  } else {
+    show_selected_photo();
+  }
   request_thumbnails();
   if (changed_) changed_();
 }
@@ -192,12 +243,14 @@ void ShellController::request_open_photo(std::int64_t photo_id) {
   // Navigate first: a page change clears notices, and opening may post one.
   if (display_.page() != Page::Refine) display_.navigate(Page::Refine);
   open_project_photo(photo_id);
+  remember_place();
   if (changed_) changed_();
 }
 
 void ShellController::open_project_photo(std::int64_t photo_id) {
   close_photo();
   current_photo_ = photo_id;
+  selected_photo_ = photo_id;
   std::string path;
   std::string diagnostic;
   const ResultCode resolved = projects_->resolve_photo(photo_id, path, diagnostic);

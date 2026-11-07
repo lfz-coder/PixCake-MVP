@@ -295,6 +295,8 @@ int smoke_import_flow(pixcake::shell::ShellWindow& window, const std::vector<std
     qCritical("refine thumbnail strip does not show the project's photos");
     return 9;
   }
+  // Library (evidence 2026-11-06-project-entry-observation.md): a click selects,
+  // a double-click shows the large image in the library's single view.
   controller.request_page(Page::Library);
   auto* list = library_photos(window);
   screenshot(window, "library");
@@ -303,35 +305,75 @@ int smoke_import_flow(pixcake::shell::ShellWindow& window, const std::vector<std
     qCritical("library does not list the project's photos");
     return 9;
   }
+  const auto item_of = [](QListWidget* in, std::int64_t id) -> QListWidgetItem* {
+    for (int row = 0; row < in->count(); ++row) {
+      if (in->item(row)->data(Qt::UserRole).toLongLong() == id) return in->item(row);
+    }
+    return nullptr;
+  };
+  emit list->itemClicked(item_of(list, original));
+  if (controller.display().page() != Page::Library || controller.display().library_view() != "grid" ||
+      controller.current_photo() != original) {
+    qCritical("a click on a library photo did not just select it");
+    return 9;
+  }
+  auto before = controller.frames_shown();
+  emit list->itemActivated(item_of(list, edited));
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  if (!wait_frames(window, before + 1, 60'000) || controller.display().page() != Page::Library ||
+      controller.display().library_view() != "single" || controller.current_photo() != edited ||
+      window.findChild<QFrame*>(QStringLiteral("library-single-image")) == nullptr) {
+    qCritical("a double-click on a library photo did not show it in the single view");
+    return 9;
+  }
+  screenshot(window, "library-single");
+  const double single_red = mean_red(controller.preview_view().image);
+  if (!(single_red > 200)) {
+    qCritical("the single view does not show the edit (red %.1f)", single_red);
+    return 9;
+  }
+
+  // Home: a click selects a project, a double-click opens it where it was left (the library).
   controller.request_page(Page::Home);
   QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
-  QPushButton* project = nullptr;
-  for (auto* button : window.findChildren<QPushButton*>(QStringLiteral("home-project"))) {
-    if (button->text() == QString::fromStdString(expected_project)) project = button;
+  auto* projects = window.findChild<QListWidget*>(QStringLiteral("home-projects"));
+  QListWidgetItem* project = nullptr;
+  for (int row = 0; projects != nullptr && row < projects->count(); ++row) {
+    if (projects->item(row)->text() == QString::fromStdString(expected_project)) project = projects->item(row);
   }
   screenshot(window, "home");
   if (project == nullptr || controller.has_photo()) {
     qCritical("home does not list project %s (or the photo stayed open)", expected_project.c_str());
     return 9;
   }
-  // A click on a project shows its photos in the library; nothing is opened yet.
-  project->click();
-  auto* reopened = library_photos(window);
-  if (controller.display().page() != Page::Library || controller.has_photo() || reopened == nullptr ||
-      reopened->count() != static_cast<int>(photos.size())) {
-    qCritical("a click on the project did not show its photos in the library");
+  projects->setCurrentItem(project);
+  emit projects->itemClicked(project);
+  if (controller.display().page() != Page::Home) {
+    qCritical("a click on a project opened it");
     return 9;
   }
-  // A double-click (item activation) on the edited photo opens it in refine.
-  QListWidgetItem* edited_item = nullptr;
-  for (int row = 0; row < reopened->count(); ++row) {
-    if (reopened->item(row)->data(Qt::UserRole).toLongLong() == edited) edited_item = reopened->item(row);
+  emit projects->itemActivated(project);
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  if (controller.display().page() != Page::Library || controller.display().library_view() != "grid" ||
+      controller.current_photo() != edited || controller.has_photo()) {
+    qCritical("reopening the project did not return to the library grid with the selected photo");
+    return 9;
   }
-  const auto before = controller.frames_shown();
-  if (edited_item != nullptr) emit reopened->itemActivated(edited_item);
-  if (edited_item == nullptr || !wait_frames(window, before + 1, 60'000) ||
-      controller.display().page() != Page::Refine) {
-    qCritical("double-clicking the photo shows no frame in refine");
+  // Refine shows the selected photo with its edit; the project is then remembered in refine.
+  before = controller.frames_shown();
+  controller.request_page(Page::Refine);
+  if (!wait_frames(window, before + 1, 60'000) || controller.display().page() != Page::Refine) {
+    qCritical("refine shows no frame for the selected photo");
+    return 9;
+  }
+  controller.request_page(Page::Home);
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  projects = window.findChild<QListWidget*>(QStringLiteral("home-projects"));
+  before = controller.frames_shown();
+  if (projects != nullptr && projects->count() > 0) emit projects->itemActivated(projects->item(0));
+  if (!wait_frames(window, before + 1, 60'000) || controller.display().page() != Page::Refine ||
+      controller.current_photo() != edited) {
+    qCritical("reopening the project did not return to refine");
     return 9;
   }
   // The committed exposure is applied again: much brighter than the original.

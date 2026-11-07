@@ -69,8 +69,15 @@ class PageActions {
   virtual std::vector<ProjectEntry> projects() const { return {}; }
   virtual void request_open_project(std::int64_t) {}
   virtual std::vector<PhotoEntry> photos() const { return {}; }
+  // 项目里选中的照片（图库单击选中；精修显示的就是它）。
   virtual std::optional<std::int64_t> current_photo() const { return std::nullopt; }
+  virtual void select_photo(std::int64_t) {}
+  // 在精修打开（精修底部缩略图条单击）。
   virtual void request_open_photo(std::int64_t) {}
+  // 图库里看大图：切到图库单视图（图库网格双击，与像素蛋糕一致，不进精修）。
+  virtual void request_view_photo(std::int64_t) {}
+  // 图库视图：grid、single（filter-view 还没做）。
+  virtual void request_library_view(const std::string&) {}
   // 缩略图（renderd 生成，按已提交的编辑绘制）。还没有时返回空图；生成后经 watch_thumbnails 回调。
   virtual QImage thumbnail(std::int64_t) const { return {}; }
   virtual void watch_thumbnails(QObject*, std::function<void(std::int64_t, const QImage&)>) {}
@@ -94,10 +101,13 @@ QPushButton* itemAction(std::string_view list, const CopyItem& item, QWidget* pa
 // 图库、精修、创意三个页签。点击只发请求。
 void addPageTabs(QHBoxLayout* layout, const PageContext& context);
 QFrame* workspaceTool(std::string_view list, const CopyItem& item, QWidget* parent);
-// 底部缩略图条。有当前项目的照片时列出照片（单击打开），“+”在能导入时可用。
-QFrame* thumbnailStrip(QWidget* parent, bool library, PageActions* actions = nullptr);
-// 当前项目的照片列表：grid 为真是图库网格，否则是一行缩略图条。缩略图生成后自动补上。
-QListWidget* photoList(QWidget* parent, PageActions* actions, bool grid);
+// 底部缩略图条。有当前项目的照片时列出照片，单击调用 open（精修里打开、图库单视图里换大图、
+// 图库网格里选中），“+”在能导入时可用。
+QFrame* thumbnailStrip(QWidget* parent, bool library, PageActions* actions = nullptr,
+                       std::function<void(std::int64_t)> open = {});
+// 当前项目的照片列表：grid 为真是图库网格（单击选中，双击调用 open），否则是一行缩略图条（单击调用 open）。
+// 缩略图生成后自动补上。
+QListWidget* photoList(QWidget* parent, PageActions* actions, bool grid, std::function<void(std::int64_t)> open);
 // 选择图片并导入（主页新建项目，项目内追加）。
 void chooseAndImport(QWidget* parent, PageActions* actions);
 

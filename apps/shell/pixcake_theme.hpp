@@ -104,6 +104,9 @@ struct PixCakeTheme final {
       QScrollBar::handle:horizontal { background: #3a3a3a; min-width: 24px; border-radius: 5px; }
       QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
       QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+      QListWidget#home-projects { background: transparent; border: none; }
+      QListWidget#home-projects::item { background: #262626; border-radius: 6px; padding: 8px; margin: 4px; min-width: 172px; }
+      QListWidget#home-projects::item:selected { background: #2f2f2f; border: 1px solid #f5c518; }
       QListWidget#thumbs-photos { background: transparent; border: none; }
       QListWidget#thumbs-photos::item { border-radius: 4px; padding: 2px; }
       QListWidget#thumbs-photos::item:selected { background: #3a3a3a; }

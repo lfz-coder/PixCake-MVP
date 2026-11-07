@@ -45,8 +45,11 @@ class ShellController final : public PageActions {
   std::vector<ProjectEntry> projects() const override;
   void request_open_project(std::int64_t project_id) override;
   std::vector<PhotoEntry> photos() const override;
-  std::optional<std::int64_t> current_photo() const override { return current_photo_; }
+  std::optional<std::int64_t> current_photo() const override { return selected_photo_; }
+  void select_photo(std::int64_t photo_id) override;
   void request_open_photo(std::int64_t photo_id) override;
+  void request_view_photo(std::int64_t photo_id) override;
+  void request_library_view(const std::string& view) override;
   std::optional<std::int64_t> current_project() const { return current_project_; }
   QImage thumbnail(std::int64_t photo_id) const override;
   void watch_thumbnails(QObject* owner, std::function<void(std::int64_t, const QImage&)> show) override;
@@ -68,6 +71,10 @@ class ShellController final : public PageActions {
   void request_thumbnail(std::int64_t photo_id);
   void read_thumbnails();
   void close_project();
+  // Where the current project is (workspace and selected photo), for the next time it is opened.
+  void remember_place();
+  // Opens the selected photo (or the project's first) in the preview session unless it already is.
+  void show_selected_photo();
   void show_notices(const std::vector<std::string>& notices, NoticeScene scene, ResultCode code);
 
   ShellDisplay display_;
@@ -81,7 +88,8 @@ class ShellController final : public PageActions {
   std::unique_ptr<project_session::ProjectSession> projects_;
   preview_channel::PreviewSessionOptions preview_options_;
   std::optional<std::int64_t> current_project_;
-  std::optional<std::int64_t> current_photo_;
+  std::optional<std::int64_t> current_photo_;   // opened in the preview session
+  std::optional<std::int64_t> selected_photo_;  // selected in the project
   std::unique_ptr<preview_channel::ThumbnailService> thumbnails_;
   std::unique_ptr<QSocketNotifier> thumbnail_notifier_;
   std::map<std::int64_t, QImage> thumbnail_cache_;

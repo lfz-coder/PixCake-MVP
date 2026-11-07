@@ -5,6 +5,7 @@
 
 #include <QGroupBox>
 #include <QListWidget>
+#include <QPointer>
 #include <QSlider>
 
 namespace pixcake::shell {
@@ -58,11 +59,25 @@ QWidget* buildLibraryPage(const PageContext& context) {
   auto* grid_layout = new QVBoxLayout(grid);
   grid_layout->setContentsMargins(16, 16, 16, 16);
   const auto photos = actions->photos();
+  const bool single = context.display.library_view() == "single" && actions->has_photo();
+  // 图库网格双击照片、单视图里点底部缩略图：都在图库里看大图（与像素蛋糕一致，不进精修）。
+  const auto view = [actions](std::int64_t photo) { actions->request_view_photo(photo); };
   if (photos.empty()) {
     grid_layout->addWidget(new PixCakeEmptyState(qtext("library.empty"), qtext("library.empty.hint"), grid), 1);
+  } else if (single) {
+    // 单视图：选中照片的大图，是 renderd 按已提交编辑渲染的预览。
+    auto* image_view = new PixCakeImageView(grid);
+    image_view->setObjectName(QStringLiteral("library-single-image"));
+    grid_layout->addWidget(image_view, 1);
+    QPointer<PixCakeImageView> guard(image_view);
+    actions->watch_preview(image_view, [guard](const PreviewView& update) {
+      if (!guard) return;
+      if (!update.image.isNull()) guard->setImage(update.image);
+      guard->setStatus(update.status);
+    });
   } else {
-    // 当前项目的照片；双击进入精修。缩略图由 renderd 生成，到了就补上。
-    auto* list = photoList(grid, actions, true);
+    // 当前项目的照片：单击选中，双击看大图。缩略图由 renderd 生成，到了就补上。
+    auto* list = photoList(grid, actions, true, view);
     grid_layout->addWidget(text(qtext("library.open.hint"), true));
     grid_layout->addWidget(list, 1);
   }
@@ -99,11 +114,26 @@ QWidget* buildLibraryPage(const PageContext& context) {
   span->setFixedWidth(120);
   views_layout->insertWidget(0, span);
   for (const auto& entry : ui::shell::page_list("library-views")) {
-    views_layout->addWidget(itemAction("library-views", entry, views));
+    const bool built = entry.id == "grid" || entry.id == "single";  // the filter view is not built yet
+    auto* button = itemAction("library-views", entry, views, built && !photos.empty());
+    button->setObjectName(QStringLiteral("library-view-") + qs(entry.id));
+    button->setProperty("selected", context.display.library_view() == entry.id);
+    if (built) {
+      const std::string id = entry.id;
+      QObject::connect(button, &QPushButton::clicked, button, [actions, id] { actions->request_library_view(id); });
+    }
+    views_layout->addWidget(button);
   }
   views_layout->addStretch();
   outer->addWidget(views);
-  outer->addWidget(thumbnailStrip(page, true, actions));
+  // 底部缩略图条：单视图里换大图，网格里选中。
+  outer->addWidget(thumbnailStrip(page, true, actions, [actions, single](std::int64_t photo) {
+    if (single) {
+      actions->request_view_photo(photo);
+    } else {
+      actions->select_photo(photo);
+    }
+  }));
   return page;
 }
 

@@ -104,7 +104,7 @@ QIcon thumbnailIcon(const QImage& image, int side) {
 
 }  // namespace
 
-QListWidget* photoList(QWidget* parent, PageActions* actions, bool grid) {
+QListWidget* photoList(QWidget* parent, PageActions* actions, bool grid, std::function<void(std::int64_t)> open) {
   const int side = grid ? 140 : 56;
   auto* list = new QListWidget(parent);
   list->setObjectName(grid ? QStringLiteral("library-photos") : QStringLiteral("thumbs-photos"));
@@ -136,14 +136,16 @@ QListWidget* photoList(QWidget* parent, PageActions* actions, bool grid) {
     item->setData(Qt::UserRole, QVariant::fromValue<qlonglong>(photo.id));
     if (actions->current_photo() == photo.id) list->setCurrentItem(item);
   }
-  // Grid: double-click opens (single click selects); strip: a click opens.
-  const auto open = [actions](QListWidgetItem* item) {
-    actions->request_open_photo(item->data(Qt::UserRole).toLongLong());
-  };
+  // Grid: a click selects, a double-click (activation) calls `open`; strip: a click calls `open`.
+  const auto id_of = [](QListWidgetItem* item) { return std::int64_t{item->data(Qt::UserRole).toLongLong()}; };
   if (grid) {
-    QObject::connect(list, &QListWidget::itemActivated, list, open);
+    QObject::connect(list, &QListWidget::itemClicked, list,
+                     [actions, id_of](QListWidgetItem* item) { actions->select_photo(id_of(item)); });
+    QObject::connect(list, &QListWidget::itemActivated, list,
+                     [open, id_of](QListWidgetItem* item) { if (open) open(id_of(item)); });
   } else {
-    QObject::connect(list, &QListWidget::itemClicked, list, open);
+    QObject::connect(list, &QListWidget::itemClicked, list,
+                     [open, id_of](QListWidgetItem* item) { if (open) open(id_of(item)); });
   }
   QPointer<QListWidget> guard(list);
   actions->watch_thumbnails(list, [guard, side](std::int64_t photo_id, const QImage& image) {
@@ -156,7 +158,7 @@ QListWidget* photoList(QWidget* parent, PageActions* actions, bool grid) {
   return list;
 }
 
-QFrame* thumbnailStrip(QWidget* parent, bool library, PageActions* actions) {
+QFrame* thumbnailStrip(QWidget* parent, bool library, PageActions* actions, std::function<void(std::int64_t)> open) {
   auto* frame = new QFrame(parent);
   frame->setObjectName(QStringLiteral("workspace-thumbs"));
   auto* layout = new QHBoxLayout(frame);
@@ -179,7 +181,7 @@ QFrame* thumbnailStrip(QWidget* parent, bool library, PageActions* actions) {
   for (const auto& id : ids) layout->addWidget(itemAction("refine-thumbs", copyItem("refine-thumbs", id), frame));
   if (library) layout->addWidget(action(qtext("thumbs.selected"), frame));
   if (actions != nullptr && !actions->photos().empty()) {
-    layout->addWidget(photoList(frame, actions, false), 1);
+    layout->addWidget(photoList(frame, actions, false, std::move(open)), 1);
   } else {
     layout->addStretch();
     layout->addWidget(text(library ? qtext("library.empty") : qtext("thumbs.empty"), true));

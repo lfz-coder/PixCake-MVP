@@ -52,8 +52,8 @@ class ShellDisplay {
   const std::vector<Region>& regions() const;
 
   // Navigation is the only state-changing operation in this batch.
-  // 从主页进入项目。landing 只能是图库或精修：主页单击项目进图库（用户裁决 2026-11-06），
-  // 导入新建的项目进精修（需求 5.3）。
+  // 从主页进入项目。landing 只能是图库或精修：再次打开回到该项目上次所在的工作区，
+  // 没有记录和导入新建时进精修（需求 5.3，像素蛋糕-test 实测 2026-11-06）。
   ResultCode open_project(Page landing = Page::Refine);
   ResultCode navigate(Page target);
   // 登录成功后换成主页；会话没有登录时拒绝。退出登录回到登录页，不保留项目（需求第 226 行）。

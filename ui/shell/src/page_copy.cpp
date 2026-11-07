@@ -94,7 +94,7 @@ Texts build_texts() {
   t["home.import.dialog"] = "选择要导入的照片";
   t["home.import.filter"] = "图片 (*.jpg *.jpeg *.png *.tif *.tiff *.bmp)";
   t["library.import"] = "＋ 导入照片";
-  t["library.open.hint"] = "双击照片进入精修";
+  t["library.open.hint"] = "单击选中，双击查看大图";
   t["home.quick.empty"] = "暂无快捷功能";
   t["home.projects.empty"] = "暂无项目";
 

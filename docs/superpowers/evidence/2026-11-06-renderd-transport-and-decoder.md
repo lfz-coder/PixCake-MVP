@@ -121,9 +121,9 @@ renderd 每个进程只服务一个连接：30 秒内没有壳层连接退出码
 | 规则 | `ui/shell`：`icon_drop_action` | 需求 3.2：模态层开着不导入（B-71）；未登录不导入；在项目里（精修，以及同属项目的图库、创意）追加；主页新建项目 |
 | 事件 | `ShellWindow` 的应用级事件过滤 | macOS 把拖到程序坞图标、访达里的 `.app` 和“打开方式”的文件都作为 `QFileOpenEvent` 交给应用；一次拖多个文件是多个事件，收集 150 毫秒后作为一批导入（一个项目，按第一个文件命名）；拖入那一刻有模态窗口就丢弃 |
 | 文档类型 | `apps/shell/Info.plist.in` | CMake 默认模板加 `CFBundleDocumentTypes`：`public.image` 与 `public.folder`，`LSHandlerRank` 为 `Alternate`（接受拖入，但不成为图片的默认打开程序）；没有它程序坞不接受拖放 |
-| 进入项目 | `ShellDisplay::open_project(landing)`、`ShellController::request_open_project` | 用户裁决：主页单击项目进图库，不打开照片、不启动预览 renderd；图库双击照片进精修；从图库切到精修且没有打开的照片时打开第一张；导入新建的项目仍进精修（需求 5.3）。待与像素蛋糕-test 核对 |
+| 进入项目 | `ShellDisplay::open_project(landing)`、`ShellController::request_open_project` | 按像素蛋糕-test 实测（见 2026-11-06-project-entry-observation.md）：主页单击选中、双击打开，回到上次所在的工作区；图库双击照片是图库单视图。导入新建的项目进精修（需求 5.3） |
 
-验证：`test_shell_display`（四种去向、进入项目只能落在图库或精修）；`test_shell_app_import_flow`（单击项目进图库且没有打开照片，双击已编辑照片进精修、红色均值 229；三次 `QFileOpenEvent`：精修追加 1 张不新建项目，模态窗口下不导入且页面不变，主页新建项目 “Drop Shoot” 并进精修）。真实系统路径：`open -a pixcake_app_shell.app "Dock One.png" --args --dev-sign-in …` 冷启动后新建项目 “Dock One”；应用停在精修时再 `open -a … dock-two.png`，系统把文件交给正在运行的实例，追加进同一项目（项目库里 1 个项目 2 张照片），截图确认底部缩略图条两张。拖到程序坞图标本身需要真实指针拖放，仍按测试清单第 34 行作人工步骤，还没有记录。
+验证：`test_shell_display`（四种去向、进入项目只能落在图库或精修）；`test_shell_app_import_flow`（进入项目的流程见实测证据；三次 `QFileOpenEvent`：精修追加 1 张不新建项目，模态窗口下不导入且页面不变，主页新建项目 “Drop Shoot” 并进精修）。真实系统路径：`open -a pixcake_app_shell.app "Dock One.png" --args --dev-sign-in …` 冷启动后新建项目 “Dock One”；应用停在精修时再 `open -a … dock-two.png`，系统把文件交给正在运行的实例，追加进同一项目（项目库里 1 个项目 2 张照片），截图确认底部缩略图条两张。拖到程序坞图标本身需要真实指针拖放，仍按测试清单第 34 行作人工步骤，还没有记录。
 
 顺带修了 T21 脚本的泄漏：`third=$(start_primary third)` 在子 shell 里记录进程号，清理时杀不到第三个主实例，每跑一次留下一个离屏壳层进程（此前累积 82 个，已清掉）；现在三种构建全量跑完不留进程。
 

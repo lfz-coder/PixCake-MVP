@@ -4,6 +4,7 @@
 
 #include <QFileDialog>
 #include <QIcon>
+#include <QListWidget>
 #include <QLineEdit>
 
 namespace pixcake::shell {
@@ -37,14 +38,25 @@ QFrame* projectList(QWidget* parent, PageActions* actions) {
   card->setObjectName(QStringLiteral("home-card"));
   auto* rows = new QVBoxLayout(card);
   rows->setContentsMargins(16, 12, 16, 12);
+  // 与像素蛋糕一致：单击只选中项目，双击打开（回到它上次所在的工作区）。
+  auto* list = new QListWidget(card);
+  list->setObjectName(QStringLiteral("home-projects"));
+  list->setAccessibleName(qtext("region.home-projects"));
+  list->setViewMode(QListView::IconMode);
+  list->setMovement(QListView::Static);
+  list->setResizeMode(QListView::Adjust);
+  list->setGridSize(QSize(196, 64));
+  list->setWordWrap(true);
+  list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
   for (const auto& project : projects) {
-    auto* open = action(qs(project.name), card, true);
-    open->setObjectName(QStringLiteral("home-project"));
-    const auto id = project.id;
-    QObject::connect(open, &QPushButton::clicked, open, [actions, id] { actions->request_open_project(id); });
-    rows->addWidget(open);
+    auto* item = new QListWidgetItem(qs(project.name), list);
+    item->setToolTip(qs(project.name));
+    item->setData(Qt::UserRole, QVariant::fromValue<qlonglong>(project.id));
   }
-  rows->addStretch();
+  QObject::connect(list, &QListWidget::itemActivated, list, [actions](QListWidgetItem* item) {
+    actions->request_open_project(item->data(Qt::UserRole).toLongLong());
+  });
+  rows->addWidget(list, 1);
   return card;
 }
 

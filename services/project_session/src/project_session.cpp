@@ -107,6 +107,8 @@ ResultCode ProjectSession::open(const std::string& data_directory, const Session
   made->importer_ = std::make_unique<image_import::ImportCoordinator>(*made->library_, made->files_);
   made->document_directory_ = data_directory + "/documents";
   ::mkdir(made->document_directory_.c_str(), 0700);
+  made->workspace_directory_ = data_directory + "/workspace";
+  ::mkdir(made->workspace_directory_.c_str(), 0700);
   out = std::move(made);
   diagnostic.clear();
   return ResultCode::Ok;
@@ -215,6 +217,42 @@ ResultCode ProjectSession::document_bytes(std::int64_t photo_id, std::vector<std
   if (loaded.code && *loaded.code != ResultCode::Ok) return *loaded.code;
   out = document->encode();
   return ResultCode::Ok;
+}
+
+// One line: "library <photo id>" or "refine <photo id>"; the id is 0 for none.
+ResultCode ProjectSession::remember_place(std::int64_t project_id, const ProjectPlace& place) {
+  const std::string path = workspace_directory_ + "/project-" + std::to_string(project_id);
+  const std::string line = std::string(place.workspace == Workspace::Library ? "library" : "refine") + " " +
+                           std::to_string(place.photo_id.value_or(0)) + "\n";
+  const std::string temporary = path + ".tmp";
+  files_.remove_file(temporary);
+  const IoResult written = files_.write_new(temporary, std::vector<std::uint8_t>(line.begin(), line.end()));
+  if (!written.ok) return written.code;
+  const IoResult renamed = files_.rename_file(temporary, path);
+  return renamed.ok ? ResultCode::Ok : renamed.code;
+}
+
+ProjectPlace ProjectSession::last_place(std::int64_t project_id) {
+  ProjectPlace place;
+  std::vector<std::uint8_t> bytes;
+  if (!files_.read_file(workspace_directory_ + "/project-" + std::to_string(project_id), bytes).ok) return place;
+  const std::string line(bytes.begin(), bytes.end());
+  const auto space = line.find(' ');
+  const std::string workspace = line.substr(0, space);
+  if (workspace == "library") {
+    place.workspace = Workspace::Library;
+  } else if (workspace != "refine") {
+    return place;
+  }
+  std::int64_t photo = 0;
+  if (space != std::string::npos) photo = std::strtoll(line.c_str() + space + 1, nullptr, 10);
+  std::vector<PhotoRow> rows;
+  if (photo > 0 && list_photos(project_id, rows) == ResultCode::Ok) {
+    for (const auto& row : rows) {
+      if (row.id == photo) place.photo_id = photo;
+    }
+  }
+  return place;
 }
 
 }  // namespace pixcake::project_session

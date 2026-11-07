@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -21,6 +22,15 @@ namespace pixcake::project_session {
 // photos, resolve a photo's original through its bookmark (S-10), and mark it
 // edited.  Project changes go through BusinessCommands (architecture 6.2), so
 // every change is refused while signed out (S-25).  No Qt.
+// Where a project was left (window state, not a project record): opening it
+// again from home returns to that workspace and photo, as 像素蛋糕 does
+// (evidence 2026-11-06-project-entry-observation.md).
+enum class Workspace { Library, Refine };
+struct ProjectPlace {
+  Workspace workspace = Workspace::Refine;  // requirement 5.3: a project opens in refine by default
+  std::optional<std::int64_t> photo_id;
+};
+
 class ProjectSession {
  public:
   struct ImportOutcome {
@@ -58,6 +68,12 @@ class ProjectSession {
   // thumbnails); empty when the photo was never edited.
   ResultCode document_bytes(std::int64_t photo_id, std::vector<std::uint8_t>& out);
 
+  // Remembered per project in <data_directory>/workspace/project-<id>.  A
+  // missing or unreadable record is the default place; a photo that left the
+  // project is dropped when read.
+  ResultCode remember_place(std::int64_t project_id, const ProjectPlace& place);
+  ProjectPlace last_place(std::int64_t project_id);
+
   // Edit documents live here, one per photo, named by document_id().
   const std::string& document_directory() const { return document_directory_; }
   static std::string document_id(std::int64_t photo_id);
@@ -76,6 +92,7 @@ class ProjectSession {
   std::unique_ptr<image_import::ImportCoordinator> importer_;
   BusinessCommands commands_;
   std::string document_directory_;
+  std::string workspace_directory_;
 };
 
 // Expands chosen paths into image files: files as given, folders to their

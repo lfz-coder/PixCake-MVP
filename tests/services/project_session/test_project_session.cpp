@@ -123,10 +123,24 @@ int main() {
   std::vector<std::uint8_t> document;
   assert(projects->document_bytes(imported.photo_ids[0], document) == ResultCode::Ok && document.empty());
 
+  // Where a project was left: refine by default, then whatever was remembered.
+  const auto first_project = imported.project_id;
+  const auto first_photo = imported.photo_ids[0];
+  assert(projects->last_place(first_project).workspace == Workspace::Refine);
+  assert(!projects->last_place(first_project).photo_id);
+  assert(projects->remember_place(first_project, {Workspace::Library, first_photo}) == ResultCode::Ok);
+  assert(projects->remember_place(first_project, {Workspace::Library, first_photo}) == ResultCode::Ok);  // overwrite
+  // A photo id from another project is not trusted.
+  assert(projects->remember_place(list[1].id == first_project ? list[0].id : list[1].id,
+                                  {Workspace::Library, first_photo}) == ResultCode::Ok);
+  assert(!projects->last_place(list[1].id == first_project ? list[0].id : list[1].id).photo_id);
+
   // Reopening the library keeps everything.
   projects.reset();
   assert(ProjectSession::open(root + "/data", session, access, path_bookmark, projects, diagnostic) == ResultCode::Ok);
   assert(projects->list_projects(list) == ResultCode::Ok && list.size() == 2);
+  const ProjectPlace place = projects->last_place(first_project);
+  assert(place.workspace == Workspace::Library && place.photo_id == first_photo);
   std::printf("project session ok\n");
   return 0;
 }

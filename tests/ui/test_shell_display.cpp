@@ -269,7 +269,7 @@ void test_b31_library_controls() {
   EXPECT(library.full_effect() == false);
 }
 
-// 用户裁决 2026-11-06：主页单击项目进图库（照片集合），不是直接进精修；只能落在图库或精修。
+// 打开项目落在上次所在的工作区（像素蛋糕-test 实测 2026-11-06）：只能是图库或精修。
 void test_project_click_lands_in_the_library() {
   using pixcake::ResultCode;
   using pixcake::ui::shell::Page;

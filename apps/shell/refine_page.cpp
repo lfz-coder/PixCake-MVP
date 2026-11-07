@@ -289,7 +289,8 @@ QWidget* buildRefinePage(const PageContext& context) {
     });
   }
   outer->addLayout(center, 1);
-  outer->addWidget(thumbnailStrip(page, false, actions));
+  outer->addWidget(
+      thumbnailStrip(page, false, actions, [actions](std::int64_t photo) { actions->request_open_photo(photo); }));
   return page;
 }
 
