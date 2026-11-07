@@ -2,18 +2,26 @@
 
 // 页面构建的公共部件（代码质量清单 Q-12）：页面文件只画控件，状态变化经 PageActions 交给
 // ShellController。文字来自 ui/shell 的文案表，图标按“组/条目编号”查。
+#include "pixcake/ui/panels/histogram.hpp"
+#include "pixcake/ui/panels/slider_spec.hpp"
 #include "pixcake/ui/shell/page_copy.hpp"
 #include "pixcake/ui/shell/shell_display.hpp"
 
 #include <QFrame>
+#include <QImage>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QListWidget>
 #include <QPushButton>
 #include <QString>
 #include <QWidget>
 
+#include <cstdint>
+#include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace pixcake::shell {
 
@@ -21,11 +29,51 @@ using ui::shell::CopyItem;
 using ui::shell::Page;
 using ui::shell::ShellDisplay;
 
+// 画布要显示的东西：最新一帧和它的直方图，或者一行状态（生成中、失败原因）。
+struct PreviewView {
+  QImage image;
+  ui::panels::RgbHistogram histogram;
+  QString status;
+};
+
+// 主页项目列表的一项、图库里的一张照片（只读的显示数据）。
+struct ProjectEntry {
+  std::int64_t id = 0;
+  std::string name;
+};
+struct PhotoEntry {
+  std::int64_t id = 0;
+  std::string file_name;
+  std::string presence;     // 原图异常时的状态（如“原文件缺失”）；正常为空
+  std::string edit_status;  // “已编辑”或空
+};
+
 // 页面发出的请求。实现方（ShellController）改显示模型；页面不直接改。
 class PageActions {
  public:
   virtual ~PageActions() = default;
   virtual void request_page(Page target) = 0;
+
+  // 预览：有打开的照片时为真；否则精修页的滑杆保持禁用。
+  virtual bool has_photo() const { return false; }
+  // 文档里这个参数当前的显示值（打开照片时滑杆停在这里）。
+  virtual std::optional<std::string> parameter_value(const ui::panels::SliderBinding&) const { return std::nullopt; }
+  // 拖动中 commit 为假（只预览）；松手或键盘改值 commit 为真（经命令入口提交）。
+  virtual void request_parameter(const ui::panels::SliderBinding&, const std::string&, bool) {}
+  // 画布登记显示回调；owner 删除后不再回调。登记时立即回调一次当前画面。
+  virtual void watch_preview(QObject*, std::function<void(const PreviewView&)>) {}
+
+  // 项目（需求 5.2/5.3）。导入：在主页新建项目；在项目里追加到当前项目。
+  virtual bool can_import() const { return false; }
+  virtual void request_import(const std::vector<std::string>&) {}
+  virtual std::vector<ProjectEntry> projects() const { return {}; }
+  virtual void request_open_project(std::int64_t) {}
+  virtual std::vector<PhotoEntry> photos() const { return {}; }
+  virtual std::optional<std::int64_t> current_photo() const { return std::nullopt; }
+  virtual void request_open_photo(std::int64_t) {}
+  // 缩略图（renderd 生成，按已提交的编辑绘制）。还没有时返回空图；生成后经 watch_thumbnails 回调。
+  virtual QImage thumbnail(std::int64_t) const { return {}; }
+  virtual void watch_thumbnails(QObject*, std::function<void(std::int64_t, const QImage&)>) {}
 };
 
 struct PageContext {
@@ -46,6 +94,11 @@ QPushButton* itemAction(std::string_view list, const CopyItem& item, QWidget* pa
 // 图库、精修、创意三个页签。点击只发请求。
 void addPageTabs(QHBoxLayout* layout, const PageContext& context);
 QFrame* workspaceTool(std::string_view list, const CopyItem& item, QWidget* parent);
-QFrame* thumbnailStrip(QWidget* parent, bool library);
+// 底部缩略图条。有当前项目的照片时列出照片（单击打开），“+”在能导入时可用。
+QFrame* thumbnailStrip(QWidget* parent, bool library, PageActions* actions = nullptr);
+// 当前项目的照片列表：grid 为真是图库网格，否则是一行缩略图条。缩略图生成后自动补上。
+QListWidget* photoList(QWidget* parent, PageActions* actions, bool grid);
+// 选择图片并导入（主页新建项目，项目内追加）。
+void chooseAndImport(QWidget* parent, PageActions* actions);
 
 }  // namespace pixcake::shell

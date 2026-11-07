@@ -62,7 +62,59 @@
 
 renderd 每个进程只服务一个连接：30 秒内没有壳层连接退出码 4，套接字打不开退出码 5，通道损坏退出码 6，正常断开退出码 0。
 
-## 5. 不在本次范围
+## 5. 壳层接入（2026-11-06）
+
+| 部分 | 位置 | 说明 |
+|---|---|---|
+| 预览会话 | `services/preview_channel`：`RenderdProcess`、`PreviewSession`（无 Qt） | 启动 renderd 并连接；照片的精修文档放在文档目录，按照片路径取稳定编号，重新打开时接着上次已提交的编辑；拖动走命令入口的 `preview`，松手走 `commit`（架构 6.2），提交后重发预览源；旧帧丢弃 |
+| 页面动作 | `apps/shell/page_kit.hpp` 的 `PageActions` | `has_photo`、`parameter_value`、`request_parameter`、`watch_preview`；默认实现什么都不做，没打开照片时页面不变 |
+| 控制器 | `ShellController` | 持有会话和 `QSocketNotifier`；帧转成 `QImage`，算直方图，交给画布 |
+| 组件 | `PixCakeImageView`（画布，等比缩放）、`PixCakeHistogram`（RGB 三条折线） | 按用户要求先用组件库：QFrame + QPainter 组合，没有用 OpenGL；直方图统计在 `ui/panels::rgb_histogram`（无 Qt，有单测） |
+| 精修页 | `refine_page.cpp` | 打开照片时，色彩面板顶层（白平衡、影调）的 14 支滑杆可用，位置取自文档当前值；子分组和其他能力没有像素实现，保持禁用。功能区放进 `QScrollArea`（原先所有面板挤在一列被压扁，看不到滑杆），打开照片时滚到色彩面板 |
+| 入口 | `pixcake_app_shell --open <照片>`（仅开发构建，和 `--page` 同属 `PIXCAKE_DEV_PAGES`） | 正式入口（图库导入 → 精修）还没有，接上后复用同一个会话 |
+
+验证：`test_preview_session`（真实 renderd：拖动、提交、第二个参数保留第一个、越界值提交被拒、重新打开读回、进程随会话退出）；`test_shell_app_open_photo`（离屏启动壳层打开 898×1056 PNG：首帧上画布、直方图有数据、只有 14 支顶层色彩滑杆可用、曝光 +1 EV 后红色均值 133 → 229）。
+
+实现中修掉的问题：
+
+- 对 `CapabilityRegistry::phase_one().descriptors()` 直接写范围 for，遍历的是已析构临时对象的成员，版本上限变成空表，提交一律状态冲突。先存进局部变量。
+- `EditDocument` 的编辑实例编号不在编码字节里（加载后是文档路径，解码后退回图片编号），renderd 改为以预览源消息为准，只核对文档里的图片编号和修订号。
+- 显示值要按参数模式的步进格式（曝光步进 0.05 → `1.00`）；壳层由滑杆规格的小数位格式化。
+
+### 5.1 正式入口：项目流程（用户 2026-11-06 选择“开发登录 + 完整流程”）
+
+登录要账号服务的后端接口，仓库里没有；项目、导入命令在未登录时一律拒绝（S-25）。因此只在开发构建（`PIXCAKE_DEV_PAGES`，与 `--page` 同一开关）加 `--dev-sign-in`，让会话视为已登录；发布构建不认这个参数（已验证：`Unknown option 'dev-sign-in'`）。
+
+| 部分 | 位置 | 说明 |
+|---|---|---|
+| 项目会话 | `services/project_session`：`ProjectSession`（无 Qt） | 打开 `<数据目录>/projects.sqlite`；`import_new_project` 按需求 5.2 命名（第一个文件夹名，否则第一张图片去扩展名），文件夹展开为其中的 jpg/jpeg/png/tif/tiff/bmp（不递归、跳过隐藏文件、按名排序），每个文件经 `MacSourceAccess::create_bookmark` 取书签，经 `BusinessCommands` 创建项目和导入；逐文件失败原因（O-14）；`resolve_photo` 经书签取原图路径，挪走或删除时按项目库规则标“原文件缺失”且不打开；`mark_edited` |
+| 预览会话 | `PreviewSessionOptions::document_id`、`on_committed` | 项目里的照片文档名为 `photo-<编号>.pxedit`，放在 `<数据目录>/documents`；提交成功后把照片标成“已编辑” |
+| 控制器 | `ShellController` | 导入：主页新建项目并进入精修打开第一张（需求 5.3）；在项目内追加。主页项目列表点击进入项目；图库双击照片进入精修；回主页关闭照片（renderd 退出）。导入和打开失败的原因作为页面提示 |
+| 主页 | `home_page.cpp` | 导入区（`PixCakeDropPanel`）点击选图片、拖入文件或文件夹；“导入文件夹”按钮；项目列表来自项目库 |
+| 图库 | `library_page.cpp` | `QListWidget` 图标模式列出当前项目照片（文件名、异常原图状态、已编辑），双击进精修；“＋ 导入照片”追加 |
+| 主题 | `pixcake_theme.hpp` | 照片列表与滚动条的深色样式 |
+| 开发参数 | `--dev-sign-in`、`--data-dir <目录>`、`--import <路径>`（可多次） | 冒烟检查只用 `--data-dir` 给的目录，不碰用户的项目库 |
+
+验证：`test_project_session`（命名、展开、坏文件原因、未登录不建项目、追加、书签解析、挪走后标缺失、已编辑、重开数据库）；`test_shell_app_import_flow`（离屏：开发登录 → 主页导入文件夹 “Shoot 01” → 精修出帧 → 曝光 +1 EV 提交 → 照片标“已编辑” → 图库列出 → 回主页看到项目 → 再次打开项目，曝光仍在（红色均值 229）；数据库和 `photo-*.pxedit` 写在 `--data-dir` 里）。
+
+已知不足（缩略图见 §5.2，已补上）：拖到程序坞图标的三种情况（需求 3.2）未做；`resolve_photo` 遇到异常时刷新整个项目库的原图状态，照片很多时会慢。
+
+### 5.2 缩略图（2026-11-06）
+
+| 部分 | 位置 | 说明 |
+|---|---|---|
+| 消息 10/11 | `kernel/ipc`：`ThumbnailRequestMessage`、`encode/decode_thumbnail_request`、`encode/decode_thumbnail_result` | 请求带请求号、图片编号、原图路径、最长边（≤ 1024）和可选的文档字节（空 = 原图）；结果字段同预览结果，种类不同，二者不能互相解码 |
+| renderd | `PreviewServer` 缩略图队列；`RenderService::render_now` | 预览仍是“最新请求优先”，缩略图排队且每个都回结果；每一轮先出预览帧，再出至多一张缩略图，所以批量缩略图不会挡住滑杆预览；队列不空时循环不阻塞等待 |
+| 服务 | `services/preview_channel`：`ThumbnailService` | 进入项目时单独启动一个 renderd（与精修预览的 renderd 并行）；同一照片重新请求时旧结果作废；离开项目时随连接退出 |
+| 文档字节 | `ProjectSession::document_bytes` | 经 `EditDocument::load`（含备份恢复）读出已提交文档再编码；从未编辑过的照片发原图 |
+| 版本上限表 | `kernel/editdoc`：`phase_one_version_limits()` | 预览会话和项目会话共用，不各自拼 |
+| 壳层 | `ShellController`、`page_kit` 的 `photoList`/`thumbnailStrip` | 缓存每张照片的缩略图（320 像素），提交编辑后重新生成；图库网格（`QListWidget` 图标模式）和精修、图库底部的缩略图条显示，生成后自动补图；缩略图条单击切换照片，“＋”可导入 |
+
+验证：`test_preview_protocol`（10/11 往返、上限、不能互相解码）；`test_preview_server`（三张缩略图排队时来了预览请求：先回预览，再逐张回缩略图，全部回完后空闲）；`test_thumbnail_service`（真实 renderd：原图与带 +1 EV 文档的缩略图、同一照片重新请求后旧结果不出现、原图缺失返回 `SourceMissing`）；`test_shell_app_import_flow`（两张照片都有缩略图，编辑过的那张红色均值 229、原图 133，精修底部缩略图条列出两张）。截图确认图库网格、状态行与底部缩略图条。
+
+另外修了 `tests/apps/check_shell_single_instance.sh`：去掉 `--page home`（发布构建按 S-25 拒绝它，导致 T21 在 Release 下必然失败）；开发与发布构建都通过。
+
+## 6. 不在本次范围
 
 - 壳层画布显示帧、打开照片流程、局部调色的蒙版选择（能力片段写入 `semantic:` 编号要改能力注册，等另一个会话的 Free 分组参数注册结束再做）。
 - renderd 崩溃后的自动重启与超时：壳层进程管理负责，另行实现。

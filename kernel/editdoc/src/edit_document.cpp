@@ -136,6 +136,15 @@ bool known_capability(const std::vector<VersionLimit>& limits, const std::string
 
 }  // namespace
 
+std::vector<VersionLimit> phase_one_version_limits() {
+  // Keep the registry alive: ranging over phase_one().descriptors() directly
+  // would iterate a destroyed temporary.
+  const CapabilityRegistry registry = CapabilityRegistry::phase_one();
+  std::vector<VersionLimit> limits;
+  for (const auto& descriptor : registry.descriptors()) limits.push_back({descriptor.id, 1});
+  return limits;
+}
+
 std::optional<EditDocument> EditDocument::create(std::string image_id) {
   if (image_id.empty()) {
     return std::nullopt;

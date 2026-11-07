@@ -30,6 +30,10 @@ add_executable(test_slider_spec ui/test_slider_spec.cpp)
 target_link_libraries(test_slider_spec PRIVATE pixcake_ui_panels pixcake_capability pixcake_warnings)
 add_test(NAME test_slider_spec COMMAND test_slider_spec)
 
+add_executable(test_rgb_histogram ui/test_rgb_histogram.cpp)
+target_link_libraries(test_rgb_histogram PRIVATE pixcake_ui_panels pixcake_warnings)
+add_test(NAME test_rgb_histogram COMMAND test_rgb_histogram)
+
 add_executable(test_guide_copy kernel/workspace/test_guide_copy.cpp)
 target_link_libraries(test_guide_copy PRIVATE pixcake_workspace pixcake_warnings)
 add_test(NAME test_guide_copy COMMAND test_guide_copy)
@@ -341,7 +345,28 @@ if(APPLE)
   add_dependencies(test_renderd_process pixcake_app_renderd)
   add_test(NAME test_renderd_process COMMAND test_renderd_process)
   set_tests_properties(test_renderd_process PROPERTIES TIMEOUT 60)
+
+  add_executable(test_preview_session services/preview_channel/test_preview_session.cpp)
+  target_link_libraries(test_preview_session PRIVATE pixcake_preview_session pixcake_warnings)
+  target_compile_definitions(test_preview_session PRIVATE PIXCAKE_RENDERD_EXE="$<TARGET_FILE:pixcake_app_renderd>"
+    PIXCAKE_TEST_WORK_DIR="${CMAKE_CURRENT_BINARY_DIR}")
+  add_dependencies(test_preview_session pixcake_app_renderd)
+  add_test(NAME test_preview_session COMMAND test_preview_session)
+  set_tests_properties(test_preview_session PROPERTIES TIMEOUT 120)
+
+  add_executable(test_thumbnail_service services/preview_channel/test_thumbnail_service.cpp)
+  target_link_libraries(test_thumbnail_service PRIVATE pixcake_preview_session pixcake_warnings)
+  target_compile_definitions(test_thumbnail_service PRIVATE PIXCAKE_RENDERD_EXE="$<TARGET_FILE:pixcake_app_renderd>"
+    PIXCAKE_TEST_WORK_DIR="${CMAKE_CURRENT_BINARY_DIR}")
+  add_dependencies(test_thumbnail_service pixcake_app_renderd)
+  add_test(NAME test_thumbnail_service COMMAND test_thumbnail_service)
+  set_tests_properties(test_thumbnail_service PROPERTIES TIMEOUT 120)
 endif()
+
+add_executable(test_project_session services/project_session/test_project_session.cpp)
+target_link_libraries(test_project_session PRIVATE pixcake_project_session pixcake_warnings)
+target_compile_definitions(test_project_session PRIVATE PIXCAKE_TEST_WORK_DIR="${CMAKE_CURRENT_BINARY_DIR}")
+add_test(NAME test_project_session COMMAND test_project_session)
 
 add_test(NAME test_renderd_health_writes_log
          COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:pixcake_app_renderd>

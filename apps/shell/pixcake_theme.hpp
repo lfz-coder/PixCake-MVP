@@ -98,6 +98,18 @@ struct PixCakeTheme final {
       QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; color: #eeeeee; }
       QFrame#login-divider-line { background: #454545; min-height: 1px; max-height: 1px; }
       QScrollArea { border: none; background: #141414; }
+      QScrollBar:vertical { background: #141414; width: 10px; margin: 0; }
+      QScrollBar:horizontal { background: #141414; height: 10px; margin: 0; }
+      QScrollBar::handle:vertical { background: #3a3a3a; min-height: 24px; border-radius: 5px; }
+      QScrollBar::handle:horizontal { background: #3a3a3a; min-width: 24px; border-radius: 5px; }
+      QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
+      QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+      QListWidget#thumbs-photos { background: transparent; border: none; }
+      QListWidget#thumbs-photos::item { border-radius: 4px; padding: 2px; }
+      QListWidget#thumbs-photos::item:selected { background: #3a3a3a; }
+      QListWidget#library-photos { background: #141414; border: 1px solid #292929; border-radius: 6px; color: #d8d8d8; }
+      QListWidget#library-photos::item { border-radius: 6px; padding: 6px; }
+      QListWidget#library-photos::item:selected { background: #2f2f2f; color: #ffffff; }
       QSlider::groove:horizontal { height: 4px; background: #4a4a4a; border-radius: 2px; }
       QSlider::sub-page:horizontal { background: #d0d0d0; border-radius: 2px; }
       QSlider::handle:horizontal { width: 14px; height: 14px; margin: -5px 0; background: #d9d9d9; border-radius: 7px; }

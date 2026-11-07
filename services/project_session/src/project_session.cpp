@@ -1,0 +1,220 @@
+#include "pixcake/project_session/project_session.hpp"
+
+#include "pixcake/editdoc/edit_document.hpp"
+#include "pixcake/storage/sqlite_project_store.hpp"
+
+#include <dirent.h>
+#include <sys/stat.h>
+
+#include <algorithm>
+#include <cctype>
+
+namespace pixcake::project_session {
+namespace {
+
+bool is_directory(const std::string& path) {
+  struct stat info {};
+  return ::stat(path.c_str(), &info) == 0 && S_ISDIR(info.st_mode);
+}
+
+std::string base_name(std::string path) {
+  while (path.size() > 1 && path.back() == '/') path.pop_back();
+  const auto slash = path.find_last_of('/');
+  return slash == std::string::npos ? path : path.substr(slash + 1);
+}
+
+std::string lower_extension(const std::string& name) {
+  const auto dot = name.find_last_of('.');
+  if (dot == std::string::npos || dot == 0) return {};
+  std::string ext = name.substr(dot + 1);
+  std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return ext;
+}
+
+bool image_extension(const std::string& name) {
+  static const char* const kExtensions[] = {"jpg", "jpeg", "png", "tif", "tiff", "bmp"};
+  const std::string ext = lower_extension(name);
+  return std::any_of(std::begin(kExtensions), std::end(kExtensions), [&](const char* e) { return ext == e; });
+}
+
+}  // namespace
+
+std::vector<std::string> expand_import_paths(const std::vector<std::string>& paths) {
+  std::vector<std::string> files;
+  for (const auto& path : paths) {
+    if (!is_directory(path)) {
+      files.push_back(path);
+      continue;
+    }
+    std::vector<std::string> inside;
+    if (DIR* dir = ::opendir(path.c_str())) {
+      while (const dirent* entry = ::readdir(dir)) {
+        const std::string name = entry->d_name;
+        if (name.empty() || name[0] == '.' || !image_extension(name)) continue;
+        const std::string full = (path.back() == '/' ? path : path + "/") + name;
+        if (!is_directory(full)) inside.push_back(full);
+      }
+      ::closedir(dir);
+    }
+    std::sort(inside.begin(), inside.end());
+    files.insert(files.end(), inside.begin(), inside.end());
+  }
+  return files;
+}
+
+std::string project_name_for(const std::vector<std::string>& paths) {
+  for (const auto& path : paths) {
+    if (is_directory(path)) return base_name(path);
+  }
+  if (paths.empty()) return {};
+  const std::string name = base_name(paths.front());
+  const auto dot = name.find_last_of('.');
+  return dot == std::string::npos || dot == 0 ? name : name.substr(0, dot);
+}
+
+ProjectSession::ProjectSession(const SessionState& session, SourceAccess& access, BookmarkMaker make_bookmark)
+    : access_(access), make_bookmark_(make_bookmark), commands_(session) {}
+
+ProjectSession::~ProjectSession() = default;
+
+ResultCode ProjectSession::open(const std::string& data_directory, const SessionState& session, SourceAccess& access,
+                                BookmarkMaker make_bookmark, std::unique_ptr<ProjectSession>& out,
+                                std::string& diagnostic) {
+  out.reset();
+  if (data_directory.empty() || make_bookmark == nullptr) {
+    diagnostic = "project data directory or bookmark maker missing";
+    return ResultCode::StateConflict;
+  }
+  ::mkdir(data_directory.c_str(), 0700);
+  if (!is_directory(data_directory)) {
+    diagnostic = "project data directory cannot be created: " + data_directory;
+    return ResultCode::IoFailed;
+  }
+  std::unique_ptr<ProjectSession> made(new ProjectSession(session, access, make_bookmark));
+  std::unique_ptr<SqliteProjectStore> store;
+  const ResultCode opened = SqliteProjectStore::open(data_directory + "/projects.sqlite", store);
+  if (opened != ResultCode::Ok) {
+    diagnostic = "project library cannot be opened: " + data_directory + "/projects.sqlite";
+    return opened;
+  }
+  made->store_ = std::move(store);
+  made->deleter_ = std::make_unique<FileSourceDeleter>(made->files_);
+  made->library_ = std::make_unique<ProjectLibrary>(*made->store_, made->files_, made->clock_, *made->deleter_, nullptr);
+  if (const ResultCode started = made->library_->startup(); started != ResultCode::Ok) {
+    diagnostic = "project library startup failed";
+    return started;
+  }
+  made->importer_ = std::make_unique<image_import::ImportCoordinator>(*made->library_, made->files_);
+  made->document_directory_ = data_directory + "/documents";
+  ::mkdir(made->document_directory_.c_str(), 0700);
+  out = std::move(made);
+  diagnostic.clear();
+  return ResultCode::Ok;
+}
+
+std::string ProjectSession::document_id(std::int64_t photo_id) { return "photo-" + std::to_string(photo_id); }
+
+ProjectSession::ImportOutcome ProjectSession::import_new_project(const std::vector<std::string>& paths) {
+  ImportOutcome outcome;
+  const auto files = expand_import_paths(paths);
+  if (files.empty()) {
+    outcome.code = ResultCode::UnsupportedFormat;
+    outcome.notices.push_back("no image files were chosen");
+    return outcome;
+  }
+  outcome.project_name = project_name_for(paths);
+  const ProjectResult created = commands_.create_project(*library_, outcome.project_name, kOriginLocal, false);
+  if (created.code != ResultCode::Ok) {
+    outcome.code = created.code;
+    if (!created.notice.empty()) outcome.notices.push_back(created.notice);
+    return outcome;
+  }
+  return import_paths(created.id, files, std::move(outcome));
+}
+
+ProjectSession::ImportOutcome ProjectSession::import_into(std::int64_t project_id,
+                                                          const std::vector<std::string>& paths) {
+  return import_paths(project_id, expand_import_paths(paths), ImportOutcome{});
+}
+
+ProjectSession::ImportOutcome ProjectSession::import_paths(std::int64_t project_id,
+                                                           const std::vector<std::string>& files,
+                                                           ImportOutcome outcome) {
+  outcome.project_id = project_id;
+  std::vector<image_import::ImportCandidate> candidates;
+  for (const auto& path : files) {
+    image_import::ImportCandidate candidate;
+    candidate.absolute_path = path;
+    candidate.file_name = base_name(path);
+    // No bookmark: the library refuses it with "permission denied" for this file.
+    make_bookmark_(path, candidate.access_credential);
+    candidates.push_back(std::move(candidate));
+  }
+  const auto batch = commands_.import_into(*importer_, project_id, candidates);
+  outcome.code = batch.overall_code;
+  outcome.accepted = batch.accepted_count;
+  for (const auto& item : batch.items) {
+    if (item.code == ResultCode::Ok && item.photo_id != 0) outcome.photo_ids.push_back(item.photo_id);
+  }
+  const auto notices = image_import::import_notices(batch);
+  outcome.notices.insert(outcome.notices.end(), notices.begin(), notices.end());
+  return outcome;
+}
+
+ResultCode ProjectSession::list_projects(std::vector<ProjectRow>& out) const {
+  std::vector<ProjectRow> all;
+  const ResultCode code = library_->list_projects(all);
+  out.clear();
+  for (auto& row : all) {
+    if (!row.deleted_at) out.push_back(std::move(row));
+  }
+  return code;
+}
+
+ResultCode ProjectSession::list_photos(std::int64_t project_id, std::vector<PhotoRow>& out) const {
+  return library_->list_photos(project_id, out);
+}
+
+ResultCode ProjectSession::load_photo(std::int64_t photo_id, std::optional<PhotoRow>& out) const {
+  return library_->load_photo(photo_id, out);
+}
+
+ResultCode ProjectSession::resolve_photo(std::int64_t photo_id, std::string& absolute_path, std::string& diagnostic) {
+  absolute_path.clear();
+  std::optional<PhotoRow> photo;
+  if (library_->load_photo(photo_id, photo) != ResultCode::Ok || !photo) {
+    diagnostic = "photo is not in the project library";
+    return ResultCode::StateConflict;
+  }
+  const ResolvedSource resolved = access_.resolve(photo->access_credential);
+  if (resolved.code == ResultCode::Ok && resolved.absolute_path == photo->absolute_path) {
+    absolute_path = resolved.absolute_path;
+    diagnostic.clear();
+    return ResultCode::Ok;
+  }
+  // Moved, renamed, deleted or no longer granted: record it the library's way
+  // (presence "missing", path and edits kept) and refuse to open.
+  library_->refresh_source_access(access_);
+  diagnostic = (resolved.code == ResultCode::PermissionDenied ? "no permission to read the original: "
+                                                               : "the original is missing: ") +
+               photo->absolute_path;
+  return resolved.code == ResultCode::PermissionDenied ? ResultCode::PermissionDenied : ResultCode::SourceMissing;
+}
+
+ResultCode ProjectSession::mark_edited(std::int64_t photo_id) {
+  return library_->mark_photo_edited(photo_id, clock_.unix_seconds()).code;
+}
+
+ResultCode ProjectSession::document_bytes(std::int64_t photo_id, std::vector<std::uint8_t>& out) {
+  out.clear();
+  const std::string path = document_directory_ + "/" + document_id(photo_id) + ".pxedit";
+  if (!files_.exists(path)) return ResultCode::Ok;
+  auto document = EditDocument::create(document_id(photo_id));
+  // load() falls back to the backup and reports a document recovered empty.
+  const LoadResult loaded = EditDocument::load(*document, files_, path, phase_one_version_limits());
+  if (loaded.code && *loaded.code != ResultCode::Ok) return *loaded.code;
+  out = document->encode();
+  return ResultCode::Ok;
+}
+
+}  // namespace pixcake::project_session

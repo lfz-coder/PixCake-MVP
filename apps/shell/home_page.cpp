@@ -2,6 +2,7 @@
 #include "pixcake_widgets.hpp"
 #include "shell_icons.hpp"
 
+#include <QFileDialog>
 #include <QIcon>
 #include <QLineEdit>
 
@@ -28,10 +29,29 @@ QLabel* sectionTitle(const QString& label) {
   return title;
 }
 
+// 项目列表（需求 5.2）：本机的项目，点击进入（默认精修，需求 5.3）。没有项目时是空状态。
+QFrame* projectList(QWidget* parent, PageActions* actions) {
+  const auto projects = actions->projects();
+  if (projects.empty()) return sectionCard(parent, qtext("home.projects.empty"), false);
+  auto* card = new QFrame(parent);
+  card->setObjectName(QStringLiteral("home-card"));
+  auto* rows = new QVBoxLayout(card);
+  rows->setContentsMargins(16, 12, 16, 12);
+  for (const auto& project : projects) {
+    auto* open = action(qs(project.name), card, true);
+    open->setObjectName(QStringLiteral("home-project"));
+    const auto id = project.id;
+    QObject::connect(open, &QPushButton::clicked, open, [actions, id] { actions->request_open_project(id); });
+    rows->addWidget(open);
+  }
+  rows->addStretch();
+  return card;
+}
+
 }  // namespace
 
 QWidget* buildHomePage(const PageContext& context) {
-  (void)context;
+  PageActions* actions = &context.actions;
   auto* page = new QWidget;
   page->setObjectName(QStringLiteral("home-page"));
   auto* outer = new QHBoxLayout(page);
@@ -91,7 +111,7 @@ QWidget* buildHomePage(const PageContext& context) {
 
   auto* hero_row = new QHBoxLayout;
   hero_row->setSpacing(12);
-  auto* import = new PixCakePanel(QStringLiteral("home-import"), content);
+  auto* import = new PixCakeDropPanel(QStringLiteral("home-import"), content);
   import->setAccessibleName(qtext("home.import.name"));
   auto* import_layout = new QVBoxLayout(import);
   import_layout->setContentsMargins(24, 14, 24, 14);
@@ -106,6 +126,18 @@ QWidget* buildHomePage(const PageContext& context) {
   import_title->setAlignment(Qt::AlignCenter);
   import_layout->addWidget(import_title);
   import_layout->addWidget(text(qtext("home.import.hint"), true), 0, Qt::AlignCenter);
+  if (actions->can_import()) {
+    // 照片导入可选图片或文件夹，也接受拖入（需求 5.2）。
+    import->onClicked([import, actions] { chooseAndImport(import, actions); });
+    import->onDropped([actions](const std::vector<std::string>& paths) { actions->request_import(paths); });
+    auto* folder = action(qtext("home.import.folder"), import, true);
+    folder->setObjectName(QStringLiteral("home-import-folder"));
+    QObject::connect(folder, &QPushButton::clicked, folder, [folder, actions] {
+      const QString chosen = QFileDialog::getExistingDirectory(folder, qtext("home.import.folder"));
+      if (!chosen.isEmpty()) actions->request_import({chosen.toStdString()});
+    });
+    import_layout->addWidget(folder, 0, Qt::AlignCenter);
+  }
   hero_row->addWidget(import, 5);
   for (const auto& entry : ui::shell::page_list("home-cards")) {
     const QString label = qs(entry.text);
@@ -133,7 +165,7 @@ QWidget* buildHomePage(const PageContext& context) {
   main->addWidget(sectionTitle(qtext("region.home-quick")));
   main->addWidget(sectionCard(content, qtext("home.quick.empty"), true));
   main->addWidget(sectionTitle(qtext("region.home-projects")));
-  main->addWidget(sectionCard(content, qtext("home.projects.empty"), false), 1);
+  main->addWidget(projectList(content, actions), 1);
   outer->addWidget(content, 1);
   return page;
 }

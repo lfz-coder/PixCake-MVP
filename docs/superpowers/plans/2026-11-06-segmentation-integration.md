@@ -36,7 +36,10 @@
 - [x] Step 5b：真实推理适配器——第一批 MediaPipe（头发、身体皮肤、面部、全部衣服、全部人物），第二批 BiSeNet（面部皮肤、全部皮肤、眉毛、嘴唇、耳朵）。
 - [x] Step 6a：接入 renderd 预览服务——部位表移到 `kernel/mask`，语义蒙版编号 `semantic:<部位>`；`SemanticMaskProvider` 按内容缓存分割结果并交给参考渲染；不可用部位跳过并给原因；`renderd` 进程创建 `PortraitSegmenter`。见 `docs/superpowers/evidence/2026-11-06-segmentation-preview-integration.md`。
 - [x] Step 6b-1：renderd 请求循环——ImageIO 解码（顺带解除预览帧超过 4000 不能缩放的限制）、套接字 + 共享内存、`pixcake_app_renderd --socket`。见 `docs/superpowers/evidence/2026-11-06-renderd-transport-and-decoder.md`。
-- [ ] Step 6b-2：壳层启动 renderd、发送预览源与请求、画布显示帧。
+- [x] Step 6b-2：壳层启动 renderd、发送预览源与请求、画布显示帧（开发入口 `--open`；顶层色彩滑杆可拖、经命令入口提交；RGB 直方图）。见同一证据 §5。
+- [x] Step 6b-2+：正式入口——开发登录下 主页导入 → 新项目 → 精修，图库列出照片、双击进精修，书签解析原图路径。见同一证据 §5.1。
+- [x] Step 6b-2++：图库与精修底部的缩略图（renderd 生成，见同一证据 §5.2）。
+- [ ] Step 6b-2+++：拖到程序坞图标（需求 3.2）。
 - [ ] Step 6b-3：局部调色的蒙版选择在能力片段里写入 `semantic:` 编号（要改能力注册，等 Free 分组参数注册结束）；多蒙版并集语义、羽化/密度/加减。
 - [ ] Step 6c：exportd 全分辨率路径；取消、超时、内存上限测试。
 

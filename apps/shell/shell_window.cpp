@@ -29,6 +29,13 @@ ShellWindow::ShellWindow(ShellDisplay display) : controller_(std::move(display))
   render();
 }
 
+ResultCode ShellWindow::openPhoto(const std::string& photo_path,
+                                  const preview_channel::PreviewSessionOptions& options, std::string& diagnostic) {
+  const ResultCode code = controller_.open_photo(photo_path, options, diagnostic);
+  render();
+  return code;
+}
+
 void ShellWindow::render() {
   const ShellDisplay& display = controller_.display();
   title_->setText(QString::fromUtf8(ui::shell::page_label(display.page())));

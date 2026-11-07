@@ -3,6 +3,11 @@
 #include "pixcake_widgets.hpp"
 #include "shell_icons.hpp"
 
+#include <QFileDialog>
+#include <QListWidget>
+#include <QPainter>
+#include <QPointer>
+
 #include <vector>
 
 namespace pixcake::shell {
@@ -72,15 +77,96 @@ QFrame* workspaceTool(std::string_view list, const CopyItem& item, QWidget* pare
   return frame;
 }
 
-QFrame* thumbnailStrip(QWidget* parent, bool library) {
+void chooseAndImport(QWidget* parent, PageActions* actions) {
+  const QStringList chosen =
+      QFileDialog::getOpenFileNames(parent, qtext("home.import.dialog"), QString(), qtext("home.import.filter"));
+  std::vector<std::string> paths;
+  for (const auto& path : chosen) paths.push_back(path.toStdString());
+  if (!paths.empty()) actions->request_import(paths);
+}
+
+namespace {
+
+// Thumbnails keep their aspect inside a fixed square so the grid stays even.
+QIcon thumbnailIcon(const QImage& image, int side) {
+  QPixmap canvas(side * 2, side * 2);
+  canvas.setDevicePixelRatio(2.0);
+  canvas.fill(Qt::transparent);
+  if (!image.isNull()) {
+    QPainter painter(&canvas);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform);
+    QSizeF size = image.size();
+    size.scale(side, side, Qt::KeepAspectRatio);
+    painter.drawImage(QRectF(QPointF((side - size.width()) / 2, (side - size.height()) / 2), size), image);
+  }
+  return QIcon(canvas);
+}
+
+}  // namespace
+
+QListWidget* photoList(QWidget* parent, PageActions* actions, bool grid) {
+  const int side = grid ? 140 : 56;
+  auto* list = new QListWidget(parent);
+  list->setObjectName(grid ? QStringLiteral("library-photos") : QStringLiteral("thumbs-photos"));
+  list->setAccessibleName(qtext("library.open.hint"));
+  list->setViewMode(QListView::IconMode);
+  list->setMovement(QListView::Static);
+  list->setIconSize(QSize(side, side));
+  list->setHorizontalScrollBarPolicy(grid ? Qt::ScrollBarAlwaysOff : Qt::ScrollBarAsNeeded);
+  if (grid) {
+    list->setResizeMode(QListView::Adjust);
+    list->setGridSize(QSize(side + 24, side + 70));  // icon + two lines (name, state)
+    list->setWordWrap(true);
+  } else {
+    list->setFlow(QListView::LeftToRight);
+    list->setWrapping(false);
+    list->setFixedHeight(side + 22);
+    list->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  }
+  for (const auto& photo : actions->photos()) {
+    QString label;
+    if (grid) {
+      label = qs(photo.file_name);
+      for (const auto* state : {&photo.presence, &photo.edit_status}) {
+        if (!state->empty()) label += QStringLiteral("\n") + qs(*state);
+      }
+    }
+    auto* item = new QListWidgetItem(thumbnailIcon(actions->thumbnail(photo.id), side), label, list);
+    item->setToolTip(qs(photo.file_name));
+    item->setData(Qt::UserRole, QVariant::fromValue<qlonglong>(photo.id));
+    if (actions->current_photo() == photo.id) list->setCurrentItem(item);
+  }
+  // Grid: double-click opens (single click selects); strip: a click opens.
+  const auto open = [actions](QListWidgetItem* item) {
+    actions->request_open_photo(item->data(Qt::UserRole).toLongLong());
+  };
+  if (grid) {
+    QObject::connect(list, &QListWidget::itemActivated, list, open);
+  } else {
+    QObject::connect(list, &QListWidget::itemClicked, list, open);
+  }
+  QPointer<QListWidget> guard(list);
+  actions->watch_thumbnails(list, [guard, side](std::int64_t photo_id, const QImage& image) {
+    if (!guard) return;
+    for (int row = 0; row < guard->count(); ++row) {
+      auto* item = guard->item(row);
+      if (item->data(Qt::UserRole).toLongLong() == photo_id) item->setIcon(thumbnailIcon(image, side));
+    }
+  });
+  return list;
+}
+
+QFrame* thumbnailStrip(QWidget* parent, bool library, PageActions* actions) {
   auto* frame = new QFrame(parent);
   frame->setObjectName(QStringLiteral("workspace-thumbs"));
   auto* layout = new QHBoxLayout(frame);
   layout->setContentsMargins(10, 8, 10, 8);
   layout->setSpacing(8);
-  auto* add = action(qs(copyItem("refine-thumbs", "add").text), frame);
+  const bool can_import = actions != nullptr && actions->can_import();
+  auto* add = action(qs(copyItem("refine-thumbs", "add").text), frame, can_import);
   add->setObjectName(QStringLiteral("icon-button"));
   add->setAccessibleName(qtext("thumbs.add.name"));
+  if (can_import) QObject::connect(add, &QPushButton::clicked, add, [add, actions] { chooseAndImport(add, actions); });
   layout->addWidget(add);
   std::vector<std::string> ids;
   if (library) {
@@ -92,8 +178,12 @@ QFrame* thumbnailStrip(QWidget* parent, bool library) {
   }
   for (const auto& id : ids) layout->addWidget(itemAction("refine-thumbs", copyItem("refine-thumbs", id), frame));
   if (library) layout->addWidget(action(qtext("thumbs.selected"), frame));
-  layout->addStretch();
-  layout->addWidget(text(library ? qtext("library.empty") : qtext("thumbs.empty"), true));
+  if (actions != nullptr && !actions->photos().empty()) {
+    layout->addWidget(photoList(frame, actions, false), 1);
+  } else {
+    layout->addStretch();
+    layout->addWidget(text(library ? qtext("library.empty") : qtext("thumbs.empty"), true));
+  }
   return frame;
 }
 

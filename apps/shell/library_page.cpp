@@ -4,6 +4,7 @@
 #include "shell_icons.hpp"
 
 #include <QGroupBox>
+#include <QListWidget>
 #include <QSlider>
 
 namespace pixcake::shell {
@@ -56,7 +57,21 @@ QWidget* buildLibraryPage(const PageContext& context) {
   auto* grid = new PixCakePanel(QStringLiteral("library-grid"), page);
   auto* grid_layout = new QVBoxLayout(grid);
   grid_layout->setContentsMargins(16, 16, 16, 16);
-  grid_layout->addWidget(new PixCakeEmptyState(qtext("library.empty"), qtext("library.empty.hint"), grid), 1);
+  const auto photos = actions->photos();
+  if (photos.empty()) {
+    grid_layout->addWidget(new PixCakeEmptyState(qtext("library.empty"), qtext("library.empty.hint"), grid), 1);
+  } else {
+    // 当前项目的照片；双击进入精修。缩略图由 renderd 生成，到了就补上。
+    auto* list = photoList(grid, actions, true);
+    grid_layout->addWidget(text(qtext("library.open.hint"), true));
+    grid_layout->addWidget(list, 1);
+  }
+  if (actions->can_import()) {
+    auto* add = action(qtext("library.import"), grid, true);
+    add->setObjectName(QStringLiteral("library-import"));
+    QObject::connect(add, &QPushButton::clicked, add, [add, actions] { chooseAndImport(add, actions); });
+    grid_layout->addWidget(add, 0, Qt::AlignLeft);
+  }
   content->addWidget(grid, 1);
   auto* side = new QFrame(page);
   side->setObjectName(QStringLiteral("workspace-side"));
@@ -88,7 +103,7 @@ QWidget* buildLibraryPage(const PageContext& context) {
   }
   views_layout->addStretch();
   outer->addWidget(views);
-  outer->addWidget(thumbnailStrip(page, true));
+  outer->addWidget(thumbnailStrip(page, true, actions));
   return page;
 }
 

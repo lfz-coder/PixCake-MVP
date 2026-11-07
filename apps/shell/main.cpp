@@ -1,5 +1,8 @@
 #include "pixcake/account/account_session.hpp"
 #include "pixcake/instance/single_instance.hpp"
+#include "pixcake/logging/file_log_sink.hpp"
+#include "pixcake/platform/mac_source_access.hpp"
+#include "pixcake/project_session/project_session.hpp"
 #include "pixcake/ui/panels/slider_spec.hpp"
 #include "pixcake/ui/shell/page_copy.hpp"
 #include "pixcake/ui/shell/shell_display.hpp"
@@ -8,17 +11,23 @@
 #include "shell_window.hpp"
 
 #include <QApplication>
+#include <QDir>
+#include <QElapsedTimer>
+#include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QCommandLineOption>
 #include <QCommandLineParser>
 #include <QFileInfo>
 #include <QEvent>
 #include <QLabel>
+#include <QListWidget>
 #include <QPushButton>
 #include <QSlider>
 #include <QSocketNotifier>
 #include <QStringList>
 
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 
 namespace {
@@ -153,6 +162,226 @@ int smoke(QWidget& window, Page first_page) {
   return 0;
 }
 
+// renderd 与壳层在同一个 .app 的 Contents/MacOS 里；开发构建退回构建目录里的 renderd。
+std::string renderd_executable() {
+  const QString bundled = QCoreApplication::applicationDirPath() + QStringLiteral("/pixcake_app_renderd");
+  if (QFileInfo(bundled).isExecutable()) return bundled.toStdString();
+#ifdef PIXCAKE_RENDERD_DEV_PATH
+  return PIXCAKE_RENDERD_DEV_PATH;
+#else
+  return bundled.toStdString();
+#endif
+}
+
+pixcake::preview_channel::PreviewSessionOptions preview_options() {
+  pixcake::preview_channel::PreviewSessionOptions options;
+  options.renderd_executable = renderd_executable();
+  options.log_directory = pixcake::logging::default_log_directory();
+  options.document_directory =
+      (QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/documents")).toStdString();
+  return options;
+}
+
+// 登录后接上项目库（需求 5.2）：<数据目录>/projects.sqlite 与 documents/。未登录不打开。
+void attach_projects(pixcake::shell::ShellWindow& window, const pixcake::SessionState& session,
+                     pixcake::SourceAccess& access, const QString& data_directory) {
+  if (!session.signed_in()) return;
+  QDir().mkpath(data_directory);
+  std::unique_ptr<pixcake::project_session::ProjectSession> projects;
+  std::string diagnostic;
+  const auto code = pixcake::project_session::ProjectSession::open(
+      data_directory.toStdString(), session, access, &pixcake::platform::MacSourceAccess::create_bookmark, projects,
+      diagnostic);
+  if (code != pixcake::ResultCode::Ok) {
+    qWarning("project library unavailable: %s", diagnostic.c_str());
+    return;
+  }
+  window.controller().attach_projects(std::move(projects), preview_options());
+}
+
+#ifdef PIXCAKE_DEV_PAGES
+// 开发登录：没有账号服务时，让会话视为已登录（只在开发构建，和 --page 同一开关）。
+pixcake::account::AccountSnapshot dev_account() {
+  pixcake::account::AccountSnapshot snapshot;
+  snapshot.account_id = "dev";
+  snapshot.session_handle = "dev-session";
+  return snapshot;
+}
+
+QListWidget* library_photos(QWidget& window) {
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  return window.findChild<QListWidget*>(QStringLiteral("library-photos"));
+}
+
+// Development aid: with PIXCAKE_SMOKE_SCREENSHOT=<file.png>, save the window as <file>-<name>.png.
+void screenshot(QWidget& window, const char* name) {
+  const char* shot = std::getenv("PIXCAKE_SMOKE_SCREENSHOT");
+  if (shot == nullptr || *shot == '\0') return;
+  window.resize(1386, 800);
+  QCoreApplication::processEvents();
+  QString path = QString::fromLocal8Bit(shot);
+  path.insert(path.lastIndexOf(QLatin1Char('.')), QLatin1Char('-') + QLatin1String(name));
+  window.grab().save(path);
+}
+
+double mean_red(const QImage& image) {
+  if (image.isNull()) return -1;
+  double sum = 0;
+  for (int y = 0; y < image.height(); ++y) {
+    const auto* row = image.constScanLine(y);
+    for (int x = 0; x < image.width(); ++x) sum += row[x * 4];
+  }
+  return sum / (static_cast<double>(image.width()) * image.height());
+}
+
+// --open 冒烟：等第一帧；画布有图、直方图有数据、只有全图色彩的滑杆可用；把曝光调高，
+// 等新的一帧，画面整体变亮。
+bool wait_frames(const pixcake::shell::ShellWindow& window, std::uint64_t count, int timeout_ms) {
+  QElapsedTimer timer;
+  timer.start();
+  while (window.controller().frames_shown() < count && timer.elapsed() < timeout_ms) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents | QEventLoop::WaitForMoreEvents, 50);
+  }
+  return window.controller().frames_shown() >= count;
+}
+
+// --dev-sign-in --data-dir --import 冒烟：主页导入 → 新项目（按 5.2 命名）→ 精修首张出帧 → 调曝光
+// 标成已编辑 → 图库列出照片 → 回主页看到项目 → 重新打开项目，曝光仍在。
+int smoke_open_photo(pixcake::shell::ShellWindow& window);
+
+int smoke_import_flow(pixcake::shell::ShellWindow& window, const std::vector<std::string>& paths,
+                      const std::string& expected_project) {
+  auto& controller = window.controller();
+  if (controller.display().page() != Page::Home || !controller.can_import()) {
+    qCritical("dev sign-in did not reach home with a project library");
+    return 9;
+  }
+  controller.request_import(paths);
+  if (controller.display().page() != Page::Refine || !controller.current_project() || !controller.has_photo()) {
+    qCritical("import did not open the new project in refine");
+    for (const auto& notice : controller.display().notices()) qCritical("notice: %s", notice.c_str());
+    return 9;
+  }
+  if (const int opened = smoke_open_photo(window); opened != 0) return opened;
+  const auto photos = controller.photos();
+  if (photos.empty() || photos.front().edit_status.empty()) {
+    qCritical("the committed photo is not marked edited");
+    return 9;
+  }
+  // Thumbnails: every photo gets one, and the edited photo's follows its edit.
+  const auto edited = photos.front().id;
+  const auto original = photos.back().id;
+  QElapsedTimer timer;
+  timer.start();
+  while ((controller.thumbnails_ready() < photos.size() || mean_red(controller.thumbnail(edited)) < 200) &&
+         timer.elapsed() < 60'000) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents | QEventLoop::WaitForMoreEvents, 50);
+  }
+  const double edited_red = mean_red(controller.thumbnail(edited));
+  const double original_red = mean_red(controller.thumbnail(original));
+  if (controller.thumbnails_ready() < photos.size() || edited_red < 200 || original_red > 160 || original_red < 0) {
+    qCritical("thumbnails missing or not following the edit: %zu of %zu, edited %.1f, original %.1f",
+              controller.thumbnails_ready(), photos.size(), edited_red, original_red);
+    return 9;
+  }
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  auto* strip = window.findChild<QListWidget*>(QStringLiteral("thumbs-photos"));
+  if (strip == nullptr || strip->count() != static_cast<int>(photos.size()) || strip->item(0)->icon().isNull()) {
+    qCritical("refine thumbnail strip does not show the project's photos");
+    return 9;
+  }
+  controller.request_page(Page::Library);
+  auto* list = library_photos(window);
+  screenshot(window, "library");
+  if (list == nullptr || list->count() != static_cast<int>(photos.size()) ||
+      !list->item(0)->text().contains(QString::fromStdString(photos.front().edit_status))) {
+    qCritical("library does not list the project's photos");
+    return 9;
+  }
+  controller.request_page(Page::Home);
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  QPushButton* project = nullptr;
+  for (auto* button : window.findChildren<QPushButton*>(QStringLiteral("home-project"))) {
+    if (button->text() == QString::fromStdString(expected_project)) project = button;
+  }
+  screenshot(window, "home");
+  if (project == nullptr || controller.has_photo()) {
+    qCritical("home does not list project %s (or the photo stayed open)", expected_project.c_str());
+    return 9;
+  }
+  const auto before = controller.frames_shown();
+  project->click();
+  if (!wait_frames(window, before + 1, 60'000) || controller.display().page() != Page::Refine) {
+    qCritical("reopening the project shows no frame");
+    return 9;
+  }
+  // The committed exposure is applied again: much brighter than the original.
+  const double red = mean_red(controller.preview_view().image);
+  if (!(red > 200)) {
+    qCritical("reopened photo lost its edit (red %.1f)", red);
+    return 9;
+  }
+  std::printf("import flow ok: project %s, %zu photo(s), reopened red %.1f, thumbnails edited %.1f original %.1f\n",
+              expected_project.c_str(), photos.size(), red, edited_red, original_red);
+  return 0;
+}
+
+int smoke_open_photo(pixcake::shell::ShellWindow& window) {
+  // The page built before the photo was opened is deleted later; drop it first.
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  if (!wait_frames(window, 1, 60'000)) {
+    qCritical("no preview frame: %s", qPrintable(window.controller().preview_view().status));
+    return 8;
+  }
+  const auto* view =
+      dynamic_cast<const pixcake::shell::PixCakeImageView*>(window.findChild<QFrame*>(QStringLiteral("refine-canvas-image")));
+  const auto* chart =
+      dynamic_cast<const pixcake::shell::PixCakeHistogram*>(window.findChild<QFrame*>(QStringLiteral("refine-histogram")));
+  if (view == nullptr || view->image().isNull() || chart == nullptr || chart->histogram().peak == 0) {
+    qCritical("canvas or histogram is empty");
+    return 8;
+  }
+  const double before = mean_red(view->image());
+  QSlider* exposure = nullptr;
+  int enabled = 0;
+  for (auto* slider : window.findChild<QWidget*>(QStringLiteral("refine-color-labels"))->findChildren<QSlider*>()) {
+    if (!slider->isEnabled()) continue;
+    ++enabled;
+    const auto label = panels::slider_label_of(slider->accessibleName().toStdString());
+    const auto binding = panels::refine_color_binding(label);
+    if (!binding || binding->capability_id != "color.global") {
+      qCritical("slider enabled without a previewable binding: %s", label.c_str());
+      return 8;
+    }
+    if (binding->parameter_id == "exposure") exposure = slider;
+  }
+  if (exposure == nullptr) {
+    qCritical("exposure slider is not enabled (%d enabled)", enabled);
+    return 8;
+  }
+  const auto shown = window.controller().frames_shown();
+  exposure->setValue(std::min(exposure->maximum(), exposure->value() + 20));  // +1 EV, committed
+  if (!wait_frames(window, shown + 1, 30'000)) {
+    qCritical("no frame after moving exposure");
+    return 8;
+  }
+  const double after = mean_red(view->image());
+  if (!(after > before + 5)) {
+    qCritical("exposure did not brighten the preview: %.1f -> %.1f", before, after);
+    return 8;
+  }
+  // Development aid: PIXCAKE_SMOKE_SCREENSHOT=<file.png> saves the window as rendered offscreen.
+  if (const char* shot = std::getenv("PIXCAKE_SMOKE_SCREENSHOT"); shot != nullptr && *shot != '\0') {
+    window.resize(1386, 800);
+    QCoreApplication::processEvents();
+    window.grab().save(QString::fromLocal8Bit(shot));
+  }
+  std::printf("open photo ok: %dx%d, %d sliders enabled, red %.1f -> %.1f\n", view->image().width(),
+              view->image().height(), enabled, before, after);
+  return 0;
+}
+#endif
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -175,6 +404,22 @@ int main(int argc, char** argv) {
                                                 "home, library, refine, creative."),
                                  QStringLiteral("page"), default_page);
   parser.addOption(page_option);
+  QCommandLineOption dev_sign_in_option(QStringList() << QStringLiteral("dev-sign-in"),
+                                       QStringLiteral("Development build only: treat the session as signed in."));
+  parser.addOption(dev_sign_in_option);
+  QCommandLineOption data_option(QStringList() << QStringLiteral("data-dir"),
+                                 QStringLiteral("Development build only: project library directory."),
+                                 QStringLiteral("dir"));
+  parser.addOption(data_option);
+  QCommandLineOption import_option(QStringList() << QStringLiteral("import"),
+                                   QStringLiteral("Development build only: import these photos/folders from home "
+                                                  "(as the import dialog would); with --smoke, check the flow."),
+                                   QStringLiteral("path"));
+  parser.addOption(import_option);
+  QCommandLineOption open_option(QStringList() << QStringLiteral("open"),
+                                 QStringLiteral("Development build only: open a photo in the refine page."),
+                                 QStringLiteral("photo"));
+  parser.addOption(open_option);
 #endif
   QCommandLineOption smoke_option(QStringList() << QStringLiteral("smoke"),
                                   QStringLiteral("Construct the first page and exit without showing a window."));
@@ -212,13 +457,48 @@ int main(int argc, char** argv) {
   // 发布构建：首屏由账号会话决定（需求第 79、103 行，安全清单 S-25）。本机会话缓存接入之前，
   // 账号会话是未登录，首屏是登录页。
   pixcake::account::AccountSession account;
+  pixcake::platform::MacSourceAccess source_access;
+  QString data_directory = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
 #ifdef PIXCAKE_DEV_PAGES
-  const Page first_page = parse_page(parser.value(page_option));
+  if (parser.isSet(dev_sign_in_option) && account.sign_in(dev_account()) != pixcake::ResultCode::Ok) {
+    std::fprintf(stderr, "dev sign-in failed\n");
+    return 9;
+  }
+  if (parser.isSet(data_option)) data_directory = QFileInfo(parser.value(data_option)).absoluteFilePath();
+  const bool open_photo = parser.isSet(open_option);
+  const Page first_page = open_photo ? Page::Refine : parse_page(parser.value(page_option));
   pixcake::shell::ShellWindow window(first_page == Page::Login ? ShellDisplay::for_session(account)
                                                                : ShellDisplay::dev_preview(first_page));
+  if (open_photo) {
+    std::string diagnostic;
+    const auto photo = QFileInfo(parser.value(open_option)).absoluteFilePath().toStdString();
+    auto options = preview_options();
+    // The smoke check edits a throwaway document, never the user's.
+    QTemporaryDir smoke_documents;
+    if (parser.isSet(smoke_option)) options.document_directory = smoke_documents.path().toStdString();
+    QDir().mkpath(QString::fromStdString(options.document_directory));
+    if (window.openPhoto(photo, options, diagnostic) != pixcake::ResultCode::Ok) {
+      std::fprintf(stderr, "cannot open %s: %s\n", photo.c_str(), diagnostic.c_str());
+      if (parser.isSet(smoke_option)) return 8;
+    }
+    if (parser.isSet(smoke_option)) return smoke_open_photo(window);
+  }
+  // Smoke checks never open the user's project library; they pass --data-dir.
+  if (!parser.isSet(smoke_option) || parser.isSet(data_option)) {
+    attach_projects(window, account, source_access, data_directory);
+  }
+  if (parser.isSet(import_option)) {
+    std::vector<std::string> paths;
+    for (const auto& value : parser.values(import_option)) paths.push_back(QFileInfo(value).absoluteFilePath().toStdString());
+    if (parser.isSet(smoke_option)) {
+      return smoke_import_flow(window, paths, pixcake::project_session::project_name_for(paths));
+    }
+    window.controller().request_import(paths);
+  }
 #else
   const Page first_page = Page::Login;
   pixcake::shell::ShellWindow window(ShellDisplay::for_session(account));
+  if (!parser.isSet(smoke_option)) attach_projects(window, account, source_access, data_directory);
 #endif
   if (parser.isSet(smoke_option)) return smoke(window, first_page);
   window.show();

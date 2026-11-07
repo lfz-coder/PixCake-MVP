@@ -13,3 +13,12 @@ add_library(pixcake_preview_client
 target_include_directories(pixcake_preview_client PUBLIC include)
 target_link_libraries(pixcake_preview_client PUBLIC pixcake_preview_channel pixcake_ipc pixcake_warnings)
 
+# One photo edited in the shell: renderd process, edit document through
+# CommandGate, latest frame.
+add_library(pixcake_preview_session
+  src/preview_session.cpp
+  src/thumbnail_service.cpp
+)
+target_include_directories(pixcake_preview_session PUBLIC include)
+target_link_libraries(pixcake_preview_session PUBLIC pixcake_preview_client pixcake_command pixcake_editdoc
+  pixcake_persist pixcake_capability pixcake_warnings)

@@ -1,6 +1,11 @@
 #pragma once
 
 #include <QCoreApplication>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QMimeData>
+#include <QMouseEvent>
+#include <QUrl>
 #include <QFileInfo>
 #include <QFrame>
 #include <QIcon>
@@ -13,11 +18,17 @@
 #include <QStringList>
 #include <QSvgRenderer>
 #include <QHBoxLayout>
+#include <QImage>
+#include <QPainterPath>
 #include <QVBoxLayout>
 
+#include "pixcake/ui/panels/histogram.hpp"
 #include "pixcake/ui/shell/page_copy.hpp"
 
+#include <functional>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace pixcake::shell {
 
@@ -43,6 +54,47 @@ class PixCakePanel final : public QFrame {
     setObjectName(object_name);
     setAccessibleName(object_name);
   }
+};
+
+// A panel that takes a click and dropped files/folders (requirement 5.2:
+// "拖动或点击导入图片").  Callbacks are optional; without them it is inert.
+class PixCakeDropPanel final : public QFrame {
+ public:
+  explicit PixCakeDropPanel(const QString& object_name, QWidget* parent = nullptr) : QFrame(parent) {
+    setObjectName(object_name);
+    setAccessibleName(object_name);
+  }
+  void onClicked(std::function<void()> callback) {
+    clicked_ = std::move(callback);
+    setCursor(clicked_ ? Qt::PointingHandCursor : Qt::ArrowCursor);
+  }
+  void onDropped(std::function<void(const std::vector<std::string>&)> callback) {
+    dropped_ = std::move(callback);
+    setAcceptDrops(static_cast<bool>(dropped_));
+  }
+
+ protected:
+  void mouseReleaseEvent(QMouseEvent* event) override {
+    if (clicked_ && event->button() == Qt::LeftButton && rect().contains(event->position().toPoint())) clicked_();
+    QFrame::mouseReleaseEvent(event);
+  }
+  void dragEnterEvent(QDragEnterEvent* event) override {
+    if (dropped_ && event->mimeData()->hasUrls()) event->acceptProposedAction();
+  }
+  void dropEvent(QDropEvent* event) override {
+    std::vector<std::string> paths;
+    for (const auto& url : event->mimeData()->urls()) {
+      if (url.isLocalFile()) paths.push_back(url.toLocalFile().toStdString());
+    }
+    if (dropped_ && !paths.empty()) {
+      event->acceptProposedAction();
+      dropped_(paths);
+    }
+  }
+
+ private:
+  std::function<void()> clicked_;
+  std::function<void(const std::vector<std::string>&)> dropped_;
 };
 
 class PixCakeToolbar final : public QFrame {
@@ -133,12 +185,20 @@ inline QString shellAssetFile(const QString& relative) {
   return {};
 }
 
+// RGB line histogram: three QPainter polylines over the 0..255 axis.  Counts
+// come from ui/panels::rgb_histogram; without data only the axis is drawn.
 class PixCakeHistogram final : public QFrame {
  public:
   explicit PixCakeHistogram(QWidget* parent = nullptr) : QFrame(parent) {
     setObjectName(QStringLiteral("refine-histogram"));
     setAccessibleName(copyText("widget.histogram"));
   }
+
+  void setHistogram(const ui::panels::RgbHistogram& histogram) {
+    histogram_ = histogram;
+    update();
+  }
+  const ui::panels::RgbHistogram& histogram() const { return histogram_; }
 
  protected:
   void paintEvent(QPaintEvent*) override {
@@ -149,7 +209,71 @@ class PixCakeHistogram final : public QFrame {
     painter.drawText(8, height() - 2, QStringLiteral("0"));
     const QString end = QStringLiteral("255");
     painter.drawText(width() - 8 - painter.fontMetrics().horizontalAdvance(end), height() - 2, end);
+    if (histogram_.peak == 0) return;
+    painter.setRenderHint(QPainter::Antialiasing);
+    const qreal left = 8;
+    const qreal span = width() - 16;
+    const qreal top = 4;
+    const qreal tall = baseline - top;
+    const auto line = [&](const std::array<std::uint32_t, 256>& bins, const QColor& color) {
+      QPainterPath path;
+      for (int i = 0; i < 256; ++i) {
+        const QPointF point(left + span * i / 255.0, baseline - tall * bins[static_cast<std::size_t>(i)] / histogram_.peak);
+        if (i == 0) path.moveTo(point); else path.lineTo(point);
+      }
+      painter.setPen(QPen(color, 1.2));
+      painter.drawPath(path);
+    };
+    line(histogram_.red, QColor(230, 70, 70, 220));
+    line(histogram_.green, QColor(70, 200, 90, 220));
+    line(histogram_.blue, QColor(80, 130, 240, 220));
   }
+
+ private:
+  ui::panels::RgbHistogram histogram_;
+};
+
+// The refine canvas: shows the latest preview frame fitted into the widget
+// (aspect kept, never enlarged past 1:1 device pixels), or a status line.
+class PixCakeImageView final : public QFrame {
+ public:
+  explicit PixCakeImageView(QWidget* parent = nullptr) : QFrame(parent) {
+    setObjectName(QStringLiteral("refine-canvas-image"));
+    setAccessibleName(copyText("widget.canvas"));
+    setMinimumSize(160, 120);
+  }
+
+  void setImage(QImage image) {
+    image_ = std::move(image);
+    status_.clear();
+    update();
+  }
+  void setStatus(QString status) {
+    status_ = std::move(status);
+    update();
+  }
+  const QImage& image() const { return image_; }
+
+ protected:
+  void paintEvent(QPaintEvent*) override {
+    QPainter painter(this);
+    if (!image_.isNull()) {
+      const qreal ratio = devicePixelRatioF();
+      QSizeF size = QSizeF(image_.size()) / ratio;
+      size.scale(QSizeF(rect().size()).boundedTo(size), Qt::KeepAspectRatio);
+      const QRectF target(QPointF((width() - size.width()) / 2, (height() - size.height()) / 2), size);
+      painter.setRenderHint(QPainter::SmoothPixmapTransform);
+      painter.drawImage(target, image_);
+    }
+    if (!status_.isEmpty()) {
+      painter.setPen(palette().color(QPalette::PlaceholderText));
+      painter.drawText(rect(), Qt::AlignCenter, status_);
+    }
+  }
+
+ private:
+  QImage image_;
+  QString status_;
 };
 
 inline QPixmap loadAssetPixmap(const QString& relative, int size) {

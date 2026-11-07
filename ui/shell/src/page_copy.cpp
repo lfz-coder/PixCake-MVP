@@ -62,6 +62,9 @@ Texts build_texts() {
   t["icon.suffix"] = "图标";
   t["icon.pending_named"] = "图标待补充";
   t["widget.histogram"] = "直方图";
+  t["widget.canvas"] = "照片预览";
+  t["refine.preview.loading"] = "正在生成预览";
+  t["refine.preview.failed"] = "预览失败：";
 
   t["region.login-account"] = "账号输入框";
   t["region.login-code"] = "验证码输入框";
@@ -87,6 +90,11 @@ Texts build_texts() {
   t["home.import.name"] = "照片导入";
   t["home.import.plus"] = "＋";
   t["home.import.hint"] = "拖动或点击导入图片";
+  t["home.import.folder"] = "导入文件夹";
+  t["home.import.dialog"] = "选择要导入的照片";
+  t["home.import.filter"] = "图片 (*.jpg *.jpeg *.png *.tif *.tiff *.bmp)";
+  t["library.import"] = "＋ 导入照片";
+  t["library.open.hint"] = "双击照片进入精修";
   t["home.quick.empty"] = "暂无快捷功能";
   t["home.projects.empty"] = "暂无项目";
 

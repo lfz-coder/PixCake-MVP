@@ -5,15 +5,52 @@
 
 #include "pixcake/ui/panels/slider_spec.hpp"
 
+#include <QPointer>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QSlider>
+#include <QTimer>
+
+#include <algorithm>
+#include <cmath>
 
 namespace pixcake::shell {
 namespace {
 
 namespace panels = ui::panels;
 
-// 范围、步进、默认值只来自内核参数模式（ui/panels 的 slider_spec）。
-void addDisabledSlider(QWidget* parent, QLayout* layout, const panels::SliderSpec& spec, const QString& object_name) {
+// 照片打开时可拖动的滑杆：色彩面板顶层（白平衡、影调）绑定全图色彩的参数，renderd 的参考绘制
+// 实现了这些通道。子分组（色阶、HSL、可选颜色、颜色分级……）和其他能力还没有像素实现，保持禁用，
+// 不让滑杆动了画面却不变。
+bool previewable(const PageActions* actions, const panels::SliderSpec& spec,
+                 const std::optional<panels::SliderBinding>& binding) {
+  if (actions == nullptr || !actions->has_photo() || !spec.bound || !binding ||
+      binding->capability_id != "color.global") {
+    return false;
+  }
+  const auto top_level = panels::refine_color_binding(spec.label);
+  return top_level && top_level->capability_id == binding->capability_id &&
+         top_level->parameter_id == binding->parameter_id;
+}
+
+// 刻度 → 参数模式的显示值（按步进推出的小数位；-0 写成 0）。
+std::string display_of(const panels::SliderSpec& spec, int tick) {
+  double value = spec.minimum + spec.step * tick;
+  if (std::abs(value) < spec.step / 2) value = 0.0;
+  return QString::number(value, 'f', spec.decimals).toStdString();
+}
+
+int tick_of(const panels::SliderSpec& spec, const std::string& display) {
+  bool ok = false;
+  const double value = QString::fromStdString(display).toDouble(&ok);
+  if (!ok || spec.step <= 0) return spec.default_tick;
+  return std::clamp(static_cast<int>(std::lround((value - spec.minimum) / spec.step)), 0, spec.tick_count);
+}
+
+// 范围、步进、默认值只来自内核参数模式（ui/panels 的 slider_spec）。照片打开时，绑定全图色彩的
+// 滑杆可用：拖动发预览，松手（或键盘改值）经命令入口提交。
+void addDisabledSlider(QWidget* parent, QLayout* layout, const panels::SliderSpec& spec, const QString& object_name,
+                       PageActions* actions = nullptr, const std::optional<panels::SliderBinding>& binding = {}) {
   auto* row = new QWidget(parent);
   auto* row_layout = new QHBoxLayout(row);
   row_layout->setContentsMargins(0, 0, 0, 0);
@@ -33,6 +70,25 @@ void addDisabledSlider(QWidget* parent, QLayout* layout, const panels::SliderSpe
   row_layout->addWidget(slider, 1);
   row_layout->addWidget(reading);
   layout->addWidget(row);
+  if (!previewable(actions, spec, binding)) return;
+
+  const panels::SliderBinding bound = *binding;
+  if (const auto current = actions->parameter_value(bound)) {
+    slider->setValue(tick_of(spec, *current));
+    reading->setText(qs(*current));
+  }
+  name->setEnabled(true);
+  slider->setEnabled(true);
+  reading->setEnabled(true);
+  QObject::connect(slider, &QSlider::valueChanged, slider, [=](int tick) {
+    const std::string value = display_of(spec, tick);
+    reading->setText(qs(value));
+    // Dragging previews; a keyboard or click change is final at once.
+    actions->request_parameter(bound, value, !slider->isSliderDown());
+  });
+  QObject::connect(slider, &QSlider::sliderReleased, slider, [=] {
+    actions->request_parameter(bound, display_of(spec, slider->value()), true);
+  });
 }
 
 QLabel* disabledLabel(const QString& value, const QString& accessible = QString()) {
@@ -59,9 +115,11 @@ QString moduleDescription(const char* id) {
   return qs(copyItem("refine-modules", id).description);
 }
 
-void addColorPanel(QWidget* modules, QVBoxLayout* modules_layout) {
+void addColorPanel(QWidget* modules, QVBoxLayout* modules_layout, PageActions* actions,
+                   PixCakeHistogram** histogram_out) {
   auto* layout = labelPanel(modules, modules_layout, "refine-color-labels", moduleDescription("color"));
   auto* histogram = new PixCakeHistogram(modules);
+  *histogram_out = histogram;
   histogram->setMinimumHeight(PixCakeTheme::kControlHeight * 2);
   layout->addWidget(histogram);
   auto* readings = new QHBoxLayout;
@@ -77,7 +135,8 @@ void addColorPanel(QWidget* modules, QVBoxLayout* modules_layout) {
     if (row.kind == panels::PanelRowKind::Title) {
       layout->addWidget(disabledLabel(qs(row.label)));
     } else {
-      addDisabledSlider(modules, layout, panels::slider_spec(row.label, row.binding), qs(row.object_name));
+      addDisabledSlider(modules, layout, panels::slider_spec(row.label, row.binding), qs(row.object_name), actions,
+                        row.binding);
     }
   }
 }
@@ -90,14 +149,15 @@ void addLabelList(QVBoxLayout* layout, std::string_view list, bool accessible_is
   }
 }
 
-void addModules(QWidget* modules, QVBoxLayout* modules_layout) {
+void addModules(QWidget* modules, QVBoxLayout* modules_layout, PageActions* actions,
+                PixCakeHistogram** histogram) {
   for (const auto& entry : ui::shell::page_list("refine-modules")) {
     auto* button = action(qs(entry.text), modules);
     const QString description = moduleDescription(entry.id.c_str());
     if (!description.isEmpty()) button->setAccessibleDescription(description);
     modules_layout->addWidget(button);
   }
-  addColorPanel(modules, modules_layout);
+  addColorPanel(modules, modules_layout, actions, histogram);
 
   auto* local = labelPanel(modules, modules_layout, "refine-local-labels", moduleDescription("local"));
   addLabelList(local, "refine-local");
@@ -178,9 +238,15 @@ QWidget* buildRefinePage(const PageContext& context) {
   auto* canvas = new QFrame(page);
   canvas->setObjectName(QStringLiteral("workspace-canvas"));
   auto* canvas_layout = new QVBoxLayout(canvas);
-  auto* preview = text(qtext("refine.preview"), true);
-  preview->setAlignment(Qt::AlignCenter);
-  canvas_layout->addWidget(preview, 1);
+  PixCakeImageView* image_view = nullptr;
+  if (context.actions.has_photo()) {
+    image_view = new PixCakeImageView(canvas);
+    canvas_layout->addWidget(image_view, 1);
+  } else {
+    auto* preview = text(qtext("refine.preview"), true);
+    preview->setAlignment(Qt::AlignCenter);
+    canvas_layout->addWidget(preview, 1);
+  }
   canvas_layout->addWidget(action(qs(copyItem("refine-canvas", "compare").text), canvas), 0, Qt::AlignRight);
   center->addWidget(canvas, 1);
 
@@ -191,11 +257,39 @@ QWidget* buildRefinePage(const PageContext& context) {
   auto* modules_layout = new QVBoxLayout(modules);
   modules_layout->setContentsMargins(14, 12, 14, 12);
   modules_layout->addWidget(text(qtext("region.refine-modules")));
-  addModules(modules, modules_layout);
+  PixCakeHistogram* histogram = nullptr;
+  addModules(modules, modules_layout, actions, &histogram);
+  if (image_view != nullptr) {
+    QPointer<PixCakeImageView> view(image_view);
+    QPointer<PixCakeHistogram> chart(histogram);
+    actions->watch_preview(image_view, [view, chart](const PreviewView& update) {
+      if (view) {
+        if (!update.image.isNull()) view->setImage(update.image);
+        view->setStatus(update.status);
+      }
+      if (chart) chart->setHistogram(update.histogram);
+    });
+  }
   modules_layout->addStretch();
-  center->addWidget(modules);
+  // The module panels are taller than the window: scroll them instead of
+  // squeezing every row (the colour panel's histogram and sliders included).
+  auto* side_scroll = new QScrollArea(page);
+  side_scroll->setObjectName(QStringLiteral("workspace-side-scroll"));
+  side_scroll->setWidget(modules);
+  side_scroll->setWidgetResizable(true);
+  side_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  side_scroll->setMinimumWidth(PixCakeTheme::kWorkspaceSideWidth + side_scroll->verticalScrollBar()->sizeHint().width());
+  center->addWidget(side_scroll);
+  if (histogram != nullptr && context.actions.has_photo()) {
+    // With a photo open, start at the colour panel (histogram and sliders).
+    QPointer<QScrollArea> scroll(side_scroll);
+    QPointer<PixCakeHistogram> chart(histogram);
+    QTimer::singleShot(0, side_scroll, [scroll, chart] {
+      if (scroll && chart) scroll->verticalScrollBar()->setValue(chart->mapTo(scroll->widget(), QPoint(0, 0)).y() - 40);
+    });
+  }
   outer->addLayout(center, 1);
-  outer->addWidget(thumbnailStrip(page, false));
+  outer->addWidget(thumbnailStrip(page, false, actions));
   return page;
 }
 

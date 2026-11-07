@@ -19,6 +19,10 @@ struct VersionLimit {
   std::uint32_t max_readable_version = 1;
 };
 
+// 阶段一每个已注册能力可读的片段版本：都是 1（commit_preview 写入版本 1）。打开、加载文档的
+// 进程都用这一张表，不各自拼。
+std::vector<VersionLimit> phase_one_version_limits();
+
 struct FragmentView {
   std::string capability_id;
   std::uint32_t version = 0;

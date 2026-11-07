@@ -48,7 +48,11 @@ target_link_libraries(pixcake_app_shell PRIVATE
   Qt6::Svg
 )
 target_compile_features(pixcake_app_shell PRIVATE cxx_std_17)
-target_link_libraries(pixcake_app_shell PRIVATE pixcake_account)
+target_link_libraries(pixcake_app_shell PRIVATE pixcake_account pixcake_preview_session pixcake_project_session
+  pixcake_platform_macos pixcake_logging)
+# The shell starts renderd for previews; development builds use the build tree's copy.
+add_dependencies(pixcake_app_shell pixcake_app_renderd)
+target_compile_definitions(pixcake_app_shell PRIVATE PIXCAKE_RENDERD_DEV_PATH="$<TARGET_FILE:pixcake_app_renderd>")
 
 # --page 直达业务页只在开发构建里有（安全清单 S-25）。发布构建由账号会话决定首屏。
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
@@ -65,6 +69,20 @@ add_test(NAME test_shell_app_help COMMAND pixcake_app_shell --help)
 set_tests_properties(test_shell_app_help PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 if(PIXCAKE_DEV_PAGES)
+  # Opens a real photo: renderd starts, the first frame and an exposure change reach the canvas.
+  add_test(NAME test_shell_app_open_photo
+           COMMAND pixcake_app_shell --open ${CMAKE_CURRENT_SOURCE_DIR}/login-hero.png --smoke)
+  set_tests_properties(test_shell_app_open_photo PROPERTIES TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+  # The main flow with a development sign-in: import from home into a new project,
+  # edit, library listing, back home, reopen.
+  add_test(NAME test_shell_app_import_flow
+           COMMAND ${CMAKE_COMMAND} -E env QT_QPA_PLATFORM=offscreen
+                   ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:pixcake_app_shell>
+                   -DPHOTO=${CMAKE_CURRENT_SOURCE_DIR}/login-hero.png
+                   -DWORK=${CMAKE_CURRENT_BINARY_DIR}/import-flow
+                   -P ${CMAKE_SOURCE_DIR}/tests/apps/check_shell_import_flow.cmake)
+  set_tests_properties(test_shell_app_import_flow PROPERTIES TIMEOUT 180)
   foreach(shell_page IN ITEMS login home library refine creative)
     add_test(NAME test_shell_app_smoke_${shell_page}
              COMMAND pixcake_app_shell --page ${shell_page} --smoke)

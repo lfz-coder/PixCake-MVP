@@ -12,6 +12,11 @@ namespace pixcake::shell {
 class ShellWindow final : public QMainWindow {
  public:
   explicit ShellWindow(ShellDisplay display);
+  // 打开照片并重画当前页（精修页的画布和滑杆随之可用）。
+  ResultCode openPhoto(const std::string& photo_path, const preview_channel::PreviewSessionOptions& options,
+                       std::string& diagnostic);
+  const ShellController& controller() const { return controller_; }
+  ShellController& controller() { return controller_; }
 
  private:
   void render();
