@@ -367,9 +367,15 @@ class ExportDialog final : public QDialog {
       shapes_row->addWidget(button);
     }
     shapes_row->addStretch();
-    auto* sync = new PixCakeButton(qtext("export.wm.sync"), group);
-    unavailable(sync, "export.why.wm_sync");
-    shapes_row->addWidget(sync);
+    // 水印同步（test 版实测）：把当前方向的全部摆放抄给另外两个方向，没有确认框。
+    sync_ = new PixCakeButton(qtext("export.wm.sync"), group);
+    sync_->setObjectName(QStringLiteral("export-wm-sync"));
+    connect(sync_, &QPushButton::clicked, this, [this] {
+      const auto source = placements_[static_cast<std::size_t>(photo_shape_)];
+      for (auto& placement : placements_) placement = source;
+      loadPlacement();
+    });
+    shapes_row->addWidget(sync_);
     layout->addRow(shapes_row);
 
     material_button_ = new QToolButton(group);
@@ -456,6 +462,20 @@ class ExportDialog final : public QDialog {
                                                                      static_cast<std::uint32_t>(thumb.height())));
     shape_ = photo_shape_;
     shapes_->button(shape_)->setChecked(true);
+    // 其余两个方向只能看，不能改（test 版：参数区置灰，水印同步仍可用）。
+    for (auto* child : group->findChildren<QWidget*>()) {
+      if (child->parentWidget() == nullptr || qobject_cast<QToolButton*>(child) != nullptr ||
+          qobject_cast<QPushButton*>(child) != nullptr || child == plain_ ||
+          child->objectName().startsWith(QStringLiteral("qt_"))) {
+        continue;
+      }
+      edit_widgets_.push_back(child);
+    }
+    for (auto* button : group->findChildren<QToolButton*>()) {
+      if (shapes_->id(button) < 0 && button->objectName() != QStringLiteral("export-wm-material")) {
+        edit_widgets_.push_back(button);
+      }
+    }
     loadMaterial();
     loadPlacement();
     return group;
@@ -472,8 +492,10 @@ class ExportDialog final : public QDialog {
     y_.spin->setValue(placement.y);
     anchors_->button(placement.anchor)->setChecked(true);
     loading_ = false;
-    wm_size_.slider->setEnabled(!placement.fit);  // 合适时大小置灰（实测）
-    wm_size_.spin->setEnabled(!placement.fit);
+    const bool editable = shape_ == photo_shape_;
+    for (auto* widget : edit_widgets_) widget->setEnabled(editable);
+    wm_size_.slider->setEnabled(editable && !placement.fit);  // 合适时大小置灰（实测）
+    wm_size_.spin->setEnabled(editable && !placement.fit);
     updatePreview();
   }
 
@@ -689,6 +711,8 @@ class ExportDialog final : public QDialog {
   SliderRow wm_size_;
   QCheckBox* fit_ = nullptr;
   QCheckBox* plain_ = nullptr;
+  QPushButton* sync_ = nullptr;
+  std::vector<QWidget*> edit_widgets_;
   SliderRow opacity_;
   SliderRow x_;
   SliderRow y_;

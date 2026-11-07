@@ -387,6 +387,28 @@ int smoke_export(pixcake::shell::ShellWindow& window, const QString& folder) {
     }
     x->setValue(0);
     y->setValue(0);
+    // 水印同步: another shape is read-only; the sync button copies this shape's placement to it.
+    auto* landscape = dialog->findChild<QToolButton*>(QStringLiteral("export-wm-shape-landscape"));
+    auto* sync = dialog->findChild<QPushButton*>(QStringLiteral("export-wm-sync"));
+    auto* opacity = dialog->findChild<QSpinBox*>(QStringLiteral("export-wm-opacity"));
+    if (landscape == nullptr || sync == nullptr || opacity == nullptr || !sync->isEnabled()) {
+      problem = QStringLiteral("the watermark sync controls are missing");
+      dialog->reject();
+      return;
+    }
+    opacity->setValue(60);
+    landscape->click();
+    const bool read_only = !opacity->isEnabled();
+    const int before_sync = opacity->value();
+    sync->click();
+    if (!read_only || before_sync == 60 || opacity->value() != 60 || !sync->isEnabled()) {
+      problem = QStringLiteral("watermark sync: read-only %1, opacity %2 -> %3")
+                    .arg(read_only).arg(before_sync).arg(opacity->value());
+      dialog->reject();
+      return;
+    }
+    portrait->click();
+    opacity->setValue(100);
     screenshot(*dialog, "export-quick");
     tabs->setCurrentIndex(1);
     for (auto* fold : dialog->findChildren<QAbstractButton*>(QStringLiteral("export-advanced"))) fold->setChecked(true);

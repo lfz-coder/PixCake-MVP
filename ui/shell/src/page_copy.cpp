@@ -208,7 +208,6 @@ Texts build_texts() {
   t["export.wm.choose"] = "选择水印素材";
   t["export.wm.need_material"] = "请先上传水印素材，或关闭水印";
   t["export.wm.not_saved"] = "水印素材没有保存：";
-  t["export.why.wm_sync"] = "水印同步的作用还没有核实，暂不可用";
   t["export.why.overlay"] = "保留叠加层的作用还没有核实，暂不可用";
   t["export.why.print"] = "排版印刷还没有接入";
   t["export.why.keep_path"] = "保留导入时的完整路径还没有接入";
