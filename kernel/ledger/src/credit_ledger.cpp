@@ -60,6 +60,7 @@ struct CreditLedger::Snapshot {
   std::set<std::string> settled_batches;
   std::set<std::string> charged_tasks;
   std::set<std::string> charged_originals;
+  std::set<std::string> charged_exports;
 };
 
 void CreditLedger::apply(Snapshot& shot, const LedgerEvent& event) {
@@ -99,7 +100,10 @@ void CreditLedger::apply(Snapshot& shot, const LedgerEvent& event) {
     shot.strokes.insert(event.stroke_id);
   } else if (event.kind == "export-sheet") {
     shot.settled_exports.insert(event.export_id);
-    if (event.sheets_delta < 0) shot.charged_originals.insert(event.original_id);
+    if (event.sheets_delta < 0) {
+      shot.charged_originals.insert(event.original_id);
+      shot.charged_exports.insert(event.export_id);
+    }
     if (!event.batch_id.empty()) {
       shot.settled_batches.insert(event.batch_id + "\n" + event.original_id);
     }
@@ -485,6 +489,10 @@ ResultCode CreditLedger::settle_exports(const std::vector<ExportProduct>& produc
 
 bool CreditLedger::export_settled(const std::string& export_id) const {
   return snapshot_->settled_exports.count(export_id) != 0;
+}
+
+bool CreditLedger::export_charged(const std::string& export_id) const {
+  return snapshot_->charged_exports.count(export_id) != 0;
 }
 
 bool CreditLedger::original_charged(const std::string& original_id) const {

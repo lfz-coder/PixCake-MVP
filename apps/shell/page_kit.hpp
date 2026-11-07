@@ -31,6 +31,7 @@ using ui::shell::Page;
 using ui::shell::ShellDisplay;
 using export_session::ExportDefaults;
 using export_session::ExportRequest;
+using export_session::ExportCharge;
 using export_session::ExportRow;
 
 // 画布要显示的东西：最新一帧和它的直方图，或者一行状态（生成中、失败原因）。
@@ -112,6 +113,8 @@ class PageActions {
     return {};
   }
   virtual std::vector<ExportRow> export_rows() const { return {}; }
+  // 本机账本的剩余张数；导出不可用时为空（个人中心按钮禁用）。
+  virtual std::optional<std::int64_t> remaining_sheets() const { return std::nullopt; }
   // 水印素材复制进数据目录；成功时 material 是写进设置快照的名字，失败时 reason 是说明。
   virtual bool store_watermark(const std::string&, std::string&, std::string& reason) {
     reason.clear();

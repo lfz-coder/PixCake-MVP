@@ -46,6 +46,7 @@ class ShellController final : public PageActions {
   std::vector<std::string> request_export(const ExportRequest& request, const ExportDefaults& defaults,
                                           bool& ok) override;
   std::vector<ExportRow> export_rows() const override;
+  std::optional<std::int64_t> remaining_sheets() const override;
   bool store_watermark(const std::string& path, std::string& material, std::string& reason) override;
   std::string watermark_file(const std::string& material) const override;
   void remember_export_defaults(const ExportDefaults& defaults) override;

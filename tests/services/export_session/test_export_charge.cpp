@@ -188,6 +188,7 @@ int main() {
   assert(rows[0].status == "成功");
   assert(exports->remaining_sheets() == 0);
   assert(exports->estimate({photo["p.png"]}).sheets == 0);
+  assert(exports->rows()[0].charge == ExportCharge::Charged);
 
   // p again and its re-encoded copy: the same picture, nothing charged.
   request.photo_ids = {photo["p.png"], photo["p-copy.jpg"]};
@@ -195,6 +196,9 @@ int main() {
   rows = settle(*exports);
   assert(rows[0].status == "成功" && rows[1].status == "成功");
   assert(exports->remaining_sheets() == 0);
+  rows = exports->rows();
+  assert(rows[0].charge == ExportCharge::Repeat && rows[1].charge == ExportCharge::Repeat &&
+         rows[2].charge == ExportCharge::Charged);
 
   // The mirrored picture is new: no sheet left, refused before it is queued.
   request.photo_ids = {photo["q.png"]};
@@ -212,6 +216,7 @@ int main() {
   assert(exports->submit(request, notices, diagnostic) == ResultCode::Ok && notices.empty());
   rows = settle(*exports);
   assert(rows[0].status == "成功" && exports->remaining_sheets() == 0);
+  assert(exports->rows()[0].charge == ExportCharge::Free);
 
   // The ledger survives a restart and the opening balance is not credited twice.
   exports.reset();

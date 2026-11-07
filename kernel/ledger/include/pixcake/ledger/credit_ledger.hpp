@@ -100,6 +100,8 @@ class CreditLedger {
   // 之后不再扣。张数不够时什么都不记，返回 InsufficientBalance。
   ResultCode settle_exports(const std::vector<ExportProduct>& products);
   bool export_settled(const std::string& export_id) const;
+  // 这一次导出扣了张数（导出明细的“实际计费”）。
+  bool export_charged(const std::string& export_id) const;
   bool original_charged(const std::string& original_id) const;
   std::vector<std::string> charged_originals() const;
 

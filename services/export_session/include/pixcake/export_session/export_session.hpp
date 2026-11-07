@@ -12,6 +12,7 @@
 #include "pixcake/support/session_state.hpp"
 
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <optional>
 #include <set>
@@ -53,6 +54,16 @@ struct ExportRequest {
   ExportSettings settings;
 };
 
+// 导出明细的计费一栏（test 版“导出明细”的实际计费）：成功的导出记账后才有结论。
+enum class ExportCharge {
+  None,       // 还没成功
+  Pending,    // 成功了，还没记账
+  Charged,    // 扣了 1 张
+  Repeat,     // 精修效果图，这张图以前扣过
+  Free,       // 免费效果图
+  Original,   // 原图
+};
+
 struct ExportRow {
   std::string export_id;
   std::int64_t photo_id = 0;
@@ -63,6 +74,7 @@ struct ExportRow {
   bool succeeded = false;
   bool can_retry = false;
   bool can_cancel = false;
+  ExportCharge charge = ExportCharge::None;
 };
 
 // What the dialog remembers: 设为默认导出路径 keeps the folder, 设为默认格式
@@ -140,6 +152,7 @@ class ExportSession {
   std::unique_ptr<preview_channel::ExportClient> client_;
   std::unique_ptr<SqliteLedgerLog> ledger_log_;
   std::unique_ptr<LedgerBook> ledger_;
+  std::map<std::string, ExportEffect> effects_;  // export id -> effect, for the export list
   unsigned sequence_ = 0;
 };
 

@@ -148,6 +148,16 @@ Texts build_texts() {
   t["export.estimate.note"] = "导出精修效果/免费效果为预估数，最终以导出明细为准";
   // 本机账本的张数：同一张图扣过就不再扣，原图和免费效果图不扣。
   t["export.sheets"] = "本次预计扣除 %1 张，剩余 %2 张";
+  // 导出列表的计费一栏（test 版导出明细：精修效果图、免费功能、实际计费）。
+  t["export.charge.pending"] = "待记账";
+  t["export.charge.charged"] = "扣 1 张";
+  t["export.charge.repeat"] = "不扣：这张图已扣过";
+  t["export.charge.free"] = "不扣：免费效果图";
+  t["export.charge.original"] = "不扣：原图";
+  // 个人中心：剩余张数来自本机账本（没有服务器，不跨设备同步）。
+  t["account.sheets"] = "剩余张数：%1 张";
+  t["account.sheets.note"] = "本机记账，不跨设备同步";
+  t["account.why"] = "需要账号服务，还没有接入";
   t["export.preset"] = kWordPreset;
   t["export.preset.placeholder"] = "请选择一个预设";
   t["export.to"] = "导出至";
@@ -805,7 +815,7 @@ Lists build_lists() {
                                 item("4", "居中"), item("5", "右中"), item("6", "左下"), item("7", "下中"),
                                 item("8", "右下")};
   lists["export-list-columns"] = {item("file", "文件名"), item("status", "状态"), item("reason", "失败原因"),
-                                  item("destination", "导出位置")};
+                                  item("charge", "计费"), item("destination", "导出位置")};
   return lists;
 }
 

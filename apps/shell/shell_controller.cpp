@@ -442,6 +442,11 @@ std::vector<std::string> ShellController::request_export(const ExportRequest& re
   return notices;
 }
 
+std::optional<std::int64_t> ShellController::remaining_sheets() const {
+  if (!exports_) return std::nullopt;
+  return exports_->remaining_sheets();
+}
+
 std::vector<ExportRow> ShellController::export_rows() const {
   return exports_ ? exports_->rows() : std::vector<ExportRow>{};
 }

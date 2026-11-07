@@ -172,7 +172,7 @@ void test_b109_b110_export_sheets_count_originals_once_per_settlement() {
   std::vector<pixcake::ExportProduct> again = {{"exp-e", "orig-1", false, true}};
   EXPECT(ledger.settle_exports(again) == pixcake::ResultCode::Ok);
   EXPECT(ledger.export_sheets() == 1);
-  EXPECT(ledger.original_charged("orig-1") && ledger.export_settled("exp-e"));
+  EXPECT(ledger.original_charged("orig-1") && ledger.export_settled("exp-e") && !ledger.export_charged("exp-e"));
   std::vector<pixcake::ExportProduct> other = {{"exp-f", "orig-3", false, true}};
   EXPECT(ledger.settle_exports(other) == pixcake::ResultCode::Ok);
   EXPECT(ledger.export_sheets() == 0);
@@ -184,7 +184,7 @@ void test_b109_b110_export_sheets_count_originals_once_per_settlement() {
   EXPECT(plain.export_sheets() == 1 && plain.export_settled("exp-g") && !plain.original_charged("orig-4"));
   // ...and a later refined export of that image is its first charge.
   EXPECT(plain.settle_exports({{"exp-h", "orig-4", false, true}}) == pixcake::ResultCode::Ok);
-  EXPECT(plain.export_sheets() == 0 && plain.original_charged("orig-4"));
+  EXPECT(plain.export_sheets() == 0 && plain.original_charged("orig-4") && plain.export_charged("exp-h"));
 
   auto poor = charged(version_930(), 10, 0);
   EXPECT(poor.credit_sheets(0) == pixcake::ResultCode::StateConflict);

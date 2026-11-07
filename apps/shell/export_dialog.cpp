@@ -16,6 +16,7 @@
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHeaderView>
+#include <QMenu>
 #include <QMessageBox>
 #include <QPainter>
 #include <QPointer>
@@ -694,7 +695,7 @@ class ExportList final : public QDialog {
     setAccessibleName(qs(copyItem("global", "export-list").text));
     setWindowTitle(accessibleName());
     setAttribute(Qt::WA_DeleteOnClose);
-    resize(760, 420);
+    resize(900, 420);
     auto* layout = new QVBoxLayout(this);
     empty_ = text(qtext("export.list.empty"), true);
     layout->addWidget(empty_);
@@ -708,10 +709,16 @@ class ExportList final : public QDialog {
     headers << QString();
     table_->setHorizontalHeaderLabels(headers);
     table_->horizontalHeader()->setStretchLastSection(false);
-    table_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
+    action_column_ = static_cast<int>(columns.size());
+    table_->horizontalHeader()->setSectionResizeMode(action_column_ - 1, QHeaderView::Stretch);
+    for (int column = 0; column < action_column_; ++column) {
+      if (columns[static_cast<std::size_t>(column)].id == "charge") {
+        table_->horizontalHeader()->setSectionResizeMode(column, QHeaderView::ResizeToContents);
+      }
+    }
     // Cell widgets do not size their column: fixed room for the longest action, rows tall enough for a button.
-    table_->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Fixed);
-    table_->setColumnWidth(4, 140);
+    table_->horizontalHeader()->setSectionResizeMode(action_column_, QHeaderView::Fixed);
+    table_->setColumnWidth(action_column_, 140);
     table_->verticalHeader()->setDefaultSectionSize(44);
     table_->verticalHeader()->setVisible(false);
     table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -733,7 +740,8 @@ class ExportList final : public QDialog {
     table_->setRowCount(static_cast<int>(rows.size()));
     for (int i = 0; i < static_cast<int>(rows.size()); ++i) {
       const auto& row = rows[static_cast<std::size_t>(i)];
-      const QStringList cells = {qs(row.file_name), qs(row.status), qs(row.reason), qs(row.destination_path)};
+      const QStringList cells = {qs(row.file_name), qs(row.status), qs(row.reason), chargeText(row.charge),
+                                 qs(row.destination_path)};
       for (int column = 0; column < cells.size(); ++column) {
         auto* item = table_->item(i, column);
         if (item == nullptr) {
@@ -745,13 +753,25 @@ class ExportList final : public QDialog {
       }
       // Replace the button only when the row's action changes: the list refreshes every half second.
       const QString key = qs(row.export_id) + QLatin1Char('/') + actionKind(row);
-      QWidget* current = table_->cellWidget(i, 4);
+      QWidget* current = table_->cellWidget(i, action_column_);
       if (current == nullptr ? !actionKind(row).isEmpty() : current->property("action-key").toString() != key) {
         QWidget* action = actionFor(row);
         if (action != nullptr) action->setProperty("action-key", key);
-        table_->setCellWidget(i, 4, action);
+        table_->setCellWidget(i, action_column_, action);
       }
     }
+  }
+
+  static QString chargeText(ExportCharge charge) {
+    switch (charge) {
+      case ExportCharge::Pending: return qtext("export.charge.pending");
+      case ExportCharge::Charged: return qtext("export.charge.charged");
+      case ExportCharge::Repeat: return qtext("export.charge.repeat");
+      case ExportCharge::Free: return qtext("export.charge.free");
+      case ExportCharge::Original: return qtext("export.charge.original");
+      case ExportCharge::None: break;
+    }
+    return {};
   }
 
   static QString actionKind(const ExportRow& row) {
@@ -786,6 +806,7 @@ class ExportList final : public QDialog {
   PageActions* actions_;
   QLabel* empty_ = nullptr;
   QTableWidget* table_ = nullptr;
+  int action_column_ = 0;
 };
 
 }  // namespace
@@ -817,6 +838,33 @@ QPushButton* toolbarAction(std::string_view list, const CopyItem& item, QWidget*
     // 选了照片才可用；图库里的选择变了跟着变。
     actions->watch_selection(button, [button, actions] { button->setEnabled(actions->export_target().has_value()); });
     QObject::connect(button, &QPushButton::clicked, button, [button, actions] { openExportDialog(button->window(), actions); });
+    return button;
+  }
+  if (item.id == "account") {
+    // 个人中心：第一项显示本机账本的剩余张数，点开导出列表（计费一栏即导出明细）；
+    // 其余项需要账号服务，禁用并说明。
+    auto* button = itemAction(list, item, parent, actions->remaining_sheets().has_value());
+    QObject::connect(button, &QPushButton::clicked, button, [button, actions] {
+      const auto sheets = actions->remaining_sheets();
+      if (!sheets) return;
+      QMenu menu(button);
+      menu.setObjectName(QStringLiteral("account-menu"));
+      for (const auto& entry : ui::shell::page_list("account-actions")) {
+        if (entry.id == "sheets") {
+          QAction* action = menu.addAction(qtext("account.sheets").arg(*sheets));
+          action->setObjectName(QStringLiteral("account-sheets"));
+          action->setToolTip(qtext("account.sheets.note"));
+          QObject::connect(action, &QAction::triggered, button,
+                           [button, actions] { openExportList(button->window(), actions); });
+        } else {
+          QAction* action = menu.addAction(qs(entry.text));
+          action->setEnabled(false);
+          action->setToolTip(qtext("account.why"));
+        }
+      }
+      menu.setToolTipsVisible(true);
+      menu.exec(button->mapToGlobal(QPoint(0, button->height())));
+    });
     return button;
   }
   if (item.id == "export-list") {

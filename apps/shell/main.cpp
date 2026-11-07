@@ -37,6 +37,8 @@
 #include <QStringList>
 #include <QTabBar>
 #include <QTableWidget>
+#include <QMenu>
+#include <QThread>
 #include <QTimer>
 
 #include <algorithm>
@@ -437,6 +439,37 @@ int smoke_export(pixcake::shell::ShellWindow& window, const QString& folder) {
     qCritical("export product or list wrong: %s, red %.1f, %lld bytes, watermark %d %d %d beside %d %d %d",
               qPrintable(product), red, static_cast<long long>(bytes), mark.red(), mark.green(), mark.blue(),
               beside.red(), beside.green(), beside.blue());
+    return 10;
+  }
+  // 计费一栏：只调了曝光，是免费效果图，不扣（记账在读到导出进程的进度之后，最多等几秒）。
+  const QString free = qtext_for_smoke("export.charge.free");
+  for (int i = 0; i < 100 && (table->item(0, 3) == nullptr || table->item(0, 3)->text() != free); ++i) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    QThread::msleep(50);
+  }
+  // 个人中心可用（菜单第一项是本机账本的剩余张数）。
+  const QString account_label = QString::fromStdString(pixcake::ui::shell::page_item("refine-global", "account").text);
+  QPushButton* account = nullptr;
+  for (auto* candidate : window.findChildren<QPushButton*>()) {
+    if (candidate->accessibleName() == account_label && candidate->isVisibleTo(&window)) account = candidate;
+  }
+  const bool account_enabled = account != nullptr && account->isEnabled();
+  QString first_entry;
+  if (account_enabled) {
+    QTimer::singleShot(0, [&first_entry] {
+      auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+      if (menu != nullptr && menu->objectName() == QStringLiteral("account-menu") && !menu->actions().isEmpty()) {
+        first_entry = menu->actions().front()->text();
+      }
+      if (menu != nullptr) menu->close();
+    });
+    account->click();
+  }
+  if (table->item(0, 3) == nullptr || table->item(0, 3)->text() != free || !account_enabled ||
+      first_entry != qtext_for_smoke("account.sheets").arg(100) ||
+      window.controller().remaining_sheets() != std::optional<std::int64_t>(100)) {
+    qCritical("export charge column or account wrong: '%s', account %d '%s'",
+              table->item(0, 3) ? qPrintable(table->item(0, 3)->text()) : "", account_enabled, qPrintable(first_entry));
     return 10;
   }
   screenshot(*list, "export-list");

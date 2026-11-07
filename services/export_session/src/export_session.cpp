@@ -509,6 +509,19 @@ std::vector<ExportRow> ExportSession::rows() {
     }
     row.can_cancel = status == "排队";
     row.succeeded = status == "成功";
+    if (row.succeeded) {
+      if (!ledger_->ledger().export_settled(id)) {
+        row.charge = ExportCharge::Pending;
+      } else if (ledger_->ledger().export_charged(id)) {
+        row.charge = ExportCharge::Charged;
+      } else {
+        auto effect = effects_.find(id);
+        if (effect == effects_.end()) effect = effects_.emplace(id, classify_export(job.document_snapshot)).first;
+        row.charge = effect->second == ExportEffect::Refined ? ExportCharge::Repeat
+                     : effect->second == ExportEffect::Free  ? ExportCharge::Free
+                                                             : ExportCharge::Original;
+      }
+    }
     rows.push_back(std::move(row));
   }
   std::reverse(rows.begin(), rows.end());
