@@ -2,10 +2,13 @@
 
 #include "pixcake/capability/capability_registry.hpp"
 
+#include "pixcake/project/records.hpp"
 #include "pixcake_widgets.hpp"
 #include "shell_icons.hpp"
 #include "trash_dialog.hpp"
 
+#include <QColor>
+#include <QStringList>
 #include <QFileDialog>
 #include <QListWidget>
 #include <QMenu>
@@ -134,6 +137,43 @@ QIcon thumbnailIcon(const QImage& image, int side) {
 
 }  // namespace
 
+// 标记行：“★3 选取 红”，没有标记的项不写。
+QString markLine(const PhotoEntry& photo) {
+  QStringList parts;
+  if (photo.rating > 0) parts << qtext("mark.star").arg(photo.rating);
+  if (!photo.flag.empty()) parts << qs(photo.flag);
+  if (!photo.color.empty()) parts << qs(photo.color);
+  return parts.join(QLatin1Char(' '));
+}
+
+// 色标改变缩略图底色（需求 §6.1）。
+QColor colorTint(const std::string& color) {
+  if (color == kColorRed) return QColor(120, 40, 40);
+  if (color == kColorYellow) return QColor(120, 100, 30);
+  if (color == kColorGreen) return QColor(40, 100, 50);
+  if (color == kColorBlue) return QColor(40, 70, 130);
+  if (color == kColorPurple) return QColor(90, 50, 120);
+  return {};
+}
+
+// 标记作用的照片：图库是选中的（没选就是当前那张），缩略图条是当前那张。
+std::vector<std::int64_t> markTargets(PageActions* actions, bool grid) {
+  auto ids = grid ? actions->selected_photos() : std::vector<std::int64_t>{};
+  if (ids.empty() && actions->current_photo()) ids = {*actions->current_photo()};
+  return ids;
+}
+
+// 再按一次同一色标就取消：目标都已经是这个颜色时清除。
+std::string toggledColor(PageActions* actions, const std::vector<std::int64_t>& ids, const std::string& color) {
+  const auto photos = actions->photos();
+  bool all_same = !ids.empty();
+  for (const std::int64_t id : ids) {
+    const auto found = std::find_if(photos.begin(), photos.end(), [id](const PhotoEntry& photo) { return photo.id == id; });
+    all_same = all_same && found != photos.end() && found->color == color;
+  }
+  return all_same ? std::string() : color;
+}
+
 QListWidget* photoList(QWidget* parent, PageActions* actions, bool grid, std::function<void(std::int64_t)> open) {
   const int side = grid ? 140 : 56;
   auto* list = new QListWidget(parent);
@@ -161,8 +201,11 @@ QListWidget* photoList(QWidget* parent, PageActions* actions, bool grid, std::fu
       for (const auto* state : {&photo.presence, &photo.edit_status}) {
         if (!state->empty()) label += QStringLiteral("\n") + qs(*state);
       }
+      const QString marks = markLine(photo);
+      if (!marks.isEmpty()) label += QStringLiteral("\n") + marks;
     }
     auto* item = new QListWidgetItem(thumbnailIcon(actions->thumbnail(photo.id), side), label, list);
+    if (const QColor tint = colorTint(photo.color); tint.isValid()) item->setBackground(tint);
     item->setToolTip(qs(photo.file_name));
     item->setData(Qt::UserRole, QVariant::fromValue<qlonglong>(photo.id));
     if (actions->current_photo() == photo.id) list->setCurrentItem(item);
@@ -194,6 +237,25 @@ QListWidget* photoList(QWidget* parent, PageActions* actions, bool grid, std::fu
     menu.setObjectName(QStringLiteral("photo-menu"));
     QAction* create = menu.addAction(qtext(ids.size() > 1 ? "library.copy.batch" : "library.copy.create"));
     create->setObjectName(QStringLiteral("photo-menu-copy"));
+    QMenu* rating_menu = menu.addMenu(qtext("mark.menu.rating"));
+    rating_menu->setObjectName(QStringLiteral("photo-menu-rating"));
+    for (int stars = 0; stars <= kRatingMax; ++stars) {
+      QAction* entry = rating_menu->addAction(stars == 0 ? qtext("mark.none") : qtext("mark.star").arg(stars));
+      QObject::connect(entry, &QAction::triggered, list, [actions, ids, stars] { actions->request_rating(ids, stars); });
+    }
+    QMenu* flag_menu = menu.addMenu(qtext("mark.menu.flag"));
+    flag_menu->setObjectName(QStringLiteral("photo-menu-flag"));
+    for (const char* flag : {kFlagPick, kFlagExclude, ""}) {
+      QAction* entry = flag_menu->addAction(*flag == '\0' ? qtext("mark.remove") : qs(flag));
+      QObject::connect(entry, &QAction::triggered, list, [actions, ids, flag] { actions->request_flag(ids, flag); });
+    }
+    QMenu* color_menu = menu.addMenu(qtext("mark.menu.color"));
+    color_menu->setObjectName(QStringLiteral("photo-menu-color"));
+    for (const char* color : {kColorRed, kColorYellow, kColorGreen, kColorBlue, kColorPurple, ""}) {
+      QAction* entry = color_menu->addAction(*color == '\0' ? qtext("mark.remove") : qs(color));
+      QObject::connect(entry, &QAction::triggered, list, [actions, ids, color] { actions->request_color(ids, color); });
+    }
+    menu.addSeparator();
     QAction* remove = menu.addAction(qtext("library.delete.menu"));
     remove->setObjectName(QStringLiteral("photo-menu-delete"));
     QAction* chosen = menu.exec(list->viewport()->mapToGlobal(at));
@@ -207,6 +269,29 @@ QListWidget* photoList(QWidget* parent, PageActions* actions, bool grid, std::fu
       const auto ids = actions->selected_photos();
       if (!ids.empty()) actions->request_virtual_copy(ids);
     });
+  }
+  // 键盘标记（需求 §6.1）：0–5 星级，P 选取、X 排除、U 移除，6–9 红黄绿蓝（再按取消；紫色只能用鼠标）。
+  {
+    const auto bind = [list, actions, grid](const QString& key, std::function<void(const std::vector<std::int64_t>&)> run) {
+      auto* shortcut = new QShortcut(QKeySequence(key), list);
+      shortcut->setContext(Qt::WidgetWithChildrenShortcut);
+      QObject::connect(shortcut, &QShortcut::activated, list, [actions, grid, run] {
+        const auto ids = markTargets(actions, grid);
+        if (!ids.empty()) run(ids);
+      });
+    };
+    for (int stars = 0; stars <= kRatingMax; ++stars) {
+      bind(QString::number(stars), [actions, stars](const auto& ids) { actions->request_rating(ids, stars); });
+    }
+    bind(QStringLiteral("P"), [actions](const auto& ids) { actions->request_flag(ids, kFlagPick); });
+    bind(QStringLiteral("X"), [actions](const auto& ids) { actions->request_flag(ids, kFlagExclude); });
+    bind(QStringLiteral("U"), [actions](const auto& ids) { actions->request_flag(ids, std::string()); });
+    const char* keyed[] = {kColorRed, kColorYellow, kColorGreen, kColorBlue};
+    for (int index = 0; index < 4; ++index) {
+      const std::string color = keyed[index];
+      bind(QString::number(6 + index),
+           [actions, color](const auto& ids) { actions->request_color(ids, toggledColor(actions, ids, color)); });
+    }
   }
   // Grid: a click selects, a double-click (activation) calls `open`; strip: a click calls `open`.
   const auto id_of = [](QListWidgetItem* item) { return std::int64_t{item->data(Qt::UserRole).toLongLong()}; };

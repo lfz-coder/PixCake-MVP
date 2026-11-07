@@ -644,6 +644,23 @@ int smoke_virtual_copy(pixcake::shell::ShellWindow& window) {
     qCritical("the copy of an unedited photo has no (or an edited) thumbnail: %lld", static_cast<long long>(plain_copy));
     return 12;
   }
+  // Marks: the copy shows its original's marks; the grid label carries them.
+  {
+    controller.request_page(Page::Library);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    const auto entries = controller.photos();
+    controller.request_rating({entries[1].id}, 4);  // the copy: the mark lands on the original
+    controller.request_color({entries[0].id}, pixcake::kColorRed);
+    const auto marked = controller.photos();
+    auto* list = library_photos(window);
+    if (marked[0].rating != 4 || marked[1].rating != 4 || marked[1].color != pixcake::kColorRed || list == nullptr ||
+        !list->item(0)->text().contains(qtext_for_smoke("mark.star").arg(4))) {
+      qCritical("marks: ratings %d %d, copy colour '%s'", marked[0].rating, marked[1].rating, marked[1].color.c_str());
+      return 12;
+    }
+    controller.request_rating({entries[0].id}, 0);
+    controller.request_color({entries[0].id}, "");
+  }
   // Delete and trash: the bulk delete asks first; a copy goes alone; the original takes its copies; restore.
   {
     const auto total = controller.photos().size();

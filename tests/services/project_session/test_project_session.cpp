@@ -155,6 +155,21 @@ int main() {
     assert(projects->resolve_photo(copy, copy_path, diagnostic) == ResultCode::Ok && copy_path == shoot + "/a.BMP");
     assert(projects->load_photo(copy, row) == ResultCode::Ok && row && row->id == copy && row->absolute_path == copy_path);
     assert(projects->mark_edited(copy) == ResultCode::Ok);
+    // 标记：副本的标记记在原图上，原图和副本显示一样；越界被拒。
+    assert(projects->set_rating({copy, a}, 3) == ResultCode::Ok);
+    assert(projects->set_flag({copy}, kFlagPick) == ResultCode::Ok);
+    assert(projects->set_color({a}, kColorBlue) == ResultCode::Ok);
+    assert(projects->load_photo(a, row) == ResultCode::Ok && row->rating == 3 && row->flag == kFlagPick &&
+           row->color_label == kColorBlue);
+    assert(projects->load_photo(copy, row) == ResultCode::Ok && row->rating == 3 && row->flag == kFlagPick);
+    assert(projects->set_rating({copy}, 6) == ResultCode::StateConflict);
+    assert(projects->set_flag({a}, "") == ResultCode::Ok && projects->set_color({a}, "") == ResultCode::Ok);
+    assert(projects->load_photo(a, row) == ResultCode::Ok && row->flag.empty() && row->color_label.empty());
+    assert(projects->set_rating({a}, 0) == ResultCode::Ok);
+    session.in = false;
+    assert(projects->set_rating({a}, 2) == ResultCode::StateConflict);
+    session.in = true;
+
     // 删除与回收站：删一个副本只少它自己；删原图连副本一起走；恢复副本时原图一并回来。
     assert(projects->trash_items({second}, diagnostic) == ResultCode::Ok);
     assert(projects->list_photos(imported.project_id, photos) == ResultCode::Ok && photos.size() == 3);

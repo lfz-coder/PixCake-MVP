@@ -67,6 +67,9 @@ class ShellController final : public PageActions {
   void watch_selection(QObject* owner, std::function<void()> changed) override;
   void request_open_photo(std::int64_t photo_id) override;
   void request_virtual_copy(const std::vector<std::int64_t>& photo_ids) override;
+  void request_rating(const std::vector<std::int64_t>& photo_ids, int rating) override;
+  void request_flag(const std::vector<std::int64_t>& photo_ids, const std::string& flag) override;
+  void request_color(const std::vector<std::int64_t>& photo_ids, const std::string& color) override;
   void request_delete_photos(const std::vector<std::int64_t>& photo_ids) override;
   void request_delete_project(std::int64_t project_id) override;
   std::vector<TrashItem> trash() const override;

@@ -62,6 +62,9 @@ struct PhotoEntry {
   std::string presence;     // 原图异常时的状态（如“原文件缺失”）；正常为空
   std::string edit_status;  // “已编辑”或空
   std::int64_t copy = 0;    // 虚拟副本的序号（从 1 递增）；原图为 0
+  int rating = 0;           // 星级 0–5（副本和原图共用）
+  std::string flag;         // 旗标：选取/排除/空
+  std::string color;        // 色标：红黄绿蓝紫/空
 };
 
 // 导出弹窗要的东西（需求第 19 节）：选中的照片、项目名、第一张原图所在的文件夹、记住的默认值。
@@ -105,6 +108,10 @@ class PageActions {
   virtual void select_photos(const std::vector<std::int64_t>&, std::int64_t) {}
   // 选择变化时回调（导出按钮、“已选 N 张”跟着变）；owner 删除后不再回调。
   virtual void watch_selection(QObject*, std::function<void()>) {}
+  // 标记（需求 §6.1）：条目编号；副本记在原图上。旗标、色标传空串表示移除。
+  virtual void request_rating(const std::vector<std::int64_t>&, int) {}
+  virtual void request_flag(const std::vector<std::int64_t>&, const std::string&) {}
+  virtual void request_color(const std::vector<std::int64_t>&, const std::string&) {}
   // 删除与回收站（需求 §7）：删照片、副本（条目编号）或项目都只进回收站，保留 30 天。
   virtual void request_delete_photos(const std::vector<std::int64_t>&) {}
   virtual void request_delete_project(std::int64_t) {}

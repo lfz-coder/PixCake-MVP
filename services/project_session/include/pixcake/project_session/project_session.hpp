@@ -70,6 +70,12 @@ class ProjectSession {
   // 复制原图或副本当前已提交的调整，新副本排在原图的副本最后；new_item 是新副本的编号。
   ResultCode create_virtual_copy(std::int64_t item, std::int64_t& new_item, std::string& diagnostic);
 
+  // 标记（需求 §6.1）：星级 0–5、旗标（选取/排除/空）、色标（红黄绿蓝紫/空）。条目编号，副本记在原图上；
+  // 同一张原图只写一次。
+  ResultCode set_rating(const std::vector<std::int64_t>& items, int rating);
+  ResultCode set_flag(const std::vector<std::int64_t>& items, const std::string& flag);
+  ResultCode set_color(const std::vector<std::int64_t>& items, const std::string& color);
+
   // 删除与回收站（需求 §7）：删除只进回收站，保留 30 天；删原图时它的副本一起进去；恢复任一副本时原图一并恢复。
   struct TrashEntry {
     std::string subject;          // kTrashProject / kTrashPhoto / kTrashVirtualCopy

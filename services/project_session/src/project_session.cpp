@@ -258,6 +258,32 @@ ResultCode ProjectSession::list_photos(std::int64_t project_id, std::vector<Phot
   return code;
 }
 
+namespace {
+std::vector<std::int64_t> sources_of(const ProjectSession& session, const std::vector<std::int64_t>& items) {
+  std::vector<std::int64_t> sources;
+  for (const std::int64_t item : items) {
+    const std::int64_t source = session.source_photo(item);
+    if (source != 0 && std::find(sources.begin(), sources.end(), source) == sources.end()) sources.push_back(source);
+  }
+  return sources;
+}
+}  // namespace
+
+ResultCode ProjectSession::set_rating(const std::vector<std::int64_t>& items, int rating) {
+  const auto sources = sources_of(*this, items);
+  return sources.empty() ? ResultCode::StateConflict : commands_.set_photo_ratings(*library_, sources, rating).code;
+}
+
+ResultCode ProjectSession::set_flag(const std::vector<std::int64_t>& items, const std::string& flag) {
+  const auto sources = sources_of(*this, items);
+  return sources.empty() ? ResultCode::StateConflict : commands_.set_photo_flags(*library_, sources, flag).code;
+}
+
+ResultCode ProjectSession::set_color(const std::vector<std::int64_t>& items, const std::string& color) {
+  const auto sources = sources_of(*this, items);
+  return sources.empty() ? ResultCode::StateConflict : commands_.set_photo_colors(*library_, sources, color).code;
+}
+
 ResultCode ProjectSession::trash_items(const std::vector<std::int64_t>& items, std::string& diagnostic) {
   diagnostic.clear();
   ResultCode first = ResultCode::Ok;

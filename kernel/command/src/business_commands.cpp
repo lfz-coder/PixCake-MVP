@@ -24,6 +24,23 @@ ProjectResult refused_without_session() {
 }
 }  // namespace
 
+ProjectResult BusinessCommands::set_photo_ratings(ProjectLibrary& library, std::vector<std::int64_t> photo_ids,
+                                                  int rating) {
+  return session_.signed_in() ? library.set_photo_ratings(std::move(photo_ids), rating) : refused_without_session();
+}
+
+ProjectResult BusinessCommands::set_photo_flags(ProjectLibrary& library, std::vector<std::int64_t> photo_ids,
+                                                std::string flag) {
+  return session_.signed_in() ? library.set_photo_flags(std::move(photo_ids), std::move(flag))
+                              : refused_without_session();
+}
+
+ProjectResult BusinessCommands::set_photo_colors(ProjectLibrary& library, std::vector<std::int64_t> photo_ids,
+                                                 std::string color) {
+  return session_.signed_in() ? library.set_photo_colors(std::move(photo_ids), std::move(color))
+                              : refused_without_session();
+}
+
 ProjectResult BusinessCommands::trash_project(ProjectLibrary& library, std::int64_t project_id) {
   return session_.signed_in() ? library.trash_project(project_id) : refused_without_session();
 }

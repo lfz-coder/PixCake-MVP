@@ -268,7 +268,7 @@ std::vector<PhotoEntry> ShellController::photos() const {
     for (const auto& row : rows) {
       // Only an abnormal original (missing, delete pending) is worth a line.
       out.push_back({row.id, row.file_name, row.presence == kPresenceEditable ? std::string() : row.presence,
-                     row.edit_status, projects_->copy_sequence(row.id)});
+                     row.edit_status, projects_->copy_sequence(row.id), row.rating, row.flag, row.color_label});
     }
   }
   return out;
@@ -295,6 +295,27 @@ void ShellController::request_virtual_copy(const std::vector<std::int64_t>& phot
   request_thumbnails();
   // 新副本成为选中的（图库里一眼看到它们在哪）。
   select_photos(created, created.back());
+  if (changed_) changed_();
+}
+
+void ShellController::request_rating(const std::vector<std::int64_t>& photo_ids, int rating) {
+  if (!projects_ || photo_ids.empty()) return;
+  const ResultCode code = projects_->set_rating(photo_ids, rating);
+  if (code != ResultCode::Ok) show_notices({}, NoticeScene::OpenDocument, code);
+  if (changed_) changed_();
+}
+
+void ShellController::request_flag(const std::vector<std::int64_t>& photo_ids, const std::string& flag) {
+  if (!projects_ || photo_ids.empty()) return;
+  const ResultCode code = projects_->set_flag(photo_ids, flag);
+  if (code != ResultCode::Ok) show_notices({}, NoticeScene::OpenDocument, code);
+  if (changed_) changed_();
+}
+
+void ShellController::request_color(const std::vector<std::int64_t>& photo_ids, const std::string& color) {
+  if (!projects_ || photo_ids.empty()) return;
+  const ResultCode code = projects_->set_color(photo_ids, color);
+  if (code != ResultCode::Ok) show_notices({}, NoticeScene::OpenDocument, code);
   if (changed_) changed_();
 }
 
