@@ -21,13 +21,13 @@ wait_for() {  # wait_for <tries> <command...>
 }
 
 start_primary() {  # start_primary <name>
-  "$shell_bin" --page home --instance-dir "$instance" >"$work/$1.out" 2>"$work/$1.err" &
+  "$shell_bin" --instance-dir "$instance" >"$work/$1.out" 2>"$work/$1.err" &
   pids+=($!)
   echo $!
 }
 
 second_launch() {  # second_launch <name>; prints exit status
-  "$shell_bin" --page home --instance-dir "$instance" >"$work/$1.out" 2>"$work/$1.err" &
+  "$shell_bin" --instance-dir "$instance" >"$work/$1.out" 2>"$work/$1.err" &
   local pid=$!
   pids+=($pid)
   wait_for 30 bash -c "! kill -0 $pid 2>/dev/null" || fail "$1 did not exit within 3 s"
