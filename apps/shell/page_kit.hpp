@@ -109,6 +109,15 @@ class PageActions {
     return {};
   }
   virtual std::vector<ExportRow> export_rows() const { return {}; }
+  // 水印素材复制进数据目录；成功时 material 是写进设置快照的名字，失败时 reason 是说明。
+  virtual bool store_watermark(const std::string&, std::string&, std::string& reason) {
+    reason.clear();
+    return false;
+  }
+  // 已保存素材的文件路径（弹窗预览用），没有时为空。
+  virtual std::string watermark_file(const std::string&) const { return {}; }
+  // 只记住设置不导出（test 版取消弹窗后，水印开关和参数仍是上次的）。
+  virtual void remember_export_defaults(const ExportDefaults&) {}
   virtual void request_export_retry(const std::string&) {}
   virtual void request_export_cancel(const std::string&) {}
   // 导出进度变化时回调（导出列表刷新）；owner 删除后不再回调。

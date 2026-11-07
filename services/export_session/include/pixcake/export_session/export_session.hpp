@@ -56,6 +56,9 @@ struct ExportRow {
 struct ExportDefaults {
   std::string folder;
   std::optional<ExportFormat> format;
+  // 水印：开关与素材、三套摆放都记住（test 版关掉弹窗再开仍是上次的状态）。
+  bool watermark_on = false;
+  std::optional<ExportWatermark> watermark;
 };
 
 // File extension for a format; Original takes the original's (JPEG, PNG, TIFF
@@ -82,6 +85,12 @@ class ExportSession {
   std::vector<ExportRow> rows();
   ExportDefaults defaults() const;
   ResultCode remember_defaults(const ExportDefaults& defaults);
+  // 水印素材：JPG/PNG、不超过 10 MB（test 版上传框的限制），复制进
+  // <数据目录>/exports/watermarks，文件名按内容取（同一张图只存一份）；`material`
+  // 是写进设置快照的名字。原文件之后移走、删掉都不影响导出。
+  ResultCode store_watermark(const std::string& source_path, std::string& material, std::string& diagnostic);
+  std::string watermark_path(const std::string& material) const;
+  static constexpr std::uint64_t kMaxWatermarkBytes = 10ull * 1024 * 1024;
   // Hands queued tasks left by an earlier session to exportd.
   ResultCode resume(std::string& diagnostic);
 

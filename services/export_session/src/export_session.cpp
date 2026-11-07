@@ -2,6 +2,7 @@
 
 #include "pixcake/command/business_commands.hpp"
 #include "pixcake/editdoc/edit_document.hpp"
+#include "pixcake/support/checksum.hpp"
 
 #include <sys/stat.h>
 #include <unistd.h>
@@ -280,6 +281,60 @@ ResultCode ExportSession::resume(std::string& diagnostic) {
   return ResultCode::Ok;
 }
 
+ResultCode ExportSession::store_watermark(const std::string& source_path, std::string& material,
+                                          std::string& diagnostic) {
+  const std::string extension = lower(source_path.substr(source_path.rfind('.') == std::string::npos
+                                                             ? source_path.size()
+                                                             : source_path.rfind('.') + 1));
+  if (extension != "png" && extension != "jpg" && extension != "jpeg") {
+    diagnostic = "水印素材只支持 JPG、PNG";
+    return ResultCode::UnsupportedFormat;
+  }
+  std::ifstream in(source_path, std::ios::binary);
+  if (!in) {
+    diagnostic = "水印素材无法读取";
+    return ResultCode::SourceMissing;
+  }
+  in.seekg(0, std::ios::end);
+  const auto size = static_cast<std::uint64_t>(std::max<std::streamoff>(0, in.tellg()));
+  if (size == 0 || size > kMaxWatermarkBytes) {
+    diagnostic = size == 0 ? "水印素材是空文件" : "水印素材超过 10MB";
+    return ResultCode::UnsupportedFormat;
+  }
+  in.seekg(0);
+  std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
+  if (!in.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()))) {
+    diagnostic = "水印素材无法读取";
+    return ResultCode::IoFailed;
+  }
+  char hex[17];
+  std::snprintf(hex, sizeof(hex), "%016llx",
+                static_cast<unsigned long long>(checksum_fnv1a64(bytes.data(), bytes.size())));
+  const std::string name =
+      std::string(hex) + "-" + std::to_string(size) + (extension == "png" ? ".png" : ".jpg");
+  const std::string directory = options_.data_directory + "/exports/watermarks";
+  if (!make_directory(directory)) {
+    diagnostic = "水印素材目录无法创建";
+    return ResultCode::IoFailed;
+  }
+  const std::string path = directory + "/" + name;
+  if (!files_.exists(path)) {
+    const auto written = files_.write_new(path, bytes);
+    if (!written.ok && !files_.exists(path)) {
+      diagnostic = "水印素材无法保存";
+      return ResultCode::IoFailed;
+    }
+  }
+  material = name;
+  diagnostic.clear();
+  return ResultCode::Ok;
+}
+
+std::string ExportSession::watermark_path(const std::string& material) const {
+  if (!valid_watermark_material(material)) return {};
+  return options_.data_directory + "/exports/watermarks/" + material;
+}
+
 ExportDefaults ExportSession::defaults() const {
   ExportDefaults out;
   std::ifstream in(options_.data_directory + "/exports/defaults");
@@ -294,6 +349,11 @@ ExportDefaults ExportSession::defaults() const {
       ExportSettings settings;
       if (parse_export_settings("format=" + value, settings) == ResultCode::Ok) out.format = settings.format;
     }
+    if (key == "watermark_on") out.watermark_on = value == "1";
+    if (key == "watermark") {
+      ExportSettings settings;
+      if (parse_export_settings(value, settings) == ResultCode::Ok) out.watermark = settings.watermark;
+    }
   }
   return out;
 }
@@ -307,6 +367,12 @@ ResultCode ExportSession::remember_defaults(const ExportDefaults& defaults) {
     ExportSettings settings;
     settings.format = *defaults.format;
     text += encode_export_settings(settings) + "\n";  // "format=<name>"
+  }
+  text += std::string("watermark_on=") + (defaults.watermark_on ? "1" : "0") + "\n";
+  if (defaults.watermark) {
+    ExportSettings settings;
+    settings.watermark = defaults.watermark;
+    text += "watermark=" + encode_export_settings(settings) + "\n";
   }
   const std::string path = options_.data_directory + "/exports/defaults";
   const std::string temp = path + ".tmp";

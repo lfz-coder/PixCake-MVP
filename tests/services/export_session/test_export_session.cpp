@@ -4,6 +4,8 @@
 // into "name(1)", "original format" keeps the container, TIFF 16-bit, and
 // nothing while signed out (S-25).
 #include "pixcake/export_session/export_session.hpp"
+#include "pixcake/platform/mac_image_decoder.hpp"
+#include "pixcake/platform/mac_image_encoder.hpp"
 
 #include <sys/stat.h>
 #include <unistd.h>
@@ -175,6 +177,67 @@ int main() {
   assert(ExportSession::open(*projects, session, options, exports, diagnostic) == ResultCode::Ok);
   assert(exports->defaults().folder == out && exports->defaults().format == ExportFormat::Tiff16);
 
+  // Watermark: the material is stored by content (once), the export draws it
+  // with the landscape placement (the original is 40x30) -- a red 20x10
+  // material at size 25, centred, covers x 10..29, y 10..19 of the product.
+  {
+    std::vector<std::uint8_t> red(20 * 10 * 4);
+    for (std::size_t i = 0; i < red.size(); i += 4) red[i] = red[i + 3] = 255;
+    pixcake::platform::MacEncodeRequest png;
+    png.format = pixcake::platform::MacEncodeFormat::Png;
+    std::vector<std::uint8_t> encoded;
+    assert(pixcake::platform::mac_encode_image(png, 20, 10, 80, red.data(), red.size(), encoded, diagnostic) ==
+           ResultCode::Ok);
+    const std::string material_file = root + "/logo.png";
+    std::ofstream(material_file, std::ios::binary)
+        .write(reinterpret_cast<const char*>(encoded.data()), static_cast<std::streamsize>(encoded.size()));
+    std::string material;
+    assert(exports->store_watermark(material_file, material, diagnostic) == ResultCode::Ok);
+    std::string again;
+    assert(exports->store_watermark(material_file, again, diagnostic) == ResultCode::Ok && again == material);
+    assert(!read_all(exports->watermark_path(material)).empty());
+    ::unlink(material_file.c_str());  // the stored copy is what the export uses
+    std::string refused;
+    assert(exports->store_watermark(root + "/logo.gif", refused, diagnostic) == ResultCode::UnsupportedFormat);
+
+    ExportRequest marked = request;
+    marked.subfolder = "marked";
+    marked.settings.format = ExportFormat::Tiff;  // lossless, to read pixels back
+    marked.settings.quality.reset();
+    marked.settings.watermark.emplace();
+    marked.settings.watermark->material = material;
+    auto& landscape = marked.settings.watermark->placements[static_cast<int>(WatermarkShape::Landscape)];
+    landscape.size = 25;
+    landscape.anchor = 4;
+    landscape.x = landscape.y = 0;
+    assert(exports->submit(marked, notices, diagnostic) == ResultCode::Ok);
+    rows = settle(*exports);
+    assert(rows[0].status == "成功");
+    pixcake::platform::MacDecodeOptions options_decode;
+    options_decode.max_source_width = options_decode.max_source_height = 1000;
+    options_decode.max_source_pixels = 1000000;
+    pixcake::platform::MacDecodedImage product;
+    assert(pixcake::platform::mac_decode_image(rows[0].destination_path, options_decode, product, diagnostic) ==
+           ResultCode::Ok);
+    const auto pixel = [&](int x, int y) { return product.rgba.data() + (static_cast<std::size_t>(y) * 40 + x) * 4; };
+    assert(product.width == 40 && product.height == 30);
+    std::printf("watermarked product: centre %d %d %d, corner %d %d %d\n", pixel(20, 15)[0], pixel(20, 15)[1],
+                pixel(20, 15)[2], pixel(2, 2)[0], pixel(2, 2)[1], pixel(2, 2)[2]);
+    assert(pixel(20, 15)[0] > 240 && pixel(20, 15)[1] < 15 && pixel(10, 10)[0] > 240 && pixel(29, 19)[0] > 240);
+    assert(pixel(9, 15)[0] == pixel(2, 2)[0] && pixel(30, 15)[0] == pixel(2, 2)[0] && pixel(2, 2)[0] < 120);
+
+    // Remembered with the switch, across sessions.
+    ExportDefaults with = exports->defaults();
+    with.watermark_on = true;
+    with.watermark = marked.settings.watermark;
+    assert(exports->remember_defaults(with) == ResultCode::Ok);
+    exports.reset();
+    assert(ExportSession::open(*projects, session, options, exports, diagnostic) == ResultCode::Ok);
+    const auto back = exports->defaults();
+    assert(back.watermark_on && back.watermark && *back.watermark == *marked.settings.watermark);
+    assert(back.folder == out && back.format == ExportFormat::Tiff16);
+  }
+
   // A missing original is refused with a notice; signed out nothing is queued.
   ::rename((shoot + "/a.bmp").c_str(), (shoot + "/moved.bmp").c_str());
   assert(exports->submit(request, notices, diagnostic) == ResultCode::StateConflict);
@@ -182,7 +245,7 @@ int main() {
   ::rename((shoot + "/moved.bmp").c_str(), (shoot + "/a.bmp").c_str());
   session.in = false;
   assert(exports->submit(request, notices, diagnostic) == ResultCode::StateConflict);
-  assert(exports->rows().size() == 5);
+  assert(exports->rows().size() == 6);
 
   std::printf("export session ok\n");
   return 0;

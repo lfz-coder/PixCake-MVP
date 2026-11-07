@@ -32,7 +32,7 @@ ExportFormat format_of(pixcake::ExportFormat format) {
 }  // namespace
 
 ResultCode work_from_job(const ExportJob& job, const std::string& source_path, ExportWork& out,
-                         std::string& diagnostic) {
+                         std::string& diagnostic, const std::string& watermark_directory) {
   out = {};
   const auto document = EditDocument::decode(job.document_snapshot);
   if (!document) {
@@ -78,6 +78,15 @@ ResultCode work_from_job(const ExportJob& job, const std::string& source_path, E
   }
   work.encode.color_space = settings.convert_to_srgb ? "sRGB" : "";
   work.encode.limits.max_output_bytes = kMaxOutputBytes;
+  if (settings.watermark) {
+    if (watermark_directory.empty()) {
+      diagnostic = "水印素材目录没有配置";
+      return ResultCode::StateConflict;
+    }
+    // The material name is validated by the settings parser (no path separators).
+    work.watermark_path = watermark_directory + "/" + settings.watermark->material;
+    work.watermark = std::move(settings.watermark);
+  }
   out = std::move(work);
   diagnostic.clear();
   return ResultCode::Ok;
@@ -194,7 +203,7 @@ ResultCode ExportServer::run(preview_channel::Channel& channel, const ipc::Expor
 
   ExportWork work;
   std::string reason;
-  code = work_from_job(job, start.source_path, work, reason);
+  code = work_from_job(job, start.source_path, work, reason, watermark_directory_);
   if (code == ResultCode::Ok) code = service_.submit(std::move(work), reason);
   if (code != ResultCode::Ok) {
     queue.fail(start.export_id, code, reason);  // from 排队: nothing was drawn

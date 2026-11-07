@@ -190,6 +190,36 @@ void test_b32_b47_export_settings_parse_strictly() {
   EXPECT(pixcake::parse_export_settings("format=tiff16", settings) == pixcake::ResultCode::Ok);
   EXPECT(settings.format == pixcake::ExportFormat::Tiff16);
   EXPECT(pixcake::encode_export_settings(settings) == "format=tiff16");
+
+  // Watermark: the material and all three placements round-trip; a missing
+  // placement, a value out of range or a material that is not a stored name is refused.
+  {
+    pixcake::ExportSettings marked;
+    marked.format = pixcake::ExportFormat::Jpg;
+    marked.watermark.emplace();
+    marked.watermark->material = "0123456789abcdef-2048.png";
+    marked.watermark->placements[1] = {25, true, 50, 4, -10, 100, 3};
+    const std::string text = pixcake::encode_export_settings(marked);
+    EXPECT(text == "format=jpg;wm=0123456789abcdef-2048.png;wm.l=10,0,100,2,3,3,0;wm.p=25,1,50,4,-10,100,3;"
+                   "wm.s=10,0,100,2,3,3,0");
+    pixcake::ExportSettings back;
+    EXPECT(pixcake::parse_export_settings(text, back) == pixcake::ResultCode::Ok);
+    EXPECT(back.watermark.has_value() && *back.watermark == *marked.watermark);
+    for (const char* bad : {"format=jpg;wm=0123456789abcdef-2048.png;wm.l=10,0,100,2,3,3,0;wm.p=10,0,100,2,3,3,0",
+                            "format=jpg;wm.l=10,0,100,2,3,3,0;wm.p=10,0,100,2,3,3,0;wm.s=10,0,100,2,3,3,0",
+                            "format=jpg;wm=../x.png;wm.l=10,0,100,2,3,3,0;wm.p=10,0,100,2,3,3,0;wm.s=10,0,100,2,3,3,0",
+                            "format=jpg;wm=0123456789abcdef-2048.png;wm.l=101,0,100,2,3,3,0;wm.p=10,0,100,2,3,3,0;"
+                            "wm.s=10,0,100,2,3,3,0",
+                            "format=jpg;wm=0123456789abcdef-2048.png;wm.l=10,0,100,9,3,3,0;wm.p=10,0,100,2,3,3,0;"
+                            "wm.s=10,0,100,2,3,3,0",
+                            "format=jpg;wm=0123456789abcdef-2048.png;wm.l=10,0,100,2,3,3;wm.p=10,0,100,2,3,3,0;"
+                            "wm.s=10,0,100,2,3,3,0"}) {
+      EXPECT(pixcake::parse_export_settings(bad, back) == pixcake::ResultCode::StateConflict);
+    }
+    EXPECT(pixcake::watermark_shape(4000, 3000) == pixcake::WatermarkShape::Landscape);
+    EXPECT(pixcake::watermark_shape(1024, 1536) == pixcake::WatermarkShape::Portrait);
+    EXPECT(pixcake::watermark_shape(1000, 995) == pixcake::WatermarkShape::Square);
+  }
 }
 
 void test_b32_enqueue_rejects_duplicate_quality() {

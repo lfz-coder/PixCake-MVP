@@ -12,6 +12,10 @@
 
 #include <QApplication>
 #include <QDialog>
+#include <QScrollArea>
+#include <QSpinBox>
+#include <QToolButton>
+#include <QGroupBox>
 #include <QDoubleSpinBox>
 #include <QRadioButton>
 #include <QDir>
@@ -305,6 +309,23 @@ int smoke_export(pixcake::shell::ShellWindow& window, const QString& folder) {
               button != nullptr && button->isEnabled(), controller.has_exports(), controller.export_target().has_value());
     return 10;
   }
+  // A watermark remembered from an earlier export: a green 60x30 material,
+  // stored by the session (the file dialog is not driven here), switched on.
+  QTemporaryDir material_dir;
+  const QString material_file = material_dir.path() + QStringLiteral("/logo.png");
+  QImage green(60, 30, QImage::Format_RGBA8888);
+  green.fill(QColor(0, 200, 0));
+  std::string material;
+  std::string reason;
+  if (!green.save(material_file) || !controller.store_watermark(material_file.toStdString(), material, reason)) {
+    qCritical("watermark material not stored: %s", reason.c_str());
+    return 10;
+  }
+  auto remembered = controller.export_target()->defaults;
+  remembered.watermark_on = true;
+  remembered.watermark = pixcake::ExportWatermark{material, {}};
+  controller.remember_export_defaults(remembered);
+
   QString problem;
   QTimer::singleShot(0, [&] {
     auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
@@ -313,20 +334,41 @@ int smoke_export(pixcake::shell::ShellWindow& window, const QString& folder) {
       return;
     }
     auto* tabs = dialog->findChild<QTabBar*>(QStringLiteral("export-tabs"));
-    auto* watermark = dialog->findChild<QWidget*>(QStringLiteral("export-watermark"));
+    auto* watermark = dialog->findChild<QGroupBox*>(QStringLiteral("export-watermark"));
     auto* format = dialog->findChild<QComboBox*>(QStringLiteral("export-format"));
     auto* path = dialog->findChild<QLineEdit*>(QStringLiteral("export-folder"));
+    auto* material_button = dialog->findChild<QToolButton*>(QStringLiteral("export-wm-material"));
+    auto* portrait = dialog->findChild<QToolButton*>(QStringLiteral("export-wm-shape-portrait"));
+    auto* centre = dialog->findChild<QToolButton*>(QStringLiteral("export-wm-anchor-4"));
+    auto* top_left = dialog->findChild<QToolButton*>(QStringLiteral("export-wm-anchor-0"));
+    auto* x = dialog->findChild<QSpinBox*>(QStringLiteral("export-wm-x"));
+    auto* y = dialog->findChild<QSpinBox*>(QStringLiteral("export-wm-y"));
     if (tabs == nullptr || tabs->count() != 3 || tabs->isTabEnabled(2) || tabs->tabToolTip(2).isEmpty() ||
-        watermark == nullptr || watermark->isEnabled() || watermark->toolTip().isEmpty() || format == nullptr ||
-        format->count() != 4 || path == nullptr) {
+        watermark == nullptr || !watermark->isEnabled() || !watermark->isChecked() || material_button == nullptr ||
+        material_button->toolTip() != qtext_for_smoke("export.wm.replace") || portrait == nullptr ||
+        !portrait->isChecked() || centre == nullptr || top_left == nullptr || x == nullptr || y == nullptr ||
+        format == nullptr || format->count() != 4 || path == nullptr) {
       problem = QStringLiteral("export dialog controls differ from the observed dialog");
       dialog->reject();
       return;
     }
+    // The grid resets the two positions (observed): centre 0 / 0, a corner 3 / 3.
+    centre->click();
+    const bool centred = x->value() == 0 && y->value() == 0;
+    top_left->click();
+    if (!centred || x->value() != 3 || y->value() != 3) {
+      problem = QStringLiteral("the watermark grid did not reset the positions");
+      dialog->reject();
+      return;
+    }
+    x->setValue(0);
+    y->setValue(0);
     screenshot(*dialog, "export-quick");
     tabs->setCurrentIndex(1);
     for (auto* fold : dialog->findChildren<QAbstractButton*>(QStringLiteral("export-advanced"))) fold->setChecked(true);
     screenshot(*dialog, "export-custom");
+    if (auto* scroll = dialog->findChild<QScrollArea*>()) scroll->ensureWidgetVisible(watermark);
+    screenshot(*dialog, "export-watermark");
     format->setCurrentIndex(format->findData(QStringLiteral("jpg")));
     // 文件大小限制 0.10 MB instead of a quality.
     auto* by_size = dialog->findChild<QRadioButton*>(QStringLiteral("export-by-size"));
@@ -371,16 +413,22 @@ int smoke_export(pixcake::shell::ShellWindow& window, const QString& folder) {
   auto* list = window.findChild<QDialog*>(QStringLiteral("export-list-dialog"));
   auto* table = list != nullptr ? list->findChild<QTableWidget*>(QStringLiteral("export-list")) : nullptr;
   const qint64 bytes = QFileInfo(product).size();
+  // The watermark in the top-left corner: short edge 10% of the long edge.
+  const int edge = std::max(image.width(), image.height()) / 10;
+  const QColor mark = image.isNull() ? QColor() : image.pixelColor(edge, edge / 2);
+  const QColor beside = image.isNull() ? QColor() : image.pixelColor(edge * 3, edge / 2);
   if (!product.startsWith(folder) || !product.endsWith(QStringLiteral(".jpg")) || !(red > 200) || table == nullptr ||
-      table->rowCount() < 1 || bytes <= 0 || bytes > 104857) {  // 0.10 MB
-    qCritical("export product or list wrong: %s, red %.1f, %lld bytes", qPrintable(product), red,
-              static_cast<long long>(bytes));
+      table->rowCount() < 1 || bytes <= 0 || bytes > 104857 ||  // 0.10 MB
+      !(mark.green() > 150 && mark.red() < 90) || !(beside.red() > 150)) {
+    qCritical("export product or list wrong: %s, red %.1f, %lld bytes, watermark %d %d %d beside %d %d %d",
+              qPrintable(product), red, static_cast<long long>(bytes), mark.red(), mark.green(), mark.blue(),
+              beside.red(), beside.green(), beside.blue());
     return 10;
   }
   screenshot(*list, "export-list");
   list->close();
-  std::printf("export ok: %s, red %.1f, %lld bytes (limit 0.10 MB)\n", qPrintable(product), red,
-              static_cast<long long>(bytes));
+  std::printf("export ok: %s, red %.1f, %lld bytes (limit 0.10 MB), watermark %d %d %d\n", qPrintable(product), red,
+              static_cast<long long>(bytes), mark.red(), mark.green(), mark.blue());
   return 0;
 }
 

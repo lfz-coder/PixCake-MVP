@@ -295,6 +295,10 @@ if(TARGET pixcake_app_bundle)
   set_tests_properties(test_app_bundle PROPERTIES TIMEOUT 120)
 endif()
 
+add_executable(test_watermark apps/test_watermark.cpp)
+target_link_libraries(test_watermark PRIVATE pixcake_exportd_service pixcake_warnings)
+add_test(NAME test_watermark COMMAND test_watermark)
+
 add_executable(test_export_masks apps/test_export_masks.cpp)
 target_link_libraries(test_export_masks PRIVATE pixcake_exportd_service pixcake_warnings)
 add_test(NAME test_export_masks COMMAND test_export_masks)
@@ -395,7 +399,7 @@ endif()
 if(APPLE)
   # Against the real exportd (ImageIO decode and encode).
   add_executable(test_export_session services/export_session/test_export_session.cpp)
-  target_link_libraries(test_export_session PRIVATE pixcake_export_session pixcake_warnings)
+  target_link_libraries(test_export_session PRIVATE pixcake_export_session pixcake_platform_macos_image pixcake_warnings)
   target_compile_definitions(test_export_session PRIVATE PIXCAKE_EXPORTD_EXE="$<TARGET_FILE:pixcake_app_exportd>"
     PIXCAKE_TEST_WORK_DIR="${CMAKE_CURRENT_BINARY_DIR}")
   add_dependencies(test_export_session pixcake_app_exportd)

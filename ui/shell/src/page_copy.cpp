@@ -171,7 +171,26 @@ Texts build_texts() {
   t["export.queue.unavailable"] = "导出队列不可用，请稍后重试";
   t["export.why.preset"] = "预设还没有接入导出";
   t["export.why.upload"] = "上传选片交付需要云端服务，还没有接入";
-  t["export.why.watermark"] = "导出水印还没有接入";
+  t["export.wm.sync"] = "水印同步";
+  t["export.wm.material"] = "水印";
+  t["export.wm.upload"] = "点击上传素材";
+  t["export.wm.upload.hint"] = "支持JPG/PNG格式，单张不超10MB";
+  t["export.wm.replace"] = "替换";
+  t["export.wm.rotate"] = kWordRotate;
+  t["export.wm.ccw"] = "逆时针旋转";
+  t["export.wm.cw"] = "顺时针旋转";
+  t["export.wm.anchor"] = "定位";
+  t["export.wm.size"] = "大小";
+  t["export.wm.fit"] = "合适";
+  t["export.wm.opacity"] = "不透明度";
+  t["export.wm.x"] = "水平位置";
+  t["export.wm.y"] = "垂直位置";
+  t["export.wm.plain"] = "同时导出无水印图片";
+  t["export.wm.choose"] = "选择水印素材";
+  t["export.wm.need_material"] = "请先上传水印素材，或关闭水印";
+  t["export.wm.not_saved"] = "水印素材没有保存：";
+  t["export.why.wm_sync"] = "水印同步的作用还没有核实，暂不可用";
+  t["export.why.wm_plain"] = "同时导出无水印图片还没有接入";
   t["export.why.overlay"] = "保留叠加层的作用还没有核实，暂不可用";
   t["export.why.print"] = "排版印刷还没有接入";
   t["export.why.keep_path"] = "保留导入时的完整路径还没有接入";
@@ -773,6 +792,12 @@ Lists build_lists() {
   lists["export-formats"] = {item("original", "原始格式"), item("jpg", "JPG"), item("tiff", "TIFF8位"),
                              item("tiff16", "TIFF16位")};
   lists["export-quality-levels"] = {item("low", "低"), item("medium", "中"), item("high", "高"), item("best", "最佳")};
+  // 水印页签：编号与 kernel/exportq 的 WatermarkShape 顺序一致（横、竖、方）。
+  lists["export-wm-shapes"] = {item("landscape", "横图"), item("portrait", "竖图"), item("square", "方图")};
+  // 九宫格，按行从左上到右下（WatermarkPlacement::anchor 0..8）。
+  lists["export-wm-anchors"] = {item("0", "左上"), item("1", "上中"), item("2", "右上"), item("3", "左中"),
+                                item("4", "居中"), item("5", "右中"), item("6", "左下"), item("7", "下中"),
+                                item("8", "右下")};
   lists["export-list-columns"] = {item("file", "文件名"), item("status", "状态"), item("reason", "失败原因"),
                                   item("destination", "导出位置")};
   return lists;

@@ -1,5 +1,7 @@
 #include "pixcake/exportd/export_service.hpp"
 
+#include "pixcake/exportd/watermark.hpp"
+
 #include "pixcake/gl/native_backend.hpp"
 
 #include <cstdio>
@@ -70,16 +72,22 @@ ExportResult ExportService::produce(const ExportWork& work) {
   if (!decoder_ || !encoder_) {
     return refuse(ResultCode::UnsupportedFormat, "full-resolution image decoder and encoder are not registered");
   }
-  // Refused rather than exported without: a product missing an effect the
-  // preview shows is worse than a failure with its reason.
-  if (work.encode.include_watermark) {
-    return refuse(ResultCode::UnsupportedFormat, "导出水印还没有接入");
-  }
   bool masked = false;
   for (const auto& operation : work.description.operations) {
     masked = masked || (operation.enabled && !operation.mask_ids.empty());
   }
   if (masked && !masks_) return refuse(ResultCode::UnsupportedFormat, "导出蒙版没有接入，带局部调整的照片还不能导出");
+
+  // The watermark material first: a missing one fails before the original is drawn.
+  DecodedSource material;
+  if (work.watermark) {
+    std::string why;
+    const ExportDecodeLimits material_limits{kMaxWatermarkEdge, kMaxWatermarkEdge, kMaxWatermarkPixels};
+    const ResultCode read = work.watermark_path.empty()
+                                ? ResultCode::SourceMissing
+                                : decoder_->decode(work.watermark_path, material_limits, material, why);
+    if (read != ResultCode::Ok) return refuse(read, "水印素材无法读取" + (why.empty() ? std::string() : "：" + why));
+  }
 
   DecodedSource source;
   const ExportDecodeLimits limits{kMaxSourceEdge, kMaxSourceEdge, kMaxSourcePixels};
@@ -130,6 +138,16 @@ ExportResult ExportService::produce(const ExportWork& work) {
   pixels.height = rendered.image.height;
   pixels.stride = rendered.image.row_stride == 0 ? rendered.image.width * 4 : rendered.image.row_stride;
   pixels.rgba = std::move(rendered.image.pixels);
+  if (work.watermark) {
+    // The placement for the product's shape (横图 / 竖图 / 方图), after crop and rotation.
+    const auto shape = watermark_shape(pixels.width, pixels.height);
+    code = draw_watermark(material.pixels, work.watermark->placements[static_cast<int>(shape)], pixels,
+                          result.diagnostic);
+    if (code != ResultCode::Ok) {
+      result.code = code;
+      return result;
+    }
+  }
   ExportEncodeRequest request = work.encode;
   if (request.format == ExportFormat::Original) request.format = resolve_original_format(source.kind);
   result.format = request.format;

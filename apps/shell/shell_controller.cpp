@@ -444,6 +444,22 @@ std::vector<ExportRow> ShellController::export_rows() const {
   return exports_ ? exports_->rows() : std::vector<ExportRow>{};
 }
 
+bool ShellController::store_watermark(const std::string& path, std::string& material, std::string& reason) {
+  if (!exports_) {
+    reason = qtext("export.queue.unavailable").toStdString();
+    return false;
+  }
+  return exports_->store_watermark(path, material, reason) == ResultCode::Ok;
+}
+
+std::string ShellController::watermark_file(const std::string& material) const {
+  return exports_ ? exports_->watermark_path(material) : std::string();
+}
+
+void ShellController::remember_export_defaults(const ExportDefaults& defaults) {
+  if (exports_ && exports_->remember_defaults(defaults) != ResultCode::Ok) qWarning("export defaults not saved");
+}
+
 void ShellController::request_export_retry(const std::string& export_id) {
   if (!exports_) return;
   std::string diagnostic;

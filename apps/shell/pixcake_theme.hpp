@@ -52,6 +52,14 @@ struct PixCakeTheme final {
         background: #101010; color: #f4f4f4; border: 1px solid #383838; border-radius: 3px; padding: 2px 4px; }
       QDialog#export-dialog QDoubleSpinBox:disabled { color: #555555; }
       QToolButton#export-advanced { background: transparent; border: none; color: #f4f4f4; padding: 4px 0; }
+      QGroupBox#export-watermark QToolButton { background: #1d1d1d; color: #d5d5d5; border: 1px solid #383838;
+        border-radius: 3px; padding: 4px 14px; }
+      QGroupBox#export-watermark QToolButton:checked { background: #3a3a3a; color: #f4f4f4; }
+      QGroupBox#export-watermark QToolButton:hover { border-color: #5a5a5a; }
+      QGroupBox#export-watermark QToolButton[anchor="true"] { padding: 0; border-radius: 2px; }
+      QGroupBox#export-watermark QToolButton[anchor="true"]:checked { background: #ffe600; border-color: #ffe600; }
+      QToolButton#export-wm-material { background: #101010; color: #a4a4a4; border: 1px dashed #4a4a4a;
+        border-radius: 4px; padding: 8px; }
       QDialog#export-list-dialog QTableWidget { background: #101010; gridline-color: #292929; }
       QDialog#export-list-dialog QHeaderView::section { background: #1d1d1d; color: #a4a4a4; border: none; padding: 4px; }
       QFrame#workspace-top { border-bottom: 1px solid #292929; }

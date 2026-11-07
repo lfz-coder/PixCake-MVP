@@ -3,6 +3,7 @@
 #include "pixcake/exportd/export_masks.hpp"
 #include "pixcake/exportd/image_io.hpp"
 #include "pixcake/exportq/export_queue.hpp"
+#include "pixcake/exportq/export_settings.hpp"
 #include "pixcake/gpu/render_executor.hpp"
 #include "pixcake/persist/file_system.hpp"
 
@@ -10,6 +11,7 @@
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -22,6 +24,9 @@ struct ExportWork {
   // export uses the original's resolution, never a preview frame).
   std::string source_path;
   ExportEncodeRequest encode;
+  // 水印：素材文件与三套摆放（按成品的方向选一套），没有值就不加。
+  std::optional<ExportWatermark> watermark;
+  std::string watermark_path;
 };
 
 struct ExportResult {
@@ -68,6 +73,9 @@ class ExportService {
   // Limits of the decoded original, checked before pixels are allocated.
   static constexpr std::uint32_t kMaxSourceEdge = 65535;
   static constexpr std::uint64_t kMaxSourcePixels = 200'000'000;
+  // Limits of a watermark material (the dialog takes JPG/PNG up to 10 MB).
+  static constexpr std::uint32_t kMaxWatermarkEdge = 16384;
+  static constexpr std::uint64_t kMaxWatermarkPixels = 64'000'000;
 
  private:
   static ResultCode validate_work(const ExportWork&, std::string& diagnostic);

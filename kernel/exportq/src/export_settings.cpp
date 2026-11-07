@@ -2,6 +2,8 @@
 
 #include "pixcake/capability/capability_registry.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <limits>
 #include <set>
@@ -34,7 +36,114 @@ const char* format_name(ExportFormat format) {
   return "original";
 }
 
+const char* const kShapeKeys[3] = {"wm.l", "wm.p", "wm.s"};
+
+bool parse_int(const std::string& text, int low, int high, int& out) {
+  if (text.empty() || text.size() > 4) return false;
+  std::size_t at = 0;
+  const bool negative = text[0] == '-';
+  if (negative) at = 1;
+  if (at == text.size()) return false;
+  int value = 0;
+  for (; at < text.size(); ++at) {
+    if (text[at] < '0' || text[at] > '9') return false;
+    value = value * 10 + (text[at] - '0');
+  }
+  if (negative) value = -value;
+  if (value < low || value > high) return false;
+  out = value;
+  return true;
+}
+
+bool parse_placement(const std::string& text, WatermarkPlacement& out) {
+  int values[7] = {};
+  const int lows[7] = {0, 0, 0, 0, -100, -100, 0};
+  const int highs[7] = {100, 1, 100, 8, 100, 100, 3};
+  std::size_t begin = 0;
+  for (int i = 0; i < 7; ++i) {
+    const std::size_t end = text.find(',', begin);
+    if ((i < 6) == (end == std::string::npos)) return false;
+    const std::string part = text.substr(begin, end == std::string::npos ? std::string::npos : end - begin);
+    if (!parse_int(part, lows[i], highs[i], values[i])) return false;
+    begin = end + 1;
+  }
+  out = {values[0], values[1] == 1, values[2], values[3], values[4], values[5], values[6]};
+  return true;
+}
+
+std::string encode_placement(const WatermarkPlacement& p) {
+  return std::to_string(p.size) + "," + (p.fit ? "1" : "0") + "," + std::to_string(p.opacity) + "," +
+         std::to_string(p.anchor) + "," + std::to_string(p.x) + "," + std::to_string(p.y) + "," +
+         std::to_string(p.quarter_turns);
+}
+
 }  // namespace
+
+WatermarkShape watermark_shape(std::uint32_t width, std::uint32_t height) {
+  // 方图：长宽相差不超过 1%（test 版的判定没有测，取一个容得下取整误差的值）。
+  const std::uint64_t longer = std::max(width, height);
+  const std::uint64_t shorter = std::min(width, height);
+  if ((longer - shorter) * 100 <= longer) return WatermarkShape::Square;
+  return width > height ? WatermarkShape::Landscape : WatermarkShape::Portrait;
+}
+
+bool valid_watermark_material(const std::string& name) {
+  // <16 hex>-<bytes>.<png|jpg>
+  if (name.size() < 16 + 1 + 1 + 4 || name.size() > 64) return false;
+  for (std::size_t i = 0; i < 16; ++i) {
+    const char c = name[i];
+    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+  }
+  if (name[16] != '-') return false;
+  const std::string extension = name.substr(name.size() - 4);
+  if (extension != ".png" && extension != ".jpg") return false;
+  const std::string bytes = name.substr(17, name.size() - 4 - 17);
+  if (bytes.empty() || bytes.size() > 9) return false;
+  for (const char c : bytes) {
+    if (c < '0' || c > '9') return false;
+  }
+  return bytes[0] != '0';
+}
+
+namespace {
+std::int64_t percent_of(std::uint32_t length, int percent) {
+  return static_cast<std::int64_t>(std::llround(static_cast<double>(length) * percent / 100.0));
+}
+}  // namespace
+
+WatermarkRect place_watermark(std::uint32_t material_width, std::uint32_t material_height,
+                              const WatermarkPlacement& placement, std::uint32_t image_width,
+                              std::uint32_t image_height) {
+  WatermarkRect rect;
+  if (material_width == 0 || material_height == 0 || image_width == 0 || image_height == 0) return rect;
+  const bool swap = placement.quarter_turns % 2 == 1;
+  const double turned_width = swap ? material_height : material_width;
+  const double turned_height = swap ? material_width : material_height;
+  double scale = 0.0;
+  if (placement.fit) {
+    scale = std::min(image_width / turned_width, image_height / turned_height);
+  } else {
+    const double short_edge = std::min(material_width, material_height);
+    scale = std::max(image_width, image_height) * (placement.size / 100.0) / short_edge;
+  }
+  const auto width = static_cast<std::uint32_t>(std::llround(turned_width * scale));
+  const auto height = static_cast<std::uint32_t>(std::llround(turned_height * scale));
+  if (width == 0 || height == 0) return rect;
+  rect.width = std::min(width, placement.fit ? image_width : width);
+  rect.height = std::min(height, placement.fit ? image_height : height);
+
+  const int column = placement.anchor % 3;
+  const int row = placement.anchor / 3;
+  const bool full_width = placement.fit && rect.width >= image_width;
+  const bool full_height = placement.fit && rect.height >= image_height;
+  const std::int64_t dx = full_width ? 0 : percent_of(image_width, placement.x);
+  const std::int64_t dy = full_height ? 0 : percent_of(image_height, placement.y);
+  const std::int64_t free_x = static_cast<std::int64_t>(image_width) - rect.width;
+  const std::int64_t free_y = static_cast<std::int64_t>(image_height) - rect.height;
+  rect.left = column == 0 ? dx : column == 2 ? free_x - dx : free_x / 2 + dx;
+  rect.top = row == 0 ? dy : row == 2 ? free_y - dy : free_y / 2 + dy;
+  return rect;
+}
 
 ResultCode parse_export_settings(const std::string& text, ExportSettings& out) {
   ExportSettings parsed;
@@ -77,6 +186,14 @@ ResultCode parse_export_settings(const std::string& text, ExportSettings& out) {
         return ResultCode::StateConflict;
       }
       parsed.print_copies = static_cast<int>(number);
+    } else if (key == "wm") {
+      if (!valid_watermark_material(value)) return ResultCode::StateConflict;
+      if (!parsed.watermark) parsed.watermark.emplace();
+      parsed.watermark->material = value;
+    } else if (key == kShapeKeys[0] || key == kShapeKeys[1] || key == kShapeKeys[2]) {
+      const int shape = key == kShapeKeys[0] ? 0 : key == kShapeKeys[1] ? 1 : 2;
+      if (!parsed.watermark) parsed.watermark.emplace();
+      if (!parse_placement(value, parsed.watermark->placements[shape])) return ResultCode::StateConflict;
     } else {
       return ResultCode::StateConflict;
     }
@@ -84,6 +201,11 @@ ResultCode parse_export_settings(const std::string& text, ExportSettings& out) {
     begin = end + 1;
   }
   if (parsed.quality.has_value() && parsed.size_limit_kb.has_value()) return ResultCode::StateConflict;
+  // A watermark names its material and all three placements.
+  if (parsed.watermark && (!seen.count("wm") || !seen.count(kShapeKeys[0]) || !seen.count(kShapeKeys[1]) ||
+                           !seen.count(kShapeKeys[2]))) {
+    return ResultCode::StateConflict;
+  }
   out = parsed;
   return ResultCode::Ok;
 }
@@ -94,6 +216,12 @@ std::string encode_export_settings(const ExportSettings& settings) {
   if (settings.size_limit_kb) text += ";size_limit_kb=" + std::to_string(*settings.size_limit_kb);
   if (settings.convert_to_srgb) text += ";srgb=1";
   if (settings.print_copies > 0) text += ";copies=" + std::to_string(settings.print_copies);
+  if (settings.watermark) {
+    text += ";wm=" + settings.watermark->material;
+    for (int shape = 0; shape < 3; ++shape) {
+      text += std::string(";") + kShapeKeys[shape] + "=" + encode_placement(settings.watermark->placements[shape]);
+    }
+  }
   return text;
 }
 

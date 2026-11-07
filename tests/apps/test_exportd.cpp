@@ -291,11 +291,15 @@ int main() {
     assert(service.retry_pending(queue, diagnostic) == ResultCode::Ok);
     assert(queue.status("export-3") == "排队");
 
+    // A watermark whose material is gone fails with the reason.
     auto watermark = work("export-4", source, dir.path() + "/out/w.jpg", dir.path() + "/out");
-    watermark.encode.include_watermark = true;
+    watermark.watermark.emplace();
+    watermark.watermark->material = "0123456789abcdef-10.png";
+    watermark.watermark_path = dir.path() + "/no-such-material.png";
     ExportService other;
     assert(other.submit(std::move(watermark), diagnostic) == ResultCode::Ok);
-    assert(other.process_next().code == ResultCode::UnsupportedFormat);
+    const auto missing = other.process_next();
+    assert(missing.code != ResultCode::Ok && missing.diagnostic.find("水印素材") != std::string::npos);
   }
 
   // Masks at full resolution come from the mask source: a local exposure +1

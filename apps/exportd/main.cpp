@@ -68,6 +68,7 @@ int serve_exports(const std::string& socket_path, const std::string& data_direct
     log->write(record);
   }
   pixcake::exportd::ExportServer server(service, *export_log, exports + "/cache", files, log);
+  server.set_watermark_directory(exports + "/watermarks");
   channel::Channel session{std::move(connection)};
   if (server.serve(session, diagnostic) != pixcake::ResultCode::Ok) {
     std::cerr << "pixcake_app_exportd: " << diagnostic << '\n';

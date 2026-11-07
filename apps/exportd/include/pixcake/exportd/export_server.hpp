@@ -19,8 +19,9 @@ namespace pixcake::exportd {
 // render description, the settings snapshot mapped to encode settings.
 // UnsupportedFormat with a reason for settings the export cannot honour yet
 // (file size limit, printing).
+// `watermark_directory` holds the materials a watermark names (<data>/exports/watermarks).
 ResultCode work_from_job(const ExportJob& job, const std::string& source_path, ExportWork& out,
-                         std::string& diagnostic);
+                         std::string& diagnostic, const std::string& watermark_directory = std::string());
 
 // exportd's side of the shell connection (architecture 10: the main process
 // enqueues through the command entry and hands the task over by IPC; exportd
@@ -41,6 +42,8 @@ class ExportServer {
   // nothing arrived and nothing was queued.  For tests.
   ResultCode step(preview_channel::Channel& channel, int timeout_ms, std::string& diagnostic);
   std::size_t waiting() const { return waiting_.size(); }
+  // Where watermark materials are stored (<data>/exports/watermarks).
+  void set_watermark_directory(std::string directory) { watermark_directory_ = std::move(directory); }
 
  private:
   ResultCode read(preview_channel::Channel& channel, int timeout_ms, std::string& diagnostic);
@@ -48,6 +51,7 @@ class ExportServer {
   ResultCode report(preview_channel::Channel& channel, const std::string& export_id, const std::string& batch_id,
                     const std::string& status, ResultCode code, const std::string& reason, std::string& diagnostic);
   void note(const char* event, ResultCode code, const std::string& message);
+  std::string watermark_directory_;
 
   ExportService& service_;
   ExportEventLog& log_;

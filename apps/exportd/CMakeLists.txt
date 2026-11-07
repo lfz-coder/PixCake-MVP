@@ -4,6 +4,7 @@ add_library(pixcake_exportd_service
   src/system_image_codec.cpp
   src/export_server.cpp
   src/export_masks.cpp
+  src/watermark.cpp
 )
 target_include_directories(pixcake_exportd_service PUBLIC include)
 target_link_libraries(pixcake_exportd_service PUBLIC

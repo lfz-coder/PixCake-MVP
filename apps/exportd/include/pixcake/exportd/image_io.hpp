@@ -46,7 +46,6 @@ struct ExportEncodeRequest {
   // Requirement 19: empty keeps the original colour space (default), "sRGB"
   // converts to sRGB.  Nothing else is offered.
   std::string color_space;
-  bool include_watermark = false;
   ExportEncodeLimits limits;
   // Filled by the export service from the decoded original: its ICC profile
   // (kept when color_space is empty) and whether the pixels carry alpha.

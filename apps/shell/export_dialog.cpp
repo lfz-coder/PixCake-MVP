@@ -13,9 +13,11 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
+#include <QGridLayout>
 #include <QGroupBox>
 #include <QHeaderView>
 #include <QMessageBox>
+#include <QPainter>
 #include <QPointer>
 #include <QRadioButton>
 #include <QScrollArea>
@@ -29,6 +31,7 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace pixcake::shell {
@@ -141,6 +144,7 @@ class ExportDialog final : public QDialog {
     connect(tabs_, &QTabBar::currentChanged, this, [this](int) { showTab(); });
     tabs_->setCurrentIndex(0);
     showTab();
+    updatePreview();
   }
 
  private:
@@ -293,13 +297,247 @@ class ExportDialog final : public QDialog {
     return frame;
   }
 
+  // 一行“名称 + 滑杆 + 数值框”，两者联动。
+  struct SliderRow {
+    QSlider* slider = nullptr;
+    QSpinBox* spin = nullptr;
+  };
+  SliderRow sliderRow(QFormLayout* layout, QWidget* parent, const char* name, const char* object, int low, int high) {
+    SliderRow row;
+    auto* line = new QHBoxLayout;
+    row.slider = new QSlider(Qt::Horizontal, parent);
+    row.slider->setRange(low, high);
+    row.slider->setAccessibleName(qtext(name));
+    row.spin = new QSpinBox(parent);
+    row.spin->setRange(low, high);
+    row.spin->setObjectName(QString::fromLatin1(object));
+    row.spin->setAccessibleName(qtext(name));
+    connect(row.slider, &QSlider::valueChanged, row.spin, &QSpinBox::setValue);
+    connect(row.spin, &QSpinBox::valueChanged, row.slider, &QSlider::setValue);
+    connect(row.spin, &QSpinBox::valueChanged, this, [this] { storePlacement(); });
+    line->addWidget(row.slider, 1);
+    line->addWidget(row.spin);
+    layout->addRow(qtext(name), line);
+    return row;
+  }
+
+  // 水印（test 版实测，docs/superpowers/evidence/2026-11-07-watermark-observation.md）：标题上的勾选就是开关；
+  // 横图 / 竖图 / 方图三套参数，素材共用；九宫格选位置时两个位置值按格子重置。
   QWidget* buildWatermark() {
     auto* group = new QGroupBox(qtext("export.watermark"), this);
     group->setObjectName(QStringLiteral("export-watermark"));
+    group->setAccessibleName(qtext("export.watermark"));
     group->setCheckable(true);
-    group->setChecked(false);  // 实测默认关
-    unavailable(group, "export.why.watermark");
+    group->setChecked(target_.defaults.watermark_on);  // 实测默认关；之后记住上次的
+    if (target_.defaults.watermark) {
+      material_ = target_.defaults.watermark->material;
+      placements_ = target_.defaults.watermark->placements;
+    }
+    auto* layout = new QFormLayout(group);
+
+    auto* shapes_row = new QHBoxLayout;
+    shapes_ = new QButtonGroup(group);
+    int index = 0;
+    for (const auto& entry : ui::shell::page_list("export-wm-shapes")) {
+      auto* button = new QToolButton(group);
+      button->setObjectName(QStringLiteral("export-wm-shape-") + qs(entry.id));
+      button->setText(qs(entry.text));
+      button->setAccessibleName(qs(entry.text));
+      button->setCheckable(true);
+      shapes_->addButton(button, index++);
+      shapes_row->addWidget(button);
+    }
+    shapes_row->addStretch();
+    auto* sync = new PixCakeButton(qtext("export.wm.sync"), group);
+    unavailable(sync, "export.why.wm_sync");
+    shapes_row->addWidget(sync);
+    layout->addRow(shapes_row);
+
+    material_button_ = new QToolButton(group);
+    material_button_->setObjectName(QStringLiteral("export-wm-material"));
+    material_button_->setAccessibleName(qtext("export.wm.material"));
+    material_button_->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    material_button_->setIconSize(QSize(120, 60));
+    material_button_->setMinimumWidth(200);
+    connect(material_button_, &QToolButton::clicked, this, [this] { chooseMaterial(); });
+    layout->addRow(qtext("export.wm.material"), material_button_);
+
+    auto* rotate = new QHBoxLayout;
+    for (const bool clockwise : {false, true}) {
+      auto* button = new QToolButton(group);
+      const QString name = qtext(clockwise ? "export.wm.cw" : "export.wm.ccw");
+      button->setObjectName(clockwise ? QStringLiteral("export-wm-cw") : QStringLiteral("export-wm-ccw"));
+      button->setText(clockwise ? QStringLiteral("\u21bb") : QStringLiteral("\u21ba"));
+      button->setToolTip(name);
+      button->setAccessibleName(name);
+      connect(button, &QToolButton::clicked, this, [this, clockwise] {
+        auto& placement = placements_[static_cast<std::size_t>(shape_)];
+        placement.quarter_turns = (placement.quarter_turns + (clockwise ? 1 : 3)) % 4;
+        updatePreview();
+      });
+      rotate->addWidget(button);
+    }
+    rotate->addStretch();
+    layout->addRow(qtext("export.wm.rotate"), rotate);
+
+    auto* grid = new QGridLayout;
+    grid->setSpacing(2);
+    anchors_ = new QButtonGroup(group);
+    const auto& anchor_names = ui::shell::page_list("export-wm-anchors");
+    for (int cell = 0; cell < 9; ++cell) {
+      auto* button = new QToolButton(group);
+      button->setObjectName(QStringLiteral("export-wm-anchor-%1").arg(cell));
+      button->setAccessibleName(qs(anchor_names[static_cast<std::size_t>(cell)].text));
+      button->setToolTip(button->accessibleName());
+      button->setCheckable(true);
+      button->setFixedSize(20, 20);
+      button->setProperty("anchor", true);
+      anchors_->addButton(button, cell);
+      grid->addWidget(button, cell / 3, cell % 3);
+    }
+    auto* grid_row = new QHBoxLayout;
+    grid_row->addLayout(grid);
+    grid_row->addStretch();
+    layout->addRow(qtext("export.wm.anchor"), grid_row);
+    connect(anchors_, &QButtonGroup::idClicked, this, [this](int cell) {
+      // 实测：角上 3 / 3，左中右中 3 / 0，中间 0 / 0；上中下中 0 / 3 按对称推断。
+      const bool middle_column = cell % 3 == 1;
+      const bool middle_row = cell / 3 == 1;
+      loading_ = true;
+      x_.spin->setValue(middle_column ? 0 : 3);
+      y_.spin->setValue(middle_row ? 0 : 3);
+      loading_ = false;
+      storePlacement();
+    });
+
+    wm_size_ = sliderRow(layout, group, "export.wm.size", "export-wm-size", 0, 100);
+    fit_ = new QCheckBox(qtext("export.wm.fit"), group);
+    fit_->setObjectName(QStringLiteral("export-wm-fit"));
+    connect(fit_, &QCheckBox::toggled, this, [this] { storePlacement(); });
+    layout->addRow(fit_);
+    opacity_ = sliderRow(layout, group, "export.wm.opacity", "export-wm-opacity", 0, 100);
+    x_ = sliderRow(layout, group, "export.wm.x", "export-wm-x", -100, 100);
+    y_ = sliderRow(layout, group, "export.wm.y", "export-wm-y", -100, 100);
+    auto* plain = new QCheckBox(qtext("export.wm.plain"), group);
+    unavailable(plain, "export.why.wm_plain");
+    layout->addRow(plain);
+
+    connect(shapes_, &QButtonGroup::idClicked, this, [this](int shape) {
+      shape_ = shape;
+      loadPlacement();
+    });
+    connect(group, &QGroupBox::toggled, this, [this] { updatePreview(); });
+    // 打开时停在当前照片的方向（按缩略图的比例）。
+    const QImage thumb = target_.photo_ids.empty() ? QImage() : actions_->thumbnail(target_.photo_ids.front());
+    photo_shape_ = thumb.isNull() ? 0
+                                  : static_cast<int>(watermark_shape(static_cast<std::uint32_t>(thumb.width()),
+                                                                     static_cast<std::uint32_t>(thumb.height())));
+    shape_ = photo_shape_;
+    shapes_->button(shape_)->setChecked(true);
+    loadMaterial();
+    loadPlacement();
     return group;
+  }
+
+  // 当前页签的参数写进控件（不回写）。
+  void loadPlacement() {
+    const auto& placement = placements_[static_cast<std::size_t>(shape_)];
+    loading_ = true;
+    wm_size_.spin->setValue(placement.size);
+    fit_->setChecked(placement.fit);
+    opacity_.spin->setValue(placement.opacity);
+    x_.spin->setValue(placement.x);
+    y_.spin->setValue(placement.y);
+    anchors_->button(placement.anchor)->setChecked(true);
+    loading_ = false;
+    wm_size_.slider->setEnabled(!placement.fit);  // 合适时大小置灰（实测）
+    wm_size_.spin->setEnabled(!placement.fit);
+    updatePreview();
+  }
+
+  void storePlacement() {
+    if (loading_ || anchors_ == nullptr) return;
+    auto& placement = placements_[static_cast<std::size_t>(shape_)];
+    placement.size = wm_size_.spin->value();
+    placement.fit = fit_->isChecked();
+    placement.opacity = opacity_.spin->value();
+    placement.x = x_.spin->value();
+    placement.y = y_.spin->value();
+    placement.anchor = std::max(0, anchors_->checkedId());
+    wm_size_.slider->setEnabled(!placement.fit);
+    wm_size_.spin->setEnabled(!placement.fit);
+    updatePreview();
+  }
+
+  void loadMaterial() {
+    material_image_ = material_.empty() ? QImage() : QImage(qs(actions_->watermark_file(material_)));
+    if (material_image_.isNull()) {
+      material_button_->setIcon(QIcon());
+      material_button_->setText(qtext("export.wm.upload") + QStringLiteral("\n") + qtext("export.wm.upload.hint"));
+      material_button_->setToolTip(QString());
+    } else {
+      material_button_->setIcon(QIcon(QPixmap::fromImage(material_image_)));
+      material_button_->setText(QString());
+      material_button_->setToolTip(qtext("export.wm.replace"));
+    }
+    material_button_->setAccessibleDescription(material_button_->toolTip());
+  }
+
+  void chooseMaterial() {
+    const QString path = QFileDialog::getOpenFileName(this, qtext("export.wm.choose"), QDir::homePath(),
+                                                      QStringLiteral("JPG/PNG (*.png *.jpg *.jpeg)"));
+    if (path.isEmpty()) return;
+    std::string material;
+    std::string reason;
+    if (!actions_->store_watermark(path.toStdString(), material, reason)) {
+      QMessageBox::warning(this, windowTitle(), qtext("export.wm.not_saved") + qs(reason));
+      return;
+    }
+    material_ = material;
+    loadMaterial();
+    updatePreview();
+  }
+
+  // 左侧预览：缩略图上按当前照片方向那一套画出水印（与 exportd 同一套摆放规则）。
+  void updatePreview() {
+    if (preview_ == nullptr) return;
+    const QImage thumb = target_.photo_ids.empty() ? QImage() : actions_->thumbnail(target_.photo_ids.front());
+    if (thumb.isNull()) return;
+    QImage frame = thumb.scaled(320, 320, Qt::KeepAspectRatio, Qt::SmoothTransformation)
+                       .convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    if (watermark_ != nullptr && static_cast<QGroupBox*>(watermark_)->isChecked() && !material_image_.isNull()) {
+      const auto& placement = placements_[static_cast<std::size_t>(photo_shape_)];
+      const WatermarkRect rect = place_watermark(static_cast<std::uint32_t>(material_image_.width()),
+                                                 static_cast<std::uint32_t>(material_image_.height()), placement,
+                                                 static_cast<std::uint32_t>(frame.width()),
+                                                 static_cast<std::uint32_t>(frame.height()));
+      if (rect.width > 0 && rect.height > 0) {
+        QPainter painter(&frame);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform);
+        painter.setOpacity(placement.opacity / 100.0);
+        painter.translate(rect.left + rect.width / 2.0, rect.top + rect.height / 2.0);
+        painter.rotate(90.0 * placement.quarter_turns);
+        const bool swap = placement.quarter_turns % 2 == 1;
+        const double w = swap ? rect.height : rect.width;
+        const double h = swap ? rect.width : rect.height;
+        painter.drawImage(QRectF(-w / 2.0, -h / 2.0, w, h), material_image_);
+      }
+    }
+    preview_->setPixmap(QPixmap::fromImage(frame));
+  }
+
+  // 记住水印开关和参数（导出时随默认值一起写；取消时单独写）。
+  ExportDefaults withWatermark(ExportDefaults defaults) const {
+    defaults.watermark_on = static_cast<QGroupBox*>(watermark_)->isChecked();
+    if (!material_.empty()) {
+      defaults.watermark = ExportWatermark{material_, placements_};
+    }
+    return defaults;
+  }
+
+  void done(int result) override {
+    if (result == QDialog::Rejected) actions_->remember_export_defaults(withWatermark(target_.defaults));
+    QDialog::done(result);
   }
 
   void setQuality(int value) {
@@ -366,8 +604,15 @@ class ExportDialog final : public QDialog {
       request.settings.quality = quality_->value();
     }
     request.settings.convert_to_srgb = srgb_->isChecked();
+    if (static_cast<QGroupBox*>(watermark_)->isChecked()) {
+      if (material_.empty()) {
+        QMessageBox::warning(this, windowTitle(), qtext("export.wm.need_material"));
+        return;
+      }
+      request.settings.watermark = ExportWatermark{material_, placements_};
+    }
 
-    ExportDefaults defaults = target_.defaults;
+    ExportDefaults defaults = withWatermark(target_.defaults);
     if (remember_folder_->isChecked() && !request.original_folder) defaults.folder = request.folder;
     if (remember_format_->isChecked()) defaults.format = request.settings.format;
     bool ok = false;
@@ -407,6 +652,21 @@ class ExportDialog final : public QDialog {
   QComboBox* level_ = nullptr;
   QSlider* slider_ = nullptr;
   QCheckBox* srgb_ = nullptr;
+  // 水印
+  std::string material_;
+  QImage material_image_;
+  std::array<WatermarkPlacement, 3> placements_{};
+  int shape_ = 0;        // 正在编辑的页签
+  int photo_shape_ = 0;  // 当前照片的方向（预览用这一套）
+  bool loading_ = false;
+  QButtonGroup* shapes_ = nullptr;
+  QButtonGroup* anchors_ = nullptr;
+  QToolButton* material_button_ = nullptr;
+  SliderRow wm_size_;
+  QCheckBox* fit_ = nullptr;
+  SliderRow opacity_;
+  SliderRow x_;
+  SliderRow y_;
 };
 
 class ExportList final : public QDialog {
