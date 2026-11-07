@@ -72,6 +72,10 @@ class ExportService {
  private:
   static ResultCode validate_work(const ExportWork&, std::string& diagnostic);
   ExportResult produce(const ExportWork& work);
+  // Encodes within request.size_limit_bytes: the highest JPEG quality whose
+  // product fits (binary search on the encoder's 0..1 quality).
+  ResultCode encode_within_limit(const ExportEncodeRequest& request, const RgbaSource& pixels, EncodedProduct& out,
+                                 std::string& diagnostic);
   bool gpu_ready();
 
   std::deque<ExportWork> pending_;

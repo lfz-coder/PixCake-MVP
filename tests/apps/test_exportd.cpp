@@ -354,6 +354,69 @@ int main() {
     assert(refused.code == ResultCode::UnsupportedFormat && refused.diagnostic == "no segmentation here");
   }
 
+  // 文件大小限制: the largest JPEG quality that fits.  A noisy original makes
+  // the size depend strongly on quality.
+  {
+    const std::string noisy = dir.path() + "/noisy.png";
+    {
+      std::vector<std::uint8_t> rgba(400 * 300 * 4);
+      std::uint32_t state = 12345;
+      for (std::size_t i = 0; i < rgba.size(); ++i) {
+        state = state * 1664525u + 1013904223u;
+        rgba[i] = (i % 4 == 3) ? 255 : static_cast<std::uint8_t>(state >> 24);
+      }
+      pixcake::platform::MacEncodeRequest png;
+      png.format = pixcake::platform::MacEncodeFormat::Png;
+      std::vector<std::uint8_t> bytes;
+      assert(pixcake::platform::mac_encode_image(png, 400, 300, 400 * 4, rgba.data(), rgba.size(), bytes,
+                                                 diagnostic) == ResultCode::Ok);
+      pixcake::PosixFileSystem files;
+      assert(files.write_new(noisy, bytes).ok);
+    }
+    const auto size_at = [&](std::uint8_t quality) {
+      ExportService service;
+      auto at = work("size-q", noisy, dir.path() + "/s.jpg", dir.path());
+      at.encode.format = ExportFormat::Jpeg;
+      at.encode.quality = quality;
+      assert(service.submit(std::move(at), diagnostic) == ResultCode::Ok);
+      const auto product = service.process_next();
+      assert(product.code == ResultCode::Ok);
+      return product.product.size();
+    };
+    // ImageIO's JPEG size grows smoothly with quality below 1.0 and jumps at
+    // 1.0 (near lossless): take a limit inside the smooth range.
+    const std::size_t smallest = size_at(0);
+    const std::size_t largest = size_at(12);
+    const std::uint64_t limit = (size_at(7) + largest) / 2;
+    ExportService service;
+    auto limited = work("size-1", noisy, dir.path() + "/s.jpg", dir.path());
+    limited.encode.format = ExportFormat::Jpeg;
+    limited.encode.size_limit_bytes = limit;
+    assert(service.submit(std::move(limited), diagnostic) == ResultCode::Ok);
+    const auto product = service.process_next();
+    std::printf("size limit %llu bytes (quality 0: %zu, 12: %zu): product %zu bytes\n",
+                static_cast<unsigned long long>(limit), smallest, largest, product.product.size());
+    assert(product.code == ResultCode::Ok && product.product.size() <= limit);
+    assert(product.product.size() > limit * 9 / 10);  // the search gets close to the limit
+
+    // Below what the lowest quality produces: fails with the sizes in the reason.
+    ExportService tiny;
+    auto impossible = work("size-2", noisy, dir.path() + "/s.jpg", dir.path());
+    impossible.encode.format = ExportFormat::Jpeg;
+    impossible.encode.size_limit_bytes = smallest / 2;
+    assert(tiny.submit(std::move(impossible), diagnostic) == ResultCode::Ok);
+    const auto refused = tiny.process_next();
+    assert(refused.code == ResultCode::UnsupportedFormat && refused.diagnostic.find("MB") != std::string::npos);
+
+    // Only for JPG.
+    ExportService tiff;
+    auto wide = work("size-3", noisy, dir.path() + "/s.tif", dir.path());
+    wide.encode.format = ExportFormat::Tiff;
+    wide.encode.size_limit_bytes = limit;
+    assert(tiff.submit(std::move(wide), diagnostic) == ResultCode::Ok);
+    assert(tiff.process_next().code == ResultCode::UnsupportedFormat);
+  }
+
   // Quality 0..14: a higher quality keeps more detail, so the file is larger.
   {
     ExportService service;

@@ -12,6 +12,8 @@
 
 #include <QApplication>
 #include <QDialog>
+#include <QDoubleSpinBox>
+#include <QRadioButton>
 #include <QDir>
 #include <QFile>
 #include <QFileOpenEvent>
@@ -324,6 +326,16 @@ int smoke_export(pixcake::shell::ShellWindow& window, const QString& folder) {
     for (auto* fold : dialog->findChildren<QAbstractButton*>(QStringLiteral("export-advanced"))) fold->setChecked(true);
     screenshot(*dialog, "export-custom");
     format->setCurrentIndex(format->findData(QStringLiteral("jpg")));
+    // 文件大小限制 0.10 MB instead of a quality.
+    auto* by_size = dialog->findChild<QRadioButton*>(QStringLiteral("export-by-size"));
+    auto* size = dialog->findChild<QDoubleSpinBox*>(QStringLiteral("export-size-limit"));
+    if (by_size == nullptr || size == nullptr || size->isEnabled() || size->value() != 10.0) {
+      problem = QStringLiteral("size limit controls missing, enabled while unselected, or not 10.00 MB");
+      dialog->reject();
+      return;
+    }
+    by_size->setChecked(true);
+    size->setValue(0.10);
     path->setText(folder);
     for (auto* submit : dialog->findChildren<QPushButton*>()) {
       if (submit->objectName() == QStringLiteral("primary")) submit->click();
@@ -356,14 +368,17 @@ int smoke_export(pixcake::shell::ShellWindow& window, const QString& folder) {
   const double red = mean_red(image);
   auto* list = window.findChild<QDialog*>(QStringLiteral("export-list-dialog"));
   auto* table = list != nullptr ? list->findChild<QTableWidget*>(QStringLiteral("export-list")) : nullptr;
+  const qint64 bytes = QFileInfo(product).size();
   if (!product.startsWith(folder) || !product.endsWith(QStringLiteral(".jpg")) || !(red > 200) || table == nullptr ||
-      table->rowCount() < 1) {
-    qCritical("export product or list wrong: %s, red %.1f", qPrintable(product), red);
+      table->rowCount() < 1 || bytes <= 0 || bytes > 104857) {  // 0.10 MB
+    qCritical("export product or list wrong: %s, red %.1f, %lld bytes", qPrintable(product), red,
+              static_cast<long long>(bytes));
     return 10;
   }
   screenshot(*list, "export-list");
   list->close();
-  std::printf("export ok: %s, red %.1f\n", qPrintable(product), red);
+  std::printf("export ok: %s, red %.1f, %lld bytes (limit 0.10 MB)\n", qPrintable(product), red,
+              static_cast<long long>(bytes));
   return 0;
 }
 

@@ -28,6 +28,9 @@
 #include <QUrl>
 #include <QVBoxLayout>
 
+#include <algorithm>
+#include <cmath>
+
 namespace pixcake::shell {
 namespace {
 
@@ -228,15 +231,18 @@ class ExportDialog final : public QDialog {
     auto* quality_layout = new QVBoxLayout(quality_group_);
     auto* choice = new QButtonGroup(quality_group_);
     auto* size_row = new QHBoxLayout;
-    auto* by_size = new QRadioButton(qtext("export.size_limit"), quality_group_);
-    auto* size = new QDoubleSpinBox(quality_group_);
-    size->setSuffix(QStringLiteral(" MB"));
-    size->setValue(10.0);  // 实测默认 10.00 MB
-    unavailable(by_size, "export.why.size_limit");
-    unavailable(size, "export.why.size_limit");
-    choice->addButton(by_size);
-    size_row->addWidget(by_size);
-    size_row->addWidget(size);
+    by_size_ = new QRadioButton(qtext("export.size_limit"), quality_group_);
+    by_size_->setObjectName(QStringLiteral("export-by-size"));
+    size_ = new QDoubleSpinBox(quality_group_);
+    size_->setObjectName(QStringLiteral("export-size-limit"));
+    size_->setAccessibleName(qtext("export.size_limit"));
+    size_->setSuffix(QStringLiteral(" MB"));
+    size_->setDecimals(2);
+    size_->setRange(0.01, 1000.0);  // 1 MB = 1024 KB；上限是本项目定的
+    size_->setValue(10.0);           // 实测默认 10.00 MB
+    choice->addButton(by_size_);
+    size_row->addWidget(by_size_);
+    size_row->addWidget(size_);
     size_row->addStretch();
     quality_layout->addLayout(size_row);
 
@@ -272,6 +278,9 @@ class ExportDialog final : public QDialog {
     connect(slider_, &QSlider::valueChanged, this, [this](int value) { setQuality(value); });
     connect(level_, &QComboBox::activated, this, [this](int index) { setQuality(kLevelValues[index]); });
     setQuality(kDefaultQuality);
+    // 二选一：没选中的一边置灰（实测：未选时文件大小数值框置灰）。
+    connect(by_size_, &QRadioButton::toggled, this, [this] { showLimitChoice(); });
+    showLimitChoice();
     connect(format_, &QComboBox::currentIndexChanged, this, [this] { showFormat(); });
     showFormat();
 
@@ -300,6 +309,14 @@ class ExportDialog final : public QDialog {
     slider_->setValue(value);
     level_->setCurrentIndex(levelOf(value));
     updating_ = false;
+  }
+
+  void showLimitChoice() {
+    const bool by_size = by_size_->isChecked();
+    size_->setEnabled(by_size);
+    quality_->setEnabled(!by_size);
+    level_->setEnabled(!by_size);
+    slider_->setEnabled(!by_size);
   }
 
   void showFormat() {
@@ -341,7 +358,13 @@ class ExportDialog final : public QDialog {
     }
     if (project_folder_->isChecked()) request.subfolder = target_.project_name;
     request.settings.format = formatOf(format_->currentData().toString().toStdString());
-    if (quality_group_->isEnabled()) request.settings.quality = quality_->value();
+    if (quality_group_->isEnabled() && by_size_->isChecked()) {
+      // Rounded down to whole KB: the product never exceeds what the user typed.
+      request.settings.size_limit_kb =
+          std::max<std::uint64_t>(1, static_cast<std::uint64_t>(std::floor(size_->value() * 1024.0)));
+    } else if (quality_group_->isEnabled()) {
+      request.settings.quality = quality_->value();
+    }
     request.settings.convert_to_srgb = srgb_->isChecked();
 
     ExportDefaults defaults = target_.defaults;
@@ -379,6 +402,8 @@ class ExportDialog final : public QDialog {
   QCheckBox* remember_format_ = nullptr;
   QGroupBox* quality_group_ = nullptr;
   QSpinBox* quality_ = nullptr;
+  QRadioButton* by_size_ = nullptr;
+  QDoubleSpinBox* size_ = nullptr;
   QComboBox* level_ = nullptr;
   QSlider* slider_ = nullptr;
   QCheckBox* srgb_ = nullptr;

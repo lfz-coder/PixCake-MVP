@@ -19,6 +19,10 @@ ResultCode validate_encode_request(const ExportEncodeRequest& request, std::stri
     diagnostic = "original export is a source-file transaction, not an RGBA encode";
     return ResultCode::UnsupportedFormat;
   }
+  if (request.native_quality > 1.0) {
+    diagnostic = "native export quality is outside 0..1";
+    return ResultCode::StateConflict;
+  }
   if (request.quality > 14) {
     diagnostic = "export quality is outside the documented 0..14 range";
     return ResultCode::StateConflict;

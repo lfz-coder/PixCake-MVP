@@ -2,6 +2,7 @@
 
 #include "pixcake/gl/native_backend.hpp"
 
+#include <cstdio>
 #include <utility>
 
 namespace pixcake::exportd {
@@ -135,7 +136,11 @@ ExportResult ExportService::produce(const ExportWork& work) {
   request.source_icc_profile = std::move(source.icc_profile);
   request.has_alpha = source.has_alpha;
   EncodedProduct product;
-  code = encoder_->encode(request, pixels, product, result.diagnostic);
+  if (request.size_limit_bytes > 0 && request.format != ExportFormat::Jpeg) {
+    return refuse(ResultCode::UnsupportedFormat, "文件大小限制只适用于 JPG");
+  }
+  code = request.size_limit_bytes > 0 ? encode_within_limit(request, pixels, product, result.diagnostic)
+                                      : encoder_->encode(request, pixels, product, result.diagnostic);
   if (code != ResultCode::Ok) {
     result.code = code;
     return result;
@@ -146,6 +151,49 @@ ExportResult ExportService::produce(const ExportWork& work) {
   result.code = ResultCode::Ok;
   result.diagnostic.clear();
   return result;
+}
+
+ResultCode ExportService::encode_within_limit(const ExportEncodeRequest& request, const RgbaSource& pixels,
+                                              EncodedProduct& out, std::string& diagnostic) {
+  constexpr int kSteps = 8;  // the quality found is within 1/256 of the best that fits
+  ExportEncodeRequest attempt = request;
+  const auto encode_at = [&](double quality, EncodedProduct& product) {
+    attempt.native_quality = quality;
+    return encoder_->encode(attempt, pixels, product, diagnostic);
+  };
+  EncodedProduct best;
+  ResultCode code = encode_at(1.0, best);
+  if (code != ResultCode::Ok) return code;
+  if (best.bytes.size() > request.size_limit_bytes) {
+    // Search the largest quality that fits; the lowest must fit at all.
+    double low = 0.0;
+    double high = 1.0;
+    code = encode_at(0.0, best);
+    if (code != ResultCode::Ok) return code;
+    if (best.bytes.size() > request.size_limit_bytes) {
+      char text[160];
+      std::snprintf(text, sizeof(text), "最低品质也超过文件大小限制（%.2f MB，最低品质为 %.2f MB）",
+                    static_cast<double>(request.size_limit_bytes) / (1024.0 * 1024.0),
+                    static_cast<double>(best.bytes.size()) / (1024.0 * 1024.0));
+      diagnostic = text;
+      return ResultCode::UnsupportedFormat;
+    }
+    for (int step = 0; step < kSteps; ++step) {
+      const double middle = (low + high) / 2.0;
+      EncodedProduct product;
+      code = encode_at(middle, product);
+      if (code != ResultCode::Ok) return code;
+      if (product.bytes.size() <= request.size_limit_bytes) {
+        low = middle;
+        best = std::move(product);
+      } else {
+        high = middle;
+      }
+    }
+  }
+  out = std::move(best);
+  diagnostic.clear();
+  return ResultCode::Ok;
 }
 
 ExportResult ExportService::process_next() {

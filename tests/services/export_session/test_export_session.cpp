@@ -139,10 +139,17 @@ int main() {
   bytes = read_all(shoot + "/a.tif");
   assert(bytes.size() > 40 * 30 * 6 && ((bytes[0] == 'M' && bytes[1] == 'M') || (bytes[0] == 'I' && bytes[1] == 'I')));
 
-  // A setting exportd cannot honour fails with its reason; retry hands it over again.
+  // 文件大小限制 on a JPG: the product fits.
   ExportRequest limited = request;
   limited.settings.quality.reset();
   limited.settings.size_limit_kb = 500;
+  assert(exports->submit(limited, notices, diagnostic) == ResultCode::Ok);
+  rows = settle(*exports);
+  assert(rows[0].status == "成功" && read_all(rows[0].destination_path).size() <= 500 * 1024);
+
+  // A setting exportd cannot honour fails with its reason (a size limit on a
+  // TIFF); retry hands it over again.
+  limited.settings.format = ExportFormat::Tiff16;
   assert(exports->submit(limited, notices, diagnostic) == ResultCode::Ok);
   rows = settle(*exports);
   assert(rows[0].status == "失败" && rows[0].can_retry && rows[0].reason.find("文件大小") != std::string::npos);
@@ -155,8 +162,8 @@ int main() {
   exports.reset();
   assert(ExportSession::open(*projects, session, options, exports, diagnostic) == ResultCode::Ok);
   rows = exports->rows();
-  assert(rows.size() == 4 && rows[0].export_id == failed_id && rows[0].reason.find("文件大小") != std::string::npos);
-  assert(rows[3].status == "成功");
+  assert(rows.size() == 5 && rows[0].export_id == failed_id && rows[0].reason.find("文件大小") != std::string::npos);
+  assert(rows[4].status == "成功");
 
   // 设为默认导出路径 / 设为默认格式 are remembered across sessions.
   assert(exports->defaults().folder.empty() && !exports->defaults().format);
@@ -175,7 +182,7 @@ int main() {
   ::rename((shoot + "/moved.bmp").c_str(), (shoot + "/a.bmp").c_str());
   session.in = false;
   assert(exports->submit(request, notices, diagnostic) == ResultCode::StateConflict);
-  assert(exports->rows().size() == 4);
+  assert(exports->rows().size() == 5);
 
   std::printf("export session ok\n");
   return 0;

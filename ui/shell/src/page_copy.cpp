@@ -172,7 +172,6 @@ Texts build_texts() {
   t["export.why.preset"] = "预设还没有接入导出";
   t["export.why.upload"] = "上传选片交付需要云端服务，还没有接入";
   t["export.why.watermark"] = "导出水印还没有接入";
-  t["export.why.size_limit"] = "按文件大小限制导出还没有接入，请改用品质";
   t["export.why.overlay"] = "保留叠加层的作用还没有核实，暂不可用";
   t["export.why.print"] = "排版印刷还没有接入";
   t["export.why.keep_path"] = "保留导入时的完整路径还没有接入";

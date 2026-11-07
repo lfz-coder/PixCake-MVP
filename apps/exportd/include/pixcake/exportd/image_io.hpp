@@ -36,6 +36,13 @@ struct ExportEncodeRequest {
   // The product contract exposes the documented 0..14 quality scale.  A
   // format adapter maps it to the selected library's native quality scale.
   std::uint8_t quality = 0;
+  // Requirement 19: 文件大小限制 instead of 品质 -- the product must not be
+  // larger than this many bytes (0: no limit).  JPEG only; the export service
+  // searches the encoder's quality for the largest product that fits.
+  std::uint64_t size_limit_bytes = 0;
+  // The encoder's native quality (0..1) when >= 0, overriding `quality`.  Set
+  // only by that search.
+  double native_quality = -1.0;
   // Requirement 19: empty keeps the original colour space (default), "sRGB"
   // converts to sRGB.  Nothing else is offered.
   std::string color_space;

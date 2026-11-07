@@ -58,7 +58,7 @@ class MacExportEncoder final : public ExportEncoder {
       case ExportFormat::Png: mac.format = platform::MacEncodeFormat::Png; break;
       case ExportFormat::Original: return ResultCode::UnsupportedFormat;  // validated above
     }
-    mac.quality = request.quality / 14.0;
+    mac.quality = request.native_quality >= 0.0 ? request.native_quality : request.quality / 14.0;
     if (request.color_space.empty()) mac.icc_profile = request.source_icc_profile;
     mac.has_alpha = request.has_alpha;
     EncodedProduct product;

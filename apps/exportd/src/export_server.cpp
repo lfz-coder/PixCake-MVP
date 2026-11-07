@@ -49,10 +49,6 @@ ResultCode work_from_job(const ExportJob& job, const std::string& source_path, E
     diagnostic = "导出设置无法读取";
     return ResultCode::StateConflict;
   }
-  if (settings.size_limit_kb) {
-    diagnostic = "按文件大小限制导出还没有接入，请改用品质";
-    return ResultCode::UnsupportedFormat;
-  }
   if (settings.print_copies > 0) {
     diagnostic = "排版印刷还没有接入";
     return ResultCode::UnsupportedFormat;
@@ -76,6 +72,10 @@ ResultCode work_from_job(const ExportJob& job, const std::string& source_path, E
     else if (extension == "jpg" || extension == "jpeg") work.encode.format = ExportFormat::Jpeg;
   }
   work.encode.quality = static_cast<std::uint8_t>(settings.quality.value_or(kDefaultQuality));
+  // 文件大小限制 replaces 品质 (the settings carry one or the other).
+  if (settings.size_limit_kb) {
+    work.encode.size_limit_bytes = std::min<std::uint64_t>(*settings.size_limit_kb, kMaxOutputBytes / 1024) * 1024;
+  }
   work.encode.color_space = settings.convert_to_srgb ? "sRGB" : "";
   work.encode.limits.max_output_bytes = kMaxOutputBytes;
   out = std::move(work);
