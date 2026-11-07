@@ -270,6 +270,15 @@ if(PIXCAKE_ENABLE_INFERENCE AND APPLE)
   target_compile_definitions(test_portrait_inference PRIVATE
     PIXCAKE_MODEL_DIR="${PIXCAKE_MODEL_DIR}" PIXCAKE_TESTDATA_DIR="${PIXCAKE_TESTDATA_DIR}")
   add_test(NAME test_portrait_inference COMMAND test_portrait_inference)
+
+  add_executable(test_export_masks_inference apps/test_export_masks_inference.cpp)
+  target_include_directories(test_export_masks_inference PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+  target_link_libraries(test_export_masks_inference PRIVATE pixcake_exportd_service pixcake_platform_macos_image
+    pixcake_warnings)
+  target_compile_definitions(test_export_masks_inference PRIVATE
+    PIXCAKE_MODEL_DIR="${PIXCAKE_MODEL_DIR}" PIXCAKE_TESTDATA_DIR="${PIXCAKE_TESTDATA_DIR}")
+  add_test(NAME test_export_masks_inference COMMAND test_export_masks_inference)
+  set_tests_properties(test_export_masks_inference PROPERTIES TIMEOUT 300)
 endif()
 
 add_executable(test_exportd apps/test_exportd.cpp)
@@ -277,6 +286,10 @@ target_include_directories(test_exportd PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 target_link_libraries(test_exportd PRIVATE pixcake_exportd_service pixcake_platform_macos_image pixcake_warnings
   "-framework CoreFoundation" "-framework CoreGraphics" "-framework ImageIO")
 add_test(NAME test_exportd COMMAND test_exportd)
+
+add_executable(test_export_masks apps/test_export_masks.cpp)
+target_link_libraries(test_export_masks PRIVATE pixcake_exportd_service pixcake_warnings)
+add_test(NAME test_export_masks COMMAND test_export_masks)
 
 add_executable(test_generated apps/test_generated.cpp)
 target_include_directories(test_generated PRIVATE ${CMAKE_SOURCE_DIR}/tests)

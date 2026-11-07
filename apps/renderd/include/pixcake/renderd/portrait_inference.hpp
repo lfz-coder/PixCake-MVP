@@ -64,6 +64,11 @@ class PortraitSegmenter final : public SemanticSegmenter {
 // resolved inside `model_directory`.
 PortraitModelPaths portrait_model_paths(const std::string& model_directory);
 
+// Where the models are: Contents/Resources/models inside an app bundle (next
+// to Contents/MacOS/<this executable>), else `fallback` (the directory a
+// development build downloaded and verified them into).  renderd and exportd.
+std::string model_directory_near_executable(const std::string& fallback);
+
 // The segmenter the renderd process hands to RenderService.
 ResultCode create_portrait_segmenter(const std::string& model_directory, int threads,
                                      std::shared_ptr<SemanticSegmenter>& out, std::string& diagnostic);

@@ -70,6 +70,40 @@ int bits_per_sample(const std::vector<std::uint8_t>& bytes) {
   return bits;
 }
 
+// The left half of the original fully masked, the right half not.
+class HalfMask final : public pixcake::exportd::ExportMaskSource {
+ public:
+  int calls = 0;
+  std::uint32_t width = 0;
+  std::uint32_t height = 0;
+  ResultCode provide(const std::string&, const pixcake::render::RenderDescription& description, std::uint32_t w,
+                     std::uint32_t h, pixcake::exportd::ExportMasks& out, std::string&) override {
+    ++calls;
+    width = w;
+    height = h;
+    out = {};
+    pixcake::gpu::RenderMask mask;
+    mask.id = description.operations.back().mask_ids.front();
+    mask.width = w;
+    mask.height = h;
+    mask.alpha.assign(static_cast<std::size_t>(w) * h, 0);
+    for (std::uint32_t y = 0; y < h; ++y) {
+      for (std::uint32_t x = 0; x < w / 2; ++x) mask.alpha[static_cast<std::size_t>(y) * w + x] = 255;
+    }
+    out.masks.push_back(std::move(mask));
+    return ResultCode::Ok;
+  }
+};
+
+class FailingMasks final : public pixcake::exportd::ExportMaskSource {
+ public:
+  ResultCode provide(const std::string&, const pixcake::render::RenderDescription&, std::uint32_t, std::uint32_t,
+                     pixcake::exportd::ExportMasks&, std::string& diagnostic) override {
+    diagnostic = "no segmentation here";
+    return ResultCode::UnsupportedFormat;
+  }
+};
+
 double mean_red(const std::vector<std::uint8_t>& rgba) {
   double sum = 0;
   for (std::size_t i = 0; i < rgba.size(); i += 4) sum += rgba[i];
@@ -262,6 +296,62 @@ int main() {
     ExportService other;
     assert(other.submit(std::move(watermark), diagnostic) == ResultCode::Ok);
     assert(other.process_next().code == ResultCode::UnsupportedFormat);
+  }
+
+  // Masks at full resolution come from the mask source: a local exposure +1
+  // on the left half doubles the left half only; a mask source that cannot
+  // compute the masks fails the export with its reason.
+  {
+    auto masks = std::make_shared<HalfMask>();
+    ExportService service(nullptr, nullptr, masks);
+    auto local_work = work("masked-1", source, dir.path() + "/m.jpg", dir.path());
+    auto local = operation("color.local", "pixcake.color.local", {value("exposure", 1.0)});
+    local.stage = "local";
+    local.mask_ids = {"semantic:person.hair"};
+    local_work.description.operations.push_back(local);
+    auto failing = local_work;
+    failing.job.export_id = "masked-2";
+    assert(service.submit(std::move(local_work), diagnostic) == ResultCode::Ok);
+    const auto product = service.process_next();
+    assert(product.code == ResultCode::Ok && masks->calls == 1);
+    assert(masks->width == product.width && masks->height == product.height);
+    const std::string path = dir.path() + "/masked-product.jpg";
+    pixcake::PosixFileSystem files;
+    assert(files.write_new(path, product.product).ok);
+    const auto image = decode(path);
+    const auto half_red = [&](bool left) {
+      double sum = 0;
+      std::size_t count = 0;
+      for (std::uint32_t y = 0; y < image.height; ++y) {
+        for (std::uint32_t x = left ? 0 : image.width / 2 + 4; x < (left ? image.width / 2 - 4 : image.width); ++x) {
+          sum += image.rgba[(static_cast<std::size_t>(y) * image.width + x) * 4];
+          ++count;
+        }
+      }
+      return sum / static_cast<double>(count);
+    };
+    const auto original = decode(source);
+    const auto original_red = [&](bool left) {
+      double sum = 0;
+      std::size_t count = 0;
+      for (std::uint32_t y = 0; y < original.height; ++y) {
+        for (std::uint32_t x = left ? 0 : original.width / 2 + 4; x < (left ? original.width / 2 - 4 : original.width);
+             ++x) {
+          sum += original.rgba[(static_cast<std::size_t>(y) * original.width + x) * 4];
+          ++count;
+        }
+      }
+      return sum / static_cast<double>(count);
+    };
+    std::printf("masked export: left red %.1f (original %.1f), right red %.1f (original %.1f)\n", half_red(true),
+                original_red(true), half_red(false), original_red(false));
+    assert(half_red(true) > original_red(true) * 1.8);
+    assert(std::abs(half_red(false) - original_red(false)) < 3.0);
+
+    ExportService broken(nullptr, nullptr, std::make_shared<FailingMasks>());
+    assert(broken.submit(std::move(failing), diagnostic) == ResultCode::Ok);
+    const auto refused = broken.process_next();
+    assert(refused.code == ResultCode::UnsupportedFormat && refused.diagnostic == "no segmentation here");
   }
 
   // Quality 0..14: a higher quality keeps more detail, so the file is larger.

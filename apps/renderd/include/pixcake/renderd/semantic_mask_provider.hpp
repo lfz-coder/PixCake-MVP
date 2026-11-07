@@ -16,6 +16,10 @@ namespace pixcake::renderd {
 struct SemanticMaskBatch {
   std::vector<gpu::RenderMask> masks;
   std::vector<gpu::ExecutionDiagnostic> diagnostics;
+  // No segmenter is built, or segmentation itself failed: every referenced
+  // part is missing for that reason (as opposed to a part the model does not
+  // output).  Preview skips the operations either way; export refuses.
+  bool segmentation_failed = false;
 };
 
 // Supplies the "semantic:<part>" masks a render description refers to, for the

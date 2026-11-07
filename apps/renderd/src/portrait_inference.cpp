@@ -1,5 +1,12 @@
 #include "pixcake/renderd/portrait_inference.hpp"
 
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
+
+#include <filesystem>
+#include <system_error>
+
 #include "pixcake/renderd/litert_model.hpp"
 #include "pixcake/renderd/segmentation_models.hpp"
 
@@ -166,6 +173,22 @@ ResultCode create_portrait_segmenter(const std::string& model_directory, int thr
                                                     diagnostic);
   if (code == ResultCode::Ok) out = std::move(segmenter);
   return code;
+}
+
+std::string model_directory_near_executable(const std::string& fallback) {
+#ifdef __APPLE__
+  char buffer[4096];
+  std::uint32_t size = sizeof(buffer);
+  if (_NSGetExecutablePath(buffer, &size) == 0) {
+    std::error_code error;
+    const auto executable = std::filesystem::weakly_canonical(buffer, error);
+    if (!error) {
+      const auto bundled = executable.parent_path().parent_path() / "Resources" / "models";
+      if (std::filesystem::is_directory(bundled, error)) return bundled.string();
+    }
+  }
+#endif
+  return fallback;
 }
 
 }  // namespace pixcake::renderd

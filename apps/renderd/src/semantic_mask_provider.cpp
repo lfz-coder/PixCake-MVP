@@ -70,6 +70,7 @@ void SemanticMaskProvider::provide(const std::string& image_id, const RgbaInput&
   if (ids.empty()) return;
 
   if (!segmenter_) {
+    out.segmentation_failed = true;
     for (const auto& id : ids) report(out, description, id, "语义分割未构建，语义蒙版不可用：" + id);
     return;
   }
@@ -83,6 +84,7 @@ void SemanticMaskProvider::provide(const std::string& image_id, const RgbaInput&
     ++runs_;
     const ResultCode code = segmenter_->segment(input, result, diagnostic);
     if (code != ResultCode::Ok) {
+      out.segmentation_failed = true;
       for (const auto& id : ids) {
         report(out, description, id,
                std::string("语义分割失败（") + result_code_label(code) + "）：" + diagnostic + "；跳过 " + id);

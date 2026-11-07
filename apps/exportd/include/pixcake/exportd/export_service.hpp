@@ -1,5 +1,6 @@
 #pragma once
 
+#include "pixcake/exportd/export_masks.hpp"
 #include "pixcake/exportd/image_io.hpp"
 #include "pixcake/exportq/export_queue.hpp"
 #include "pixcake/gpu/render_executor.hpp"
@@ -44,9 +45,11 @@ struct ExportResult {
 // service never writes a target file itself and never consumes a preview frame.
 class ExportService {
  public:
-  // Null codecs take the system ones (ImageIO on macOS).
+  // Null codecs take the system ones (ImageIO on macOS).  Without a mask
+  // source, an export whose operations use masks fails with a reason.
   explicit ExportService(std::shared_ptr<ExportDecoder> decoder = nullptr,
-                         std::shared_ptr<ExportEncoder> encoder = nullptr);
+                         std::shared_ptr<ExportEncoder> encoder = nullptr,
+                         std::shared_ptr<ExportMaskSource> masks = nullptr);
 
   ResultCode submit(ExportWork work, std::string& diagnostic);
   // Draws and encodes the front task and returns the product; the task stays
@@ -74,6 +77,7 @@ class ExportService {
   std::deque<ExportWork> pending_;
   std::shared_ptr<ExportDecoder> decoder_;
   std::shared_ptr<ExportEncoder> encoder_;
+  std::shared_ptr<ExportMaskSource> masks_;
   gl::Context gpu_context_;
   gpu::RenderExecutor gpu_executor_;
   bool gpu_tried_ = false;

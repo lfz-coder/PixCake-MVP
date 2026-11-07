@@ -6,9 +6,11 @@
 
 namespace pixcake::exportd {
 
-ExportService::ExportService(std::shared_ptr<ExportDecoder> decoder, std::shared_ptr<ExportEncoder> encoder)
+ExportService::ExportService(std::shared_ptr<ExportDecoder> decoder, std::shared_ptr<ExportEncoder> encoder,
+                             std::shared_ptr<ExportMaskSource> masks)
     : decoder_(decoder ? std::move(decoder) : std::shared_ptr<ExportDecoder>(make_system_export_decoder())),
-      encoder_(encoder ? std::move(encoder) : std::shared_ptr<ExportEncoder>(make_system_export_encoder())) {}
+      encoder_(encoder ? std::move(encoder) : std::shared_ptr<ExportEncoder>(make_system_export_encoder())),
+      masks_(std::move(masks)) {}
 
 ResultCode ExportService::validate_work(const ExportWork& work, std::string& diagnostic) {
   if (work.job.export_id.empty() || work.job.original_id.empty() || work.job.document_snapshot.empty()) {
@@ -72,11 +74,11 @@ ExportResult ExportService::produce(const ExportWork& work) {
   if (work.encode.include_watermark) {
     return refuse(ResultCode::UnsupportedFormat, "导出水印还没有接入");
   }
+  bool masked = false;
   for (const auto& operation : work.description.operations) {
-    if (operation.enabled && !operation.mask_ids.empty()) {
-      return refuse(ResultCode::UnsupportedFormat, "导出还不能按全分辨率计算局部调整的蒙版");
-    }
+    masked = masked || (operation.enabled && !operation.mask_ids.empty());
   }
+  if (masked && !masks_) return refuse(ResultCode::UnsupportedFormat, "导出蒙版没有接入，带局部调整的照片还不能导出");
 
   DecodedSource source;
   const ExportDecodeLimits limits{kMaxSourceEdge, kMaxSourceEdge, kMaxSourcePixels};
@@ -92,7 +94,20 @@ ExportResult ExportService::produce(const ExportWork& work) {
   image.row_stride = source.pixels.stride;
   image.revision = work.description.document_revision;
   image.pixels = std::move(source.pixels.rgba);
-  const gpu::RenderInputs inputs;
+  // Semantic masks at the original's resolution (requirement 10.4: the
+  // preview's segmentation, resized).  Parts the model does not output are
+  // skipped as in the preview; masks that cannot be computed fail the export.
+  gpu::RenderInputs inputs;
+  inputs.preview = false;
+  if (masked) {
+    ExportMasks masks;
+    code = masks_->provide(work.source_path, work.description, image.width, image.height, masks, result.diagnostic);
+    if (code != ResultCode::Ok) {
+      result.code = code;
+      return result;
+    }
+    inputs.masks = std::move(masks.masks);
+  }
   gpu::RenderResult rendered;
   bool ok = false;
   bool drawn = false;

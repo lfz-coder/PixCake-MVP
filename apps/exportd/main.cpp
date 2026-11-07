@@ -1,9 +1,14 @@
+#include "pixcake/exportd/export_masks.hpp"
 #include "pixcake/exportd/export_server.hpp"
 #include "pixcake/exportd/export_service.hpp"
 #include "pixcake/logging/process_log.hpp"
 #include "pixcake/persist/file_system.hpp"
 #include "pixcake/preview_channel/channel.hpp"
 #include "pixcake/storage/sqlite_export_log.hpp"
+
+#ifdef PIXCAKE_HAS_INFERENCE
+#include "pixcake/renderd/portrait_inference.hpp"
+#endif
 
 #include <sys/stat.h>
 #include <unistd.h>
@@ -15,6 +20,17 @@
 namespace {
 
 namespace channel = pixcake::preview_channel;
+
+// The full-resolution masks: the preview's segmenter (models in the app bundle,
+// else the development download), and a one-line status for logs and --health.
+std::shared_ptr<pixcake::exportd::ExportMaskSource> export_masks(std::string& status) {
+#ifdef PIXCAKE_DEFAULT_MODEL_DIR
+  return pixcake::exportd::make_system_export_masks(
+      pixcake::renderd::model_directory_near_executable(PIXCAKE_DEFAULT_MODEL_DIR), status);
+#else
+  return pixcake::exportd::make_system_export_masks(std::string(), status);
+#endif
+}
 
 // Exit codes: 2 usage, 3 log unavailable (health), 4 no shell connected,
 // 5 socket or export log unavailable, 6 the session broke.
@@ -42,7 +58,15 @@ int serve_exports(const std::string& socket_path, const std::string& data_direct
     return 4;
   }
   pixcake::PosixFileSystem files;
-  pixcake::exportd::ExportService service;
+  std::string segmentation;
+  pixcake::exportd::ExportService service(nullptr, nullptr, export_masks(segmentation));
+  if (log != nullptr) {
+    pixcake::LogRecord record;
+    record.module = "exportd";
+    record.event = "exportd.segmentation";
+    record.message = segmentation;
+    log->write(record);
+  }
   pixcake::exportd::ExportServer server(service, *export_log, exports + "/cache", files, log);
   channel::Channel session{std::move(connection)};
   if (server.serve(session, diagnostic) != pixcake::ResultCode::Ok) {
@@ -67,8 +91,9 @@ int main(int argc, char** argv) {
               << "): " << arguments->log_directory << '\n';
   }
   if (arguments->health) {
-    pixcake::exportd::ExportService service;
-    std::cout << "exportd boundary ready; pending=" << service.pending_count() << '\n';
+    std::string segmentation;
+    pixcake::exportd::ExportService service(nullptr, nullptr, export_masks(segmentation));
+    std::cout << "exportd boundary ready; pending=" << service.pending_count() << "; " << segmentation << '\n';
     return log.sink() == nullptr ? 3 : 0;
   }
   if (!arguments->socket_path.empty()) {
