@@ -84,6 +84,12 @@ class PageActions {
   // 项目里选中的照片（图库单击选中；精修显示的就是它）。
   virtual std::optional<std::int64_t> current_photo() const { return std::nullopt; }
   virtual void select_photo(std::int64_t) {}
+  // 图库多选：选中的照片（含 current_photo），按图库顺序。单选时只有一张，没选时为空。
+  virtual std::vector<std::int64_t> selected_photos() const { return {}; }
+  // 图库里改了选择：ids 是全部选中的，primary 是最后点的那张（成为 current_photo）。
+  virtual void select_photos(const std::vector<std::int64_t>&, std::int64_t) {}
+  // 选择变化时回调（导出按钮、“已选 N 张”跟着变）；owner 删除后不再回调。
+  virtual void watch_selection(QObject*, std::function<void()>) {}
   // 在精修打开（精修底部缩略图条单击）。
   virtual void request_open_photo(std::int64_t) {}
   // 图库里看大图：切到图库单视图（图库网格双击，与像素蛋糕一致，不进精修）。

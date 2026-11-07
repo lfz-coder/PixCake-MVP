@@ -12,6 +12,8 @@
 
 #include <vector>
 
+#include <algorithm>
+
 namespace pixcake::shell {
 
 QString qtext(std::string_view key) { return QString::fromStdString(ui::shell::page_text(key)); }
@@ -161,11 +163,27 @@ QListWidget* photoList(QWidget* parent, PageActions* actions, bool grid, std::fu
     item->setData(Qt::UserRole, QVariant::fromValue<qlonglong>(photo.id));
     if (actions->current_photo() == photo.id) list->setCurrentItem(item);
   }
+  if (grid) {
+    // 图库多选（macOS 常规：单击、⌘ 单击加减、⇧ 单击连选、⌘A、框选；官方手势未核实）。
+    list->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    const auto selected = actions->selected_photos();
+    for (int row = 0; row < list->count(); ++row) {
+      auto* item = list->item(row);
+      const auto id = std::int64_t{item->data(Qt::UserRole).toLongLong()};
+      item->setSelected(std::find(selected.begin(), selected.end(), id) != selected.end());
+    }
+  }
   // Grid: a click selects, a double-click (activation) calls `open`; strip: a click calls `open`.
   const auto id_of = [](QListWidgetItem* item) { return std::int64_t{item->data(Qt::UserRole).toLongLong()}; };
   if (grid) {
-    QObject::connect(list, &QListWidget::itemClicked, list,
-                     [actions, id_of](QListWidgetItem* item) { actions->select_photo(id_of(item)); });
+    QObject::connect(list, &QListWidget::itemSelectionChanged, list, [list, actions, id_of] {
+      std::vector<std::int64_t> ids;
+      for (int row = 0; row < list->count(); ++row) {
+        if (list->item(row)->isSelected()) ids.push_back(id_of(list->item(row)));
+      }
+      QListWidgetItem* current = list->currentItem();
+      actions->select_photos(ids, current != nullptr && current->isSelected() ? id_of(current) : 0);
+    });
     QObject::connect(list, &QListWidget::itemActivated, list,
                      [open, id_of](QListWidgetItem* item) { if (open) open(id_of(item)); });
   } else {
@@ -204,7 +222,16 @@ QFrame* thumbnailStrip(QWidget* parent, bool library, PageActions* actions, std:
     }
   }
   for (const auto& id : ids) layout->addWidget(itemAction("refine-thumbs", copyItem("refine-thumbs", id), frame));
-  if (library) layout->addWidget(action(qtext("thumbs.selected"), frame));
+  if (library) {
+    auto* count = action(qtext("thumbs.selected").arg(0), frame);
+    count->setObjectName(QStringLiteral("thumbs-selected"));
+    if (actions != nullptr) {
+      const auto show = [count, actions] { count->setText(qtext("thumbs.selected").arg(actions->selected_photos().size())); };
+      show();
+      actions->watch_selection(count, show);
+    }
+    layout->addWidget(count);
+  }
   if (actions != nullptr && !actions->photos().empty()) {
     layout->addWidget(photoList(frame, actions, false, std::move(open)), 1);
   } else {

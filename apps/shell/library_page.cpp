@@ -50,7 +50,16 @@ QWidget* buildLibraryPage(const PageContext& context) {
     controls_layout->addWidget(itemAction("library-tools", entry, controls));
   }
   controls_layout->addStretch();
-  controls_layout->addWidget(text(qtext("library.selected"), true));
+  // “已选 N 张（共 M 张）”跟着图库的选择变。
+  auto* selected = text(QString(), true);
+  selected->setObjectName(QStringLiteral("library-selected"));
+  const auto total = actions->photos().size();
+  const auto show_selected = [selected, actions, total] {
+    selected->setText(qtext("library.selected").arg(actions->selected_photos().size()).arg(total));
+  };
+  show_selected();
+  actions->watch_selection(selected, show_selected);
+  controls_layout->addWidget(selected);
   controls_layout->addWidget(action(qtext("region.library-delete"), controls));
   outer->addWidget(controls);
 

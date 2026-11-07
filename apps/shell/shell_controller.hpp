@@ -58,6 +58,9 @@ class ShellController final : public PageActions {
   std::vector<PhotoEntry> photos() const override;
   std::optional<std::int64_t> current_photo() const override { return selected_photo_; }
   void select_photo(std::int64_t photo_id) override;
+  std::vector<std::int64_t> selected_photos() const override;
+  void select_photos(const std::vector<std::int64_t>& photo_ids, std::int64_t primary) override;
+  void watch_selection(QObject* owner, std::function<void()> changed) override;
   void request_open_photo(std::int64_t photo_id) override;
   void request_view_photo(std::int64_t photo_id) override;
   void request_library_view(const std::string& view) override;
@@ -106,7 +109,12 @@ class ShellController final : public PageActions {
   preview_channel::PreviewSessionOptions preview_options_;
   std::optional<std::int64_t> current_project_;
   std::optional<std::int64_t> current_photo_;   // opened in the preview session
-  std::optional<std::int64_t> selected_photo_;  // selected in the project
+  std::optional<std::int64_t> selected_photo_;  // selected in the project (the last clicked)
+  // Library multi-selection; meaningful only while it contains selected_photo_
+  // (other paths that change selected_photo_ fall back to that one photo).
+  std::vector<std::int64_t> selection_;
+  std::vector<std::pair<QPointer<QObject>, std::function<void()>>> selection_watchers_;
+  void selection_changed();
   std::unique_ptr<preview_channel::ThumbnailService> thumbnails_;
   std::unique_ptr<QSocketNotifier> thumbnail_notifier_;
   std::map<std::int64_t, QImage> thumbnail_cache_;

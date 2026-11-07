@@ -536,6 +536,8 @@ void openExportList(QWidget* parent, PageActions* actions) {
 QPushButton* toolbarAction(std::string_view list, const CopyItem& item, QWidget* parent, PageActions* actions) {
   if (item.id == "export") {
     auto* button = itemAction(list, item, parent, actions->export_target().has_value());
+    // 选了照片才可用；图库里的选择变了跟着变。
+    actions->watch_selection(button, [button, actions] { button->setEnabled(actions->export_target().has_value()); });
     QObject::connect(button, &QPushButton::clicked, button, [button, actions] { openExportDialog(button->window(), actions); });
     return button;
   }

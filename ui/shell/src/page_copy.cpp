@@ -108,12 +108,12 @@ Texts build_texts() {
   t["region.library-tools"] = "导入新图片/筛选/排序";
   t["region.library-views"] = "视图切换";
   t["library.status.accessible"] = "显示状态：显示RAW格式、显示修图状态、显示导出状态";
-  t["library.selected"] = "已选 0 张（共 0 张）";
+  t["library.selected"] = "已选 %1 张（共 %2 张）";
   t["library.empty"] = "暂无照片";
   t["library.empty.hint"] = "导入图片后将在此显示";
   t["library.span"] = "网格每行张数，范围 1 到 7，默认位置未确认";
   t["thumbs.add.name"] = "添加图片";
-  t["thumbs.selected"] = "已选 0 张";
+  t["thumbs.selected"] = "已选 %1 张";
   t["thumbs.empty"] = "暂无缩略图";
 
   t["region.refine-top"] = "返回主页面、搜索和像素助手";

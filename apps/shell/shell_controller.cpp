@@ -2,6 +2,8 @@
 
 #include <QDebug>
 
+#include <algorithm>
+
 namespace pixcake::shell {
 
 ShellController::~ShellController() {
@@ -39,10 +41,40 @@ void ShellController::show_selected_photo() {
   if (current_photo_ != selected_photo_ || !session_) open_project_photo(*selected_photo_);
 }
 
-void ShellController::select_photo(std::int64_t photo_id) {
+void ShellController::select_photo(std::int64_t photo_id) { select_photos({photo_id}, photo_id); }
+
+std::vector<std::int64_t> ShellController::selected_photos() const {
+  if (!selected_photo_) return {};
+  if (std::find(selection_.begin(), selection_.end(), *selected_photo_) != selection_.end()) return selection_;
+  return {*selected_photo_};
+}
+
+void ShellController::select_photos(const std::vector<std::int64_t>& photo_ids, std::int64_t primary) {
   if (!projects_ || !current_project_) return;
-  selected_photo_ = photo_id;
+  selection_ = photo_ids;
+  if (photo_ids.empty()) {
+    selected_photo_.reset();
+  } else {
+    if (std::find(photo_ids.begin(), photo_ids.end(), primary) == photo_ids.end()) primary = photo_ids.back();
+    selected_photo_ = primary;
+  }
   remember_place();
+  selection_changed();
+}
+
+void ShellController::watch_selection(QObject* owner, std::function<void()> changed) {
+  selection_watchers_.emplace_back(owner, std::move(changed));
+}
+
+void ShellController::selection_changed() {
+  for (auto it = selection_watchers_.begin(); it != selection_watchers_.end();) {
+    if (it->first.isNull()) {
+      it = selection_watchers_.erase(it);
+      continue;
+    }
+    it->second();
+    ++it;
+  }
 }
 
 void ShellController::request_view_photo(std::int64_t photo_id) {
@@ -76,6 +108,7 @@ void ShellController::close_project() {
   thumbnail_cache_.clear();
   thumbnail_requested_.clear();
   selected_photo_.reset();
+  selection_.clear();
   current_project_.reset();
 }
 
@@ -377,7 +410,8 @@ void ShellController::attach_exports(const SessionState& session, export_session
 std::optional<ExportTarget> ShellController::export_target() const {
   if (!exports_ || !current_project_ || !selected_photo_) return std::nullopt;
   ExportTarget target;
-  target.photo_ids = {*selected_photo_};
+  // The library exports its selection; refine the photo it shows.
+  target.photo_ids = display_.page() == Page::Library ? selected_photos() : std::vector<std::int64_t>{*selected_photo_};
   for (const auto& entry : projects()) {
     if (entry.id == *current_project_) target.project_name = entry.name;
   }

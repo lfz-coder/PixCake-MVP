@@ -252,6 +252,8 @@ void screenshot(QWidget& window, const char* name) {
   window.grab().save(path);
 }
 
+QString qtext_for_smoke(std::string_view key) { return QString::fromStdString(pixcake::ui::shell::page_text(key)); }
+
 double mean_red(const QImage& image) {
   if (image.isNull()) return -1;
   double sum = 0;
@@ -382,6 +384,85 @@ int smoke_export(pixcake::shell::ShellWindow& window, const QString& folder) {
   return 0;
 }
 
+// 图库多选：两张都选中后“已选 2 张（共 2 张）”、顶栏“导出”可用；快速导出一次排两张，两张都成功。
+// 最后回到只选原来那张。
+int smoke_library_batch_export(pixcake::shell::ShellWindow& window, QListWidget* list) {
+  auto& controller = window.controller();
+  const auto primary = controller.current_photo();
+  auto* count = window.findChild<QLabel*>(QStringLiteral("library-selected"));
+  const auto label = QString::fromStdString(pixcake::ui::shell::page_item("library-toolbar", "export").text);
+  QPushButton* button = nullptr;
+  for (auto* candidate : window.findChildren<QPushButton*>()) {
+    if (candidate->accessibleName() == label && candidate->isVisibleTo(&window)) button = candidate;
+  }
+  // Nothing selected: nothing to export, and the count says so.
+  list->clearSelection();
+  if (count == nullptr || button == nullptr || button->isEnabled() ||
+      count->text() != qtext_for_smoke("library.selected").arg(0).arg(2)) {
+    qCritical("library with nothing selected: export %s, label %s",
+              button != nullptr && button->isEnabled() ? "enabled" : "disabled",
+              count == nullptr ? "missing" : qPrintable(count->text()));
+    return 11;
+  }
+  for (int row = 0; row < list->count(); ++row) list->item(row)->setSelected(true);
+  const QString two = qtext_for_smoke("library.selected").arg(2).arg(2);
+  const auto target = controller.export_target();
+  if (controller.selected_photos().size() != 2 || count == nullptr || count->text() != two || button == nullptr ||
+      !button->isEnabled() || !target || target->photo_ids.size() != 2) {
+    qCritical("library multi-selection: %zu selected, label %s, export %s", controller.selected_photos().size(),
+              count == nullptr ? "missing" : qPrintable(count->text()),
+              button != nullptr && button->isEnabled() ? "enabled" : "disabled");
+    return 11;
+  }
+  QTemporaryDir folder;
+  const std::size_t before = controller.export_rows().size();
+  QString problem;
+  QTimer::singleShot(0, [&] {
+    auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+    auto* path = dialog != nullptr ? dialog->findChild<QLineEdit*>(QStringLiteral("export-folder")) : nullptr;
+    bool heading = false;
+    for (auto* text : dialog != nullptr ? dialog->findChildren<QLabel*>() : QList<QLabel*>{}) {
+      heading = heading || text->text() == qtext_for_smoke("export.heading").arg(2);
+    }
+    if (dialog == nullptr || path == nullptr || !heading) {
+      problem = QStringLiteral("export dialog missing or not for 2 photos");
+      if (dialog != nullptr) dialog->reject();
+      return;
+    }
+    path->setText(folder.path());  // quick export: everything else as remembered
+    for (auto* submit : dialog->findChildren<QPushButton*>()) {
+      if (submit->objectName() == QStringLiteral("primary")) submit->click();
+    }
+  });
+  button->click();
+  if (!problem.isEmpty()) {
+    qCritical("%s", qPrintable(problem));
+    return 11;
+  }
+  QElapsedTimer timer;
+  timer.start();
+  std::vector<pixcake::export_session::ExportRow> rows;
+  for (;;) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    rows = controller.export_rows();
+    std::size_t done = 0;
+    for (std::size_t i = 0; i + before < rows.size() && i < 2; ++i) done += rows[i].succeeded ? 1 : 0;
+    if (rows.size() == before + 2 && done == 2) break;
+    if (timer.elapsed() > 60'000) {
+      qCritical("batch export did not finish: %zu new task(s)", rows.size() - before);
+      return 11;
+    }
+  }
+  if (auto* open = window.findChild<QDialog*>(QStringLiteral("export-list-dialog"))) open->close();
+  for (int row = 0; row < list->count(); ++row) {
+    auto* item = list->item(row);
+    if (item->data(Qt::UserRole).toLongLong() == primary) list->setCurrentItem(item, QItemSelectionModel::ClearAndSelect);
+  }
+  std::printf("library batch export ok: 2 selected, both exported (%s, %s)\n", rows[0].file_name.c_str(),
+              rows[1].file_name.c_str());
+  return controller.selected_photos().size() == 1 ? 0 : 11;
+}
+
 int smoke_import_flow(pixcake::shell::ShellWindow& window, const std::vector<std::string>& paths,
                       const std::string& expected_project) {
   auto& controller = window.controller();
@@ -439,12 +520,15 @@ int smoke_import_flow(pixcake::shell::ShellWindow& window, const std::vector<std
     }
     return nullptr;
   };
-  emit list->itemClicked(item_of(list, original));
+  list->setCurrentItem(item_of(list, original), QItemSelectionModel::ClearAndSelect);  // a plain click
   if (controller.display().page() != Page::Library || controller.display().library_view() != "grid" ||
-      controller.current_photo() != original) {
-    qCritical("a click on a library photo did not just select it");
+      controller.current_photo() != original || controller.selected_photos().size() != 1) {
+    qCritical("a click on a library photo did not just select it (page %d view %s current %lld selected %zu)",
+              static_cast<int>(controller.display().page()), controller.display().library_view().c_str(),
+              static_cast<long long>(controller.current_photo().value_or(-1)), controller.selected_photos().size());
     return 9;
   }
+  if (const int batch = smoke_library_batch_export(window, list); batch != 0) return batch;
   // The edited photo is still open from refine: the single view shows its current frame at once.
   emit list->itemActivated(item_of(list, edited));
   QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
