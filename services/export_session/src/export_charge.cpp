@@ -13,7 +13,11 @@
 namespace pixcake::export_session {
 namespace {
 
-bool free_capability(const std::string& id) {
+// test 版导出弹窗实测（2026-11-07）：色彩调节、裁剪旋转、后期调色的全图调整判为免费效果图，
+// 局部调色判为精修效果图。后期调色带蒙版的“局部调整”没有实测，按局部调色算精修。
+bool free_operation(const render::RenderOperation& operation) {
+  const std::string& id = operation.capability_id;
+  if (id == "color.post") return operation.mask_ids.empty();
   return id == "color.global" || id == "detail" || id == "crop" || id.rfind("manual.", 0) == 0;
 }
 
@@ -54,7 +58,7 @@ ExportEffect classify_export(const std::vector<std::uint8_t>& document_snapshot)
   bool any = false;
   for (const auto& operation : compiled.description.operations) {
     if (neutral_capability(operation.capability_id) || !operation_used(operation)) continue;
-    if (!free_capability(operation.capability_id)) return ExportEffect::Refined;
+    if (!free_operation(operation)) return ExportEffect::Refined;
     any = true;
   }
   return any ? ExportEffect::Free : ExportEffect::Original;

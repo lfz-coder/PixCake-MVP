@@ -14,9 +14,9 @@ namespace pixcake::export_session {
 enum class ExportEffect { Original, Free, Refined };
 
 // 按参数快照判断：编译出的每个操作只要有一个值离开注册的默认值，就算“用到”了这个能力。
-// 免费能力：色彩调节（color.global，面板上的分组都带 Free）、细节、裁剪、手动工具；
-// 蒙版和图层参数跟着别的能力走，自己不算。其余能力（AI 色彩、人像、图像、衣物、宠物、
-// 局部调色、后期调色）都算精修。快照读不了时按精修算（宁可预估多扣）。
+// 免费：色彩调节（color.global，面板上的分组都带 Free）、细节、裁剪旋转、手动工具、
+// 后期调色的全图调整（不带蒙版）；蒙版和图层参数跟着别的能力走，自己不算。其余（AI 色彩、
+// 人像、图像、衣物、宠物、局部调色、带蒙版的后期调色）都算精修。快照读不了时按精修算。
 ExportEffect classify_export(const std::vector<std::uint8_t>& document_snapshot);
 
 // 计费用的“同一张图片”标识：按画面内容取，不按文件字节（test 版重新压缩同一画面不再扣，

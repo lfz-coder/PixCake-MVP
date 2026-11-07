@@ -138,7 +138,9 @@ int main() {
   ::unlink(scratch.c_str());
   assert(classify_export(document_at(scratch, "x", "color.global", "exposure", "0.00")) == ExportEffect::Original);
   ::unlink(scratch.c_str());
-  assert(classify_export(document_at(scratch, "x", "color.post", "temperature", "20")) == ExportEffect::Refined);
+  assert(classify_export(document_at(scratch, "x", "color.post", "temperature", "20")) == ExportEffect::Free);
+  ::unlink(scratch.c_str());
+  assert(classify_export(document_at(scratch, "x", "color.local", "temperature", "20")) == ExportEffect::Refined);
 
   Session session;
   PathAccess access;
@@ -155,7 +157,7 @@ int main() {
   }
   const auto refine = [&](const std::string& name) {
     const std::string id = project_session::ProjectSession::document_id(photo[name]);
-    document_at(projects->document_directory() + "/" + id + ".pxedit", id, "color.post", "temperature", "20");
+    document_at(projects->document_directory() + "/" + id + ".pxedit", id, "color.local", "temperature", "20");
   };
   refine("p.png");
   refine("p-copy.jpg");
