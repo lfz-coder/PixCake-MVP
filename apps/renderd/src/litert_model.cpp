@@ -147,17 +147,20 @@ ResultCode resize_bilinear_u8(const std::uint8_t* source, std::uint32_t source_w
     diagnostic = "resize target is too large";
     return ResultCode::StateConflict;
   }
-  // XNNPACK needs packed rows; repack only when the source has row padding.
+  // XNNPACK needs packed rows, and its kernels read up to XNN_EXTRA_BYTES past
+  // the last pixel: the input is always copied into a buffer with that much
+  // slack.  A caller's buffer ending on a page boundary otherwise faults
+  // (SIGBUS in xnn_u8_ibilinear_ukernel__neon_u16).
   const std::size_t packed_row = static_cast<std::size_t>(source_width) * channels;
-  std::vector<std::uint8_t> packed;
-  const std::uint8_t* input = source;
-  if (source_row_bytes != packed_row) {
-    packed.resize(packed_row * source_height);
+  std::vector<std::uint8_t> packed(packed_row * source_height + XNN_EXTRA_BYTES);
+  if (source_row_bytes == packed_row) {
+    std::memcpy(packed.data(), source, packed_row * source_height);
+  } else {
     for (std::uint32_t y = 0; y < source_height; ++y) {
       std::memcpy(packed.data() + y * packed_row, source + y * source_row_bytes, packed_row);
     }
-    input = packed.data();
   }
+  const std::uint8_t* input = packed.data();
   if (xnn_initialize(nullptr) != xnn_status_success) {
     diagnostic = "XNNPACK cannot be initialised on this CPU";
     return ResultCode::UnsupportedFormat;

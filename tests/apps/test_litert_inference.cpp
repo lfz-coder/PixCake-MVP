@@ -8,6 +8,9 @@
 
 #include "imageio_test_image.hpp"
 
+#include <sys/mman.h>
+#include <unistd.h>
+
 #include <algorithm>
 #include <cassert>
 #include <chrono>
@@ -60,7 +63,35 @@ double elapsed_ms(std::chrono::steady_clock::time_point since) {
 
 }  // namespace
 
+// XNNPACK's kernels read up to XNN_EXTRA_BYTES past the input; an input whose
+// last byte is the last readable byte of the address space (a guard page right
+// after it) must still resize.  Seen as an intermittent SIGBUS in
+// xnn_u8_ibilinear_ukernel__neon_u16 when a large mask or image buffer ended
+// on a page boundary (crash reports of 2026-11-07).
+void test_resize_reads_only_its_input() {
+  const std::size_t page = static_cast<std::size_t>(::getpagesize());
+  for (const std::uint32_t channels : {1u, 4u}) {
+    const std::uint32_t width = 101;
+    const std::uint32_t height = 37;
+    const std::size_t bytes = static_cast<std::size_t>(width) * height * channels;
+    const std::size_t span = (bytes + page - 1) / page * page;
+    auto* base = static_cast<std::uint8_t*>(
+        ::mmap(nullptr, span + page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+    assert(base != MAP_FAILED);
+    assert(::mprotect(base + span, page, PROT_NONE) == 0);  // the guard page
+    std::uint8_t* source = base + span - bytes;              // ends exactly at the guard
+    for (std::size_t i = 0; i < bytes; ++i) source[i] = static_cast<std::uint8_t>(i * 7);
+    std::vector<std::uint8_t> out;
+    std::string diagnostic;
+    assert(pixcake::renderd::resize_bilinear_u8(source, width, height, channels, width * channels, 313, 211, out,
+                                                diagnostic) == ResultCode::Ok);
+    assert(out.size() == static_cast<std::size_t>(313) * 211 * channels);
+    ::munmap(base, span + page);
+  }
+}
+
 int main() {
+  test_resize_reads_only_its_input();
   std::string diagnostic;
   const std::string segmenter_path = kModels + "/selfie_multiclass_256x256.tflite";
   const std::string detector_path = kModels + "/blaze_face_full_range.tflite";

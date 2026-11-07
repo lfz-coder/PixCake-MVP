@@ -49,3 +49,25 @@
 - 画笔等非语义蒙版：编辑文档里还没有这种来源。
 - 预览和导出各自分割一次：导出时不复用 renderd 的结果。按架构，两个进程不共享内存对象。
 - 蒙版羽化、加减等组合：要等内核的蒙版组合接入渲染描述以后再做。
+
+## 偶发 SIGBUS：XNNPACK 缩放读到了输入之外（2026-11-07 修复）
+
+**现象**：推理构建并行跑全套测试时，`test_litert_inference`、`test_portrait_inference`、`test_export_masks_inference` 偶尔有一个退出，没有任何断言输出。单独跑 15 次都不出现。
+
+**崩溃报告**：
+- 三个测试的报告一致：`EXC_BAD_ACCESS / SIGBUS / KERN_PROTECTION_FAILURE`；
+- 出错地址落在页边界上；
+- 都崩在 `xnn_u8_ibilinear_ukernel__neon_u16` 里，调用者是 `resize_bilinear_u8`（MediaPipe 分割、BiSeNet 解析、导出蒙版放大都会用到）。
+
+**原因**：
+- XNNPACK 的内核一次读 16 个通道，最多会读过输入末尾 `XNN_EXTRA_BYTES` 个字节，所以它要求输入缓冲区后面留出这么多可读空间。
+- `resize_bilinear_u8` 只在源图带行填充时才复制，其余情况直接把调用方的缓冲区交给 XNNPACK。
+- 大缓冲区由 mmap 分配。缓冲区末尾刚好贴着一页不可读的内存时，读过头就会崩。所以它是偶发的，也会出现在 renderd 和 exportd 的真实运行中。
+
+**修复**：输入一律复制到末尾多留 `XNN_EXTRA_BYTES` 的缓冲区，再交给 XNNPACK。4000×3000 的 RGBA 图要多复制约 48 MB，耗时只有毫秒级。
+
+**回归测试**：`test_litert_inference` 开头加了 `test_resize_reads_only_its_input`：
+- 用 mmap 分配内存，把输入放在一页不可读的保护页之前，末尾正好贴着保护页；
+- 分别测 1 通道和 4 通道。
+- 修复前稳定复现 SIGBUS（退出码 138），修复后通过。
+- 推理构建里，推理和导出相关的 12 个测试并行重复跑 8 轮，全部通过，也没有新的崩溃报告。
