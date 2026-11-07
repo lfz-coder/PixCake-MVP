@@ -150,6 +150,24 @@ class ExportDialog final : public QDialog {
  private:
   void buildCommon(QVBoxLayout* column) {
     column->addWidget(text(qtext("export.heading").arg(target_.photo_ids.size())));
+    // 三类统计和计费提示（test 版快速导出页、自定设置页都有；张数为 0 的置灰）。
+    auto* counts = new QHBoxLayout;
+    const auto& estimate = target_.estimate;
+    const std::pair<const char*, int> kinds[] = {
+        {"refined", estimate.refined}, {"free", estimate.free}, {"original", estimate.original}};
+    for (const auto& [kind, count] : kinds) {
+      QLabel* stat = text(qtext((std::string("export.count.") + kind).c_str()).arg(count), count == 0);
+      stat->setObjectName(QStringLiteral("export-count-") + QLatin1String(kind));
+      counts->addWidget(stat);
+    }
+    counts->addStretch();
+    column->addLayout(counts);
+    column->addWidget(text(qtext("export.estimate.note"), true));
+    QLabel* sheets = text(qtext("export.sheets").arg(estimate.sheets).arg(target_.remaining_sheets),
+                          estimate.sheets <= target_.remaining_sheets);
+    sheets->setObjectName(QStringLiteral("export-sheets"));
+    if (estimate.sheets > target_.remaining_sheets) sheets->setProperty("warning", true);
+    column->addWidget(sheets);
     auto* form = new QFormLayout;
     preset_ = new QComboBox(this);
     preset_->addItem(qtext("export.preset.placeholder"));

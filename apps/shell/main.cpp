@@ -209,7 +209,7 @@ pixcake::preview_channel::PreviewSessionOptions preview_options() {
 }
 
 // 登录后接上项目库（需求 5.2）：<数据目录>/projects.sqlite 与 documents/。未登录不打开。
-void attach_projects(pixcake::shell::ShellWindow& window, const pixcake::SessionState& session,
+void attach_projects(pixcake::shell::ShellWindow& window, const pixcake::account::AccountSession& session,
                      pixcake::SourceAccess& access, const QString& data_directory) {
   if (!session.signed_in()) return;
   QDir().mkpath(data_directory);
@@ -228,6 +228,8 @@ void attach_projects(pixcake::shell::ShellWindow& window, const pixcake::Session
   exports.exportd_executable = exportd_executable();
   exports.log_directory = pixcake::logging::default_log_directory();
   exports.data_directory = data_directory.toStdString();
+  // 本机账本第一次建立时记入账号的剩余张数（没有服务器，之后的扣减只记在本机）。
+  exports.opening_sheets = session.snapshot().remaining_sheets;
   window.controller().attach_exports(session, std::move(exports));
 }
 
@@ -237,6 +239,7 @@ pixcake::account::AccountSnapshot dev_account() {
   pixcake::account::AccountSnapshot snapshot;
   snapshot.account_id = "dev";
   snapshot.session_handle = "dev-session";
+  snapshot.remaining_sheets = 100;  // 开发用：够导几张精修图
   return snapshot;
 }
 
@@ -343,6 +346,17 @@ int smoke_export(pixcake::shell::ShellWindow& window, const QString& folder) {
     auto* top_left = dialog->findChild<QToolButton*>(QStringLiteral("export-wm-anchor-0"));
     auto* x = dialog->findChild<QSpinBox*>(QStringLiteral("export-wm-x"));
     auto* y = dialog->findChild<QSpinBox*>(QStringLiteral("export-wm-y"));
+    // The photo has only a committed exposure: one free-effect picture, nothing charged
+    // from the development account's 100 sheets.
+    auto* free_count = dialog->findChild<QLabel*>(QStringLiteral("export-count-free"));
+    auto* sheets = dialog->findChild<QLabel*>(QStringLiteral("export-sheets"));
+    if (free_count == nullptr || free_count->text() != qtext_for_smoke("export.count.free").arg(1) ||
+        sheets == nullptr || sheets->text() != qtext_for_smoke("export.sheets").arg(0).arg(100)) {
+      problem = QStringLiteral("export estimate: %1 / %2")
+                    .arg(free_count ? free_count->text() : QString(), sheets ? sheets->text() : QString());
+      dialog->reject();
+      return;
+    }
     if (tabs == nullptr || tabs->count() != 3 || tabs->isTabEnabled(2) || tabs->tabToolTip(2).isEmpty() ||
         watermark == nullptr || !watermark->isEnabled() || !watermark->isChecked() || material_button == nullptr ||
         material_button->toolTip() != qtext_for_smoke("export.wm.replace") || portrait == nullptr ||

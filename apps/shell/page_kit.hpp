@@ -58,6 +58,9 @@ struct ExportTarget {
   std::string project_name;
   std::string original_folder;
   ExportDefaults defaults;
+  // 精修效果图、免费效果图、原图的预估张数和这次要扣的张数；剩余张数来自本机账本。
+  export_session::ExportEstimate estimate;
+  std::int64_t remaining_sheets = 0;
 };
 
 // 页面发出的请求。实现方（ShellController）改显示模型；页面不直接改。

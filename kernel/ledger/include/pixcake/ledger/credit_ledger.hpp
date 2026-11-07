@@ -28,12 +28,17 @@ struct TaskQuote {
   std::int64_t acceleration_points = 0;
 };
 
+// 一次导出成品。original_id 是计费用的“同一图片”标识：同一个 original_id 只扣一次张数
+// （test 版规则：同一商家下同一图片只计费一次，虚拟副本算同一张；
+// docs/superpowers/evidence/2026-11-07-export-credit-observation.md）。
+// chargeable 为假表示原图或只用了免费功能，不扣。
 struct ExportProduct {
   std::string export_id;
   std::string original_id;
   bool watermark_free_second = false;
   bool product_exists = false;
   std::string batch_id;
+  bool chargeable = true;
 
   ExportProduct() = default;
   ExportProduct(std::string export_id_value, std::string original_id_value, bool watermark_free_value,
@@ -91,7 +96,12 @@ class CreditLedger {
   ResultCode succeed(const std::string& task_id);
   ResultCode fail(const std::string& task_id);
   ResultCode stroke(const std::string& task_id, const std::string& stroke_id);
+  // 已有成品的导出都记一笔（以后同一导出编号不再处理）；每个 original_id 第一次出现可计费成品时扣 1 张，
+  // 之后不再扣。张数不够时什么都不记，返回 InsufficientBalance。
   ResultCode settle_exports(const std::vector<ExportProduct>& products);
+  bool export_settled(const std::string& export_id) const;
+  bool original_charged(const std::string& original_id) const;
+  std::vector<std::string> charged_originals() const;
 
   std::int64_t creative_points() const;
   std::int64_t export_sheets() const;

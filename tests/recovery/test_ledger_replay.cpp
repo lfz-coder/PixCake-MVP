@@ -168,7 +168,8 @@ void test_export_batch_identity_survives_sqlite_reopen() {
             {"batch-a-2", "orig-1", false, true, "batch-a"},
             {"batch-b-1", "orig-1", false, true, "batch-b"},
         }) == pixcake::ResultCode::Ok);
-  EXPECT(reopened->ledger().export_sheets() == 1);
+  // Once per image, also across a reopen (the charged image is replayed).
+  EXPECT(reopened->ledger().export_sheets() == 2);
 
   sqlite3* raw = nullptr;
   EXPECT(sqlite3_open(path.c_str(), &raw) == SQLITE_OK);

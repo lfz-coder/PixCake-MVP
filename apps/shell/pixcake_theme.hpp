@@ -75,6 +75,7 @@ struct PixCakeTheme final {
       QLabel#home-card-title { color: #f4f4f4; font-size: 15px; font-weight: 600; }
       QLabel#workspace-tool-label { color: #d5d5d5; font-size: 11px; }
       QLabel#muted, QLabel[muted="true"], QLabel#empty-state { color: #999999; }
+      QLabel[warning="true"] { color: #ffe000; }
       QPushButton { background: #1a1a1a; border: 1px solid #383838; border-radius: 4px; color: #f4f4f4; padding: 6px 11px; min-height: 32px; }
       QPushButton:hover { border-color: #ffe000; }
       QPushButton:pressed { background: #303030; }

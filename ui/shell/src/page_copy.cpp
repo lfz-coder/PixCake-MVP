@@ -142,6 +142,12 @@ Texts build_texts() {
   // 导出弹窗与导出列表（需求第 19 节；字样与默认值见
   // docs/superpowers/evidence/2026-11-06-export-dialog-observation.md）。
   t["export.heading"] = "选择一个预设应用到 %1 张图片并导出";
+  t["export.count.refined"] = "精修效果图(%1)";
+  t["export.count.free"] = "免费效果图(%1)";
+  t["export.count.original"] = "原图(%1)";
+  t["export.estimate.note"] = "导出精修效果/免费效果为预估数，最终以导出明细为准";
+  // 本机账本的张数：同一张图扣过就不再扣，原图和免费效果图不扣。
+  t["export.sheets"] = "本次预计扣除 %1 张，剩余 %2 张";
   t["export.preset"] = kWordPreset;
   t["export.preset.placeholder"] = "请选择一个预设";
   t["export.to"] = "导出至";

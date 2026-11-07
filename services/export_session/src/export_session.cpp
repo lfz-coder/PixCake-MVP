@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <cstdio>
 #include <fstream>
 #include <utility>
@@ -76,6 +77,7 @@ std::string failure_label(ResultCode code) {
     case ResultCode::DiskFull: return "磁盘空间不足";
     case ResultCode::IoFailed: return "读写文件失败";
     case ResultCode::Cancelled: return "已取消";
+    case ResultCode::InsufficientBalance: return "剩余张数不足";
     default: break;
   }
   return "导出失败";
@@ -100,6 +102,19 @@ ResultCode ExportSession::open(ProjectSession& projects, const SessionState& ses
     return opened;
   }
   std::unique_ptr<ExportSession> created(new ExportSession(projects, session, std::move(options), std::move(log)));
+  ResultCode ledger_code = SqliteLedgerLog::open(created->options_.data_directory + "/ledger.db", created->ledger_log_);
+  if (ledger_code == ResultCode::Ok) {
+    ledger_code = LedgerBook::open(FreeQueuePolicy{}, *created->ledger_log_, created->ledger_);
+  }
+  std::size_t ledger_events = 0;
+  if (ledger_code == ResultCode::Ok) ledger_code = created->ledger_log_->event_count(ledger_events);
+  if (ledger_code == ResultCode::Ok && ledger_events == 0 && created->options_.opening_sheets > 0) {
+    ledger_code = created->ledger_->credit_sheets(created->options_.opening_sheets);
+  }
+  if (ledger_code != ResultCode::Ok) {
+    diagnostic = "ledger unavailable: " + created->options_.data_directory + "/ledger.db";
+    return ledger_code;
+  }
   // Architecture 11: a task interrupted by a crash fails (it can be retried);
   // a complete temporary file is published.  exportd is not running yet, so
   // this is the one place the shell recovers; every later read skips it.
@@ -177,6 +192,7 @@ ResultCode ExportSession::submit(const ExportRequest& request, std::vector<std::
   const std::string settings = encode_export_settings(request.settings);
   BusinessCommands commands(session_);
   std::vector<ExportJob> accepted;
+  std::vector<std::string> charging;  // pictures this request will charge
   std::string batch_id;
   for (const std::int64_t photo_id : request.photo_ids) {
     std::optional<PhotoRow> photo;
@@ -196,6 +212,18 @@ ResultCode ExportSession::submit(const ExportRequest& request, std::vector<std::
     if (!decoded) {
       notices.push_back(photo->file_name + ": " + "参数文件无法读取");
       continue;
+    }
+    if (classify_export(document) == ExportEffect::Refined) {
+      const std::string identity = picture_identity(photo_id, charging);
+      const bool already = ledger_->ledger().original_charged(identity) ||
+                           std::find(charging.begin(), charging.end(), identity) != charging.end();
+      if (!already) {
+        if (remaining_sheets() <= static_cast<std::int64_t>(charging.size())) {
+          notices.push_back(photo->file_name + ": " + failure_label(ResultCode::InsufficientBalance));
+          continue;
+        }
+        charging.push_back(identity);
+      }
     }
     std::string root = request.original_folder ? directory_of(source) : request.folder;
     while (root.size() > 1 && root.back() == '/') root.pop_back();
@@ -278,7 +306,83 @@ ResultCode ExportSession::resume(std::string& diagnostic) {
     code = hand_over(job, diagnostic);
     if (code != ResultCode::Ok && code != ResultCode::SourceMissing) return code;
   }
+  std::string unsettled;
+  if (settle(unsettled) != ResultCode::Ok) diagnostic = unsettled;
   return ResultCode::Ok;
+}
+
+std::string ExportSession::picture_identity(std::int64_t photo_id, const std::vector<std::string>& also) {
+  const std::string fallback = ProjectSession::document_id(photo_id);
+  std::string source;
+  std::string reason;
+  std::string fingerprint;
+  if (projects_.resolve_photo(photo_id, source, reason) != ResultCode::Ok ||
+      picture_fingerprint(source, fingerprint, reason) != ResultCode::Ok) {
+    return fallback;
+  }
+  for (const auto& charged : ledger_->ledger().charged_originals()) {
+    if (same_picture(charged, fingerprint)) return charged;
+  }
+  for (const auto& pending : also) {
+    if (same_picture(pending, fingerprint)) return pending;
+  }
+  return fingerprint;
+}
+
+ExportEstimate ExportSession::estimate(const std::vector<std::int64_t>& photo_ids) {
+  ExportEstimate estimate;
+  std::vector<std::string> charging;
+  for (const std::int64_t photo_id : photo_ids) {
+    std::vector<std::uint8_t> document;
+    projects_.document_bytes(photo_id, document);
+    const ExportEffect effect = document.empty() ? ExportEffect::Original : classify_export(document);
+    if (effect == ExportEffect::Original) {
+      ++estimate.original;
+    } else if (effect == ExportEffect::Free) {
+      ++estimate.free;
+    } else {
+      ++estimate.refined;
+      const std::string identity = picture_identity(photo_id, charging);
+      if (!ledger_->ledger().original_charged(identity) &&
+          std::find(charging.begin(), charging.end(), identity) == charging.end()) {
+        charging.push_back(identity);
+      }
+    }
+  }
+  estimate.sheets = static_cast<std::int64_t>(charging.size());
+  return estimate;
+}
+
+std::int64_t ExportSession::remaining_sheets() const { return ledger_->ledger().export_sheets(); }
+
+ResultCode ExportSession::settle(std::string& diagnostic) {
+  diagnostic.clear();
+  if (!session_.signed_in()) return ResultCode::StateConflict;
+  std::unique_ptr<ExportBook> current;
+  ResultCode code = book(current);
+  if (code != ResultCode::Ok) return code;
+  BusinessCommands commands(session_);
+  ResultCode outcome = ResultCode::Ok;
+  for (const auto& fact : current->queue().products()) {
+    if (!fact.product_exists || ledger_->ledger().export_settled(fact.export_id)) continue;
+    ExportJob job;
+    if (!current->queue().find_job(fact.export_id, job)) continue;
+    ExportProduct product;
+    product.export_id = fact.export_id;
+    product.product_exists = true;
+    product.watermark_free_second = fact.watermark_free_second;
+    product.chargeable = classify_export(job.document_snapshot) == ExportEffect::Refined;
+    std::int64_t photo_id = 0;
+    if (job.original_id.rfind("photo-", 0) == 0) photo_id = std::atoll(job.original_id.c_str() + 6);
+    product.original_id = photo_id > 0 ? picture_identity(photo_id, {}) : job.original_id;
+    code = commands.settle_exports(*ledger_, {product});
+    if (code != ResultCode::Ok) {
+      // 张数不够（提交后别处扣掉了）：成品已经写出，记账留到下次。
+      diagnostic = fact.export_id + ": " + failure_label(code);
+      outcome = code;
+    }
+  }
+  return outcome;
 }
 
 ResultCode ExportSession::store_watermark(const std::string& source_path, std::string& material,
@@ -426,6 +530,10 @@ bool ExportSession::read_progress() {
       // exportd exited: what it finished is in the log; the next submit restarts it.
       client_.reset();
       any = true;
+    }
+    if (any) {
+      std::string unsettled;
+      settle(unsettled);  // products committed since the last read
     }
     return any;
   }

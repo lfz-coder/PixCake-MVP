@@ -422,6 +422,8 @@ std::optional<ExportTarget> ShellController::export_target() const {
     target.original_folder = slash == std::string::npos || slash == 0 ? "/" : path.substr(0, slash);
   }
   target.defaults = exports_->defaults();
+  target.estimate = exports_->estimate(target.photo_ids);
+  target.remaining_sheets = exports_->remaining_sheets();
   return target;
 }
 

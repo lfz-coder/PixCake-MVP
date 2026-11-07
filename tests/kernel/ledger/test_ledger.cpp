@@ -167,9 +167,24 @@ void test_b109_b110_export_sheets_count_originals_once_per_settlement() {
   EXPECT(ledger.settle_exports(batch) == pixcake::ResultCode::Ok);
   EXPECT(ledger.export_sheets() == 1);
 
+  // The same image again: charged once only (test build, 2026-11-07 evidence
+  // export-credit-observation).  A new image is charged.
   std::vector<pixcake::ExportProduct> again = {{"exp-e", "orig-1", false, true}};
   EXPECT(ledger.settle_exports(again) == pixcake::ResultCode::Ok);
+  EXPECT(ledger.export_sheets() == 1);
+  EXPECT(ledger.original_charged("orig-1") && ledger.export_settled("exp-e"));
+  std::vector<pixcake::ExportProduct> other = {{"exp-f", "orig-3", false, true}};
+  EXPECT(ledger.settle_exports(other) == pixcake::ResultCode::Ok);
   EXPECT(ledger.export_sheets() == 0);
+  // Originals and free-tool products are recorded but never charged.
+  auto plain = charged(version_930(), 10, 1);
+  pixcake::ExportProduct free_effect{"exp-g", "orig-4", false, true};
+  free_effect.chargeable = false;
+  EXPECT(plain.settle_exports({free_effect}) == pixcake::ResultCode::Ok);
+  EXPECT(plain.export_sheets() == 1 && plain.export_settled("exp-g") && !plain.original_charged("orig-4"));
+  // ...and a later refined export of that image is its first charge.
+  EXPECT(plain.settle_exports({{"exp-h", "orig-4", false, true}}) == pixcake::ResultCode::Ok);
+  EXPECT(plain.export_sheets() == 0 && plain.original_charged("orig-4"));
 
   auto poor = charged(version_930(), 10, 0);
   EXPECT(poor.credit_sheets(0) == pixcake::ResultCode::StateConflict);
@@ -193,11 +208,12 @@ void test_export_batch_identity_deduplicates_partial_completion_but_not_new_batc
   EXPECT(ledger.settle_exports(second_part) == pixcake::ResultCode::Ok);
   EXPECT(ledger.export_sheets() == 2);
 
+  // A new batch of the same image is not charged again (once per image).
   std::vector<pixcake::ExportProduct> new_batch = {
       {"batch-b-1", "orig-1", false, true, "batch-b"},
   };
   EXPECT(ledger.settle_exports(new_batch) == pixcake::ResultCode::Ok);
-  EXPECT(ledger.export_sheets() == 1);
+  EXPECT(ledger.export_sheets() == 2);
 }
 
 

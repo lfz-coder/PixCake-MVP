@@ -1,11 +1,14 @@
 #pragma once
 
+#include "pixcake/export_session/export_charge.hpp"
 #include "pixcake/exportq/export_book.hpp"
 #include "pixcake/exportq/export_settings.hpp"
 #include "pixcake/persist/file_system.hpp"
 #include "pixcake/preview_channel/export_client.hpp"
 #include "pixcake/project_session/project_session.hpp"
+#include "pixcake/ledger/ledger_book.hpp"
 #include "pixcake/storage/sqlite_export_log.hpp"
+#include "pixcake/storage/sqlite_ledger_log.hpp"
 #include "pixcake/support/session_state.hpp"
 
 #include <cstdint>
@@ -25,6 +28,17 @@ struct ExportOptions {
   // The app data directory; the export log is <data>/exports/export.db.
   std::string data_directory;
   int connect_timeout_ms = 10'000;
+  // 账号的剩余张数：本机账本（<数据目录>/ledger.db）第一次建立时记入。之后的扣减只记在本机，
+  // 没有服务器，跨设备不去重。
+  std::int64_t opening_sheets = 0;
+};
+
+// 导出弹窗的三类计数和这次要扣的张数（预估：同一张图以前扣过的不再算）。
+struct ExportEstimate {
+  int refined = 0;
+  int free = 0;
+  int original = 0;
+  std::int64_t sheets = 0;
 };
 
 // What the export dialog asks for (requirement 19; the test build's dialog,
@@ -94,6 +108,13 @@ class ExportSession {
   // Hands queued tasks left by an earlier session to exportd.
   ResultCode resume(std::string& diagnostic);
 
+  // 扣张数（test 版规则，docs/superpowers/evidence/2026-11-07-export-credit-observation.md）：
+  // 精修效果图按画面内容认图，同一张图只扣一次；原图、免费效果图不扣。提交时张数不够的照片
+  // 不排队；导出成功后 settle() 记账（read_progress、resume 会顺带调用）。
+  ExportEstimate estimate(const std::vector<std::int64_t>& photo_ids);
+  std::int64_t remaining_sheets() const;
+  ResultCode settle(std::string& diagnostic);
+
   // exportd's connection (-1 before it is started or after it exited).
   int fd() const { return client_ ? client_->fd() : -1; }
   // Reads every waiting progress report; true when any arrived.  When exportd
@@ -107,6 +128,9 @@ class ExportSession {
   ResultCode ensure_exportd(std::string& diagnostic);
   ResultCode hand_over(const ExportJob& job, std::string& diagnostic);
   std::string next_export_id();
+  // 照片计费用的图片标识：和已扣过的某张是同一画面就用那张的标识，否则用自己的指纹；
+  // 原图读不了时退回参数文件编号。
+  std::string picture_identity(std::int64_t photo_id, const std::vector<std::string>& also);
 
   ProjectSession& projects_;
   const SessionState& session_;
@@ -114,6 +138,8 @@ class ExportSession {
   std::unique_ptr<SqliteExportLog> log_;
   PosixFileSystem files_;
   std::unique_ptr<preview_channel::ExportClient> client_;
+  std::unique_ptr<SqliteLedgerLog> ledger_log_;
+  std::unique_ptr<LedgerBook> ledger_;
   unsigned sequence_ = 0;
 };
 

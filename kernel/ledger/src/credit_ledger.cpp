@@ -59,6 +59,7 @@ struct CreditLedger::Snapshot {
   std::set<std::string> settled_exports;
   std::set<std::string> settled_batches;
   std::set<std::string> charged_tasks;
+  std::set<std::string> charged_originals;
 };
 
 void CreditLedger::apply(Snapshot& shot, const LedgerEvent& event) {
@@ -98,6 +99,7 @@ void CreditLedger::apply(Snapshot& shot, const LedgerEvent& event) {
     shot.strokes.insert(event.stroke_id);
   } else if (event.kind == "export-sheet") {
     shot.settled_exports.insert(event.export_id);
+    if (event.sheets_delta < 0) shot.charged_originals.insert(event.original_id);
     if (!event.batch_id.empty()) {
       shot.settled_batches.insert(event.batch_id + "\n" + event.original_id);
     }
@@ -448,24 +450,29 @@ ResultCode CreditLedger::settle_exports(const std::vector<ExportProduct>& produc
   }
   std::vector<LedgerEvent> added;
   std::int64_t needed = 0;
+  std::set<std::string> charging;  // originals charged by this call
   for (const auto& group : groups) {
-    std::vector<const ExportProduct*> chargeable;
+    std::vector<const ExportProduct*> existing;
     for (const ExportProduct* product : group.second) {
-      if (product->product_exists && !product->watermark_free_second) {
-        chargeable.push_back(product);
-      }
+      if (product->product_exists) existing.push_back(product);
     }
-    if (chargeable.empty()) {
-      continue;
-    }
-    needed += 1;
-    for (std::size_t index = 0; index < chargeable.size(); ++index) {
+    if (existing.empty()) continue;  // nothing was produced: retried later, never charged
+    const std::string& original = existing.front()->original_id;
+    bool charge = shot.charged_originals.count(original) == 0 && charging.count(original) == 0;
+    bool charged_one = false;
+    for (const ExportProduct* product : existing) {
       LedgerEvent event;
       event.kind = "export-sheet";
-      event.export_id = chargeable[index]->export_id;
-      event.original_id = chargeable[index]->original_id;
-      event.batch_id = chargeable[index]->batch_id;
-      event.sheets_delta = index == 0 ? -1 : 0;
+      event.export_id = product->export_id;
+      event.original_id = product->original_id;
+      event.batch_id = product->batch_id;
+      const bool chargeable = product->chargeable && !product->watermark_free_second;
+      if (charge && chargeable && !charged_one) {
+        event.sheets_delta = -1;
+        charged_one = true;
+        charging.insert(original);
+        needed += 1;
+      }
       added.push_back(std::move(event));
     }
   }
@@ -474,6 +481,18 @@ ResultCode CreditLedger::settle_exports(const std::vector<ExportProduct>& produc
   }
   for (auto& event : added) append(std::move(event));
   return ResultCode::Ok;
+}
+
+bool CreditLedger::export_settled(const std::string& export_id) const {
+  return snapshot_->settled_exports.count(export_id) != 0;
+}
+
+bool CreditLedger::original_charged(const std::string& original_id) const {
+  return snapshot_->charged_originals.count(original_id) != 0;
+}
+
+std::vector<std::string> CreditLedger::charged_originals() const {
+  return {snapshot_->charged_originals.begin(), snapshot_->charged_originals.end()};
 }
 
 bool CreditLedger::task_charged(const std::string& task_id) const {

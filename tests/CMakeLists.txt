@@ -405,6 +405,14 @@ if(APPLE)
   add_dependencies(test_export_session pixcake_app_exportd)
   add_test(NAME test_export_session COMMAND test_export_session)
   set_tests_properties(test_export_session PROPERTIES TIMEOUT 120)
+
+  add_executable(test_export_charge services/export_session/test_export_charge.cpp)
+  target_link_libraries(test_export_charge PRIVATE pixcake_export_session pixcake_platform_macos_image pixcake_warnings)
+  target_compile_definitions(test_export_charge PRIVATE PIXCAKE_EXPORTD_EXE="$<TARGET_FILE:pixcake_app_exportd>"
+    PIXCAKE_TEST_WORK_DIR="${CMAKE_CURRENT_BINARY_DIR}")
+  add_dependencies(test_export_charge pixcake_app_exportd)
+  add_test(NAME test_export_charge COMMAND test_export_charge)
+  set_tests_properties(test_export_charge PROPERTIES TIMEOUT 120)
 endif()
 
 add_executable(test_project_session services/project_session/test_project_session.cpp)
