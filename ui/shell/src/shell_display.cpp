@@ -96,11 +96,11 @@ WindowContract ShellDisplay::contract() const {
   return WindowContract{page_text("app.title"), true, page_, in_project_, regions_};
 }
 
-ResultCode ShellDisplay::open_project() {
-  if (page_ != Page::Home || in_project_) {
+ResultCode ShellDisplay::open_project(Page landing) {
+  if (page_ != Page::Home || in_project_ || (landing != Page::Library && landing != Page::Refine)) {
     return ResultCode::StateConflict;
   }
-  page_ = Page::Refine;
+  page_ = landing;
   in_project_ = true;
   rebuild_regions();
   return ResultCode::Ok;
@@ -208,6 +208,11 @@ ResultCode ShellDisplay::set_full_effect(bool on) {
   if (page_ != Page::Library) return ResultCode::StateConflict;
   full_effect_ = on;
   return ResultCode::Ok;
+}
+
+IconDropAction icon_drop_action(const ShellDisplay& display, bool modal_open) {
+  if (modal_open || display.page() == Page::Login) return IconDropAction::Ignore;
+  return display.in_project() ? IconDropAction::AppendToProject : IconDropAction::NewProject;
 }
 
 }  // namespace pixcake::ui::shell

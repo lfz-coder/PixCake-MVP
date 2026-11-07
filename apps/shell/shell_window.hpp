@@ -4,7 +4,11 @@
 
 #include <QLabel>
 #include <QMainWindow>
+#include <QTimer>
 #include <QWidget>
+
+#include <string>
+#include <vector>
 
 namespace pixcake::shell {
 
@@ -21,10 +25,16 @@ class ShellWindow final : public QMainWindow {
  private:
   void render();
   void setBody(QWidget* page);
+  bool eventFilter(QObject* watched, QEvent* event) override;
+  void flushIconDrop();
 
   ShellController controller_;
   QWidget* body_ = nullptr;
   QLabel* title_ = nullptr;
+  // Files dropped on the app icon arrive one QFileOpenEvent each; a drop is
+  // collected for a moment and imported as one batch (one project).
+  std::vector<std::string> icon_drop_;
+  QTimer* icon_drop_timer_ = nullptr;
 };
 
 }  // namespace pixcake::shell

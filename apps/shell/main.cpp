@@ -11,7 +11,10 @@
 #include "shell_window.hpp"
 
 #include <QApplication>
+#include <QDialog>
 #include <QDir>
+#include <QFile>
+#include <QFileOpenEvent>
 #include <QElapsedTimer>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -26,6 +29,7 @@
 #include <QSocketNotifier>
 #include <QStringList>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
@@ -248,6 +252,7 @@ bool wait_frames(const pixcake::shell::ShellWindow& window, std::uint64_t count,
 // --dev-sign-in --data-dir --import 冒烟：主页导入 → 新项目（按 5.2 命名）→ 精修首张出帧 → 调曝光
 // 标成已编辑 → 图库列出照片 → 回主页看到项目 → 重新打开项目，曝光仍在。
 int smoke_open_photo(pixcake::shell::ShellWindow& window);
+int smoke_icon_drop(pixcake::shell::ShellWindow& window, const std::vector<std::string>& imported);
 
 int smoke_import_flow(pixcake::shell::ShellWindow& window, const std::vector<std::string>& paths,
                       const std::string& expected_project) {
@@ -309,10 +314,24 @@ int smoke_import_flow(pixcake::shell::ShellWindow& window, const std::vector<std
     qCritical("home does not list project %s (or the photo stayed open)", expected_project.c_str());
     return 9;
   }
-  const auto before = controller.frames_shown();
+  // A click on a project shows its photos in the library; nothing is opened yet.
   project->click();
-  if (!wait_frames(window, before + 1, 60'000) || controller.display().page() != Page::Refine) {
-    qCritical("reopening the project shows no frame");
+  auto* reopened = library_photos(window);
+  if (controller.display().page() != Page::Library || controller.has_photo() || reopened == nullptr ||
+      reopened->count() != static_cast<int>(photos.size())) {
+    qCritical("a click on the project did not show its photos in the library");
+    return 9;
+  }
+  // A double-click (item activation) on the edited photo opens it in refine.
+  QListWidgetItem* edited_item = nullptr;
+  for (int row = 0; row < reopened->count(); ++row) {
+    if (reopened->item(row)->data(Qt::UserRole).toLongLong() == edited) edited_item = reopened->item(row);
+  }
+  const auto before = controller.frames_shown();
+  if (edited_item != nullptr) emit reopened->itemActivated(edited_item);
+  if (edited_item == nullptr || !wait_frames(window, before + 1, 60'000) ||
+      controller.display().page() != Page::Refine) {
+    qCritical("double-clicking the photo shows no frame in refine");
     return 9;
   }
   // The committed exposure is applied again: much brighter than the original.
@@ -321,8 +340,74 @@ int smoke_import_flow(pixcake::shell::ShellWindow& window, const std::vector<std
     qCritical("reopened photo lost its edit (red %.1f)", red);
     return 9;
   }
+  if (const int dropped = smoke_icon_drop(window, paths); dropped != 0) return dropped;
   std::printf("import flow ok: project %s, %zu photo(s), reopened red %.1f, thumbnails edited %.1f original %.1f\n",
               expected_project.c_str(), photos.size(), red, edited_red, original_red);
+  return 0;
+}
+
+// Requirement 3.2 / B-71 with the events macOS sends for a drop on the Dock icon.
+void drop_on_icon(const QString& path) {
+  QFileOpenEvent event(path);
+  QCoreApplication::sendEvent(qApp, &event);
+  QElapsedTimer timer;
+  timer.start();
+  while (timer.elapsed() < 400) QCoreApplication::processEvents(QEventLoop::AllEvents, 50);  // the batch window
+}
+
+int smoke_icon_drop(pixcake::shell::ShellWindow& window, const std::vector<std::string>& imported) {
+  auto& controller = window.controller();
+  QTemporaryDir drops;
+  QString photo;
+  const QFileInfo first(QString::fromStdString(imported.front()));
+  if (first.isDir()) {
+    const auto files = QDir(first.absoluteFilePath()).entryInfoList(QStringList() << QStringLiteral("*.png"), QDir::Files);
+    if (!files.isEmpty()) photo = files.front().absoluteFilePath();
+  } else {
+    photo = first.absoluteFilePath();
+  }
+  const QString append = drops.filePath(QStringLiteral("drop-append.png"));
+  const QString ignored = drops.filePath(QStringLiteral("drop-ignored.png"));
+  const QString fresh = drops.filePath(QStringLiteral("Drop Shoot.png"));
+  if (photo.isEmpty() || !QFile::copy(photo, append) || !QFile::copy(photo, ignored) || !QFile::copy(photo, fresh)) {
+    qCritical("cannot prepare the dropped files");
+    return 9;
+  }
+  // Refine: appended to the current project, no new project.
+  const auto project = controller.current_project();
+  const auto photo_count = controller.photos().size();
+  const auto project_count = controller.projects().size();
+  drop_on_icon(append);
+  if (controller.current_project() != project || controller.photos().size() != photo_count + 1 ||
+      controller.projects().size() != project_count) {
+    qCritical("a drop in refine was not appended to the project");
+    return 9;
+  }
+  // A modal layer open: nothing is imported and the page stays.
+  {
+    QDialog modal(&window);
+    modal.setWindowModality(Qt::ApplicationModal);
+    modal.show();
+    drop_on_icon(ignored);
+    modal.close();
+  }
+  if (controller.photos().size() != photo_count + 1 || controller.projects().size() != project_count ||
+      controller.display().page() != Page::Refine) {
+    qCritical("a drop under a modal layer was imported");
+    return 9;
+  }
+  // Home: a new project named after the first file (requirement 5.2), entered in refine.
+  controller.request_page(Page::Home);
+  drop_on_icon(fresh);
+  const auto projects = controller.projects();
+  const bool named = std::any_of(projects.begin(), projects.end(),
+                                 [](const auto& entry) { return entry.name == "Drop Shoot"; });
+  if (projects.size() != project_count + 1 || !named || controller.current_project() == project ||
+      controller.display().page() != Page::Refine) {
+    qCritical("a drop on home did not create project \"Drop Shoot\"");
+    return 9;
+  }
+  std::printf("icon drop ok: appended in refine, ignored under a modal layer, new project from home\n");
   return 0;
 }
 

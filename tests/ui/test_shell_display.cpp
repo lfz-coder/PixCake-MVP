@@ -269,7 +269,48 @@ void test_b31_library_controls() {
   EXPECT(library.full_effect() == false);
 }
 
+// 用户裁决 2026-11-06：主页单击项目进图库（照片集合），不是直接进精修；只能落在图库或精修。
+void test_project_click_lands_in_the_library() {
+  using pixcake::ResultCode;
+  using pixcake::ui::shell::Page;
+  using pixcake::ui::shell::ShellDisplay;
+  auto home = ShellDisplay::dev_preview(Page::Home);
+  EXPECT(home.open_project(Page::Creative) == ResultCode::StateConflict);
+  EXPECT(home.open_project(Page::Home) == ResultCode::StateConflict);
+  EXPECT(home.page() == Page::Home && !home.in_project());
+  EXPECT(home.open_project(Page::Library) == ResultCode::Ok);
+  EXPECT(home.page() == Page::Library && home.in_project());
+  EXPECT(home.open_project(Page::Library) == ResultCode::StateConflict);  // 已在项目里
+  EXPECT(home.navigate(Page::Refine) == ResultCode::Ok);
+}
+
+// 需求 §3.2 与边界 B-71：拖到应用图标的三种情况，加上未登录。
+void test_b71_icon_drop_follows_the_page() {
+  using pixcake::ResultCode;
+  using pixcake::ui::shell::IconDropAction;
+  using pixcake::ui::shell::icon_drop_action;
+  using pixcake::ui::shell::Page;
+  using pixcake::ui::shell::ShellDisplay;
+  const auto login = ShellDisplay::logged_out();
+  EXPECT(icon_drop_action(login, false) == IconDropAction::Ignore);
+  auto home = ShellDisplay::dev_preview(Page::Home);
+  EXPECT(icon_drop_action(home, false) == IconDropAction::NewProject);
+  EXPECT(icon_drop_action(home, true) == IconDropAction::Ignore);
+  EXPECT(home.open_project() == ResultCode::Ok);  // 进项目后是精修页
+  EXPECT(home.page() == Page::Refine);
+  EXPECT(icon_drop_action(home, false) == IconDropAction::AppendToProject);
+  EXPECT(icon_drop_action(home, true) == IconDropAction::Ignore);
+  for (const Page page : {Page::Library, Page::Creative}) {
+    EXPECT(home.navigate(page) == ResultCode::Ok);
+    EXPECT(icon_drop_action(home, false) == IconDropAction::AppendToProject);
+  }
+  EXPECT(home.navigate(Page::Home) == ResultCode::Ok);
+  EXPECT(icon_drop_action(home, false) == IconDropAction::NewProject);
+}
+
 int main() {
+  test_project_click_lands_in_the_library();
+  test_b71_icon_drop_follows_the_page();
   test_q11_regions_take_copy_from_the_page_table();
   test_b31_library_controls();
   test_o13_notice_stays_on_the_page();

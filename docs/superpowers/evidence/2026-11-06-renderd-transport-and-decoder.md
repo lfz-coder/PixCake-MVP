@@ -97,7 +97,7 @@ renderd 每个进程只服务一个连接：30 秒内没有壳层连接退出码
 
 验证：`test_project_session`（命名、展开、坏文件原因、未登录不建项目、追加、书签解析、挪走后标缺失、已编辑、重开数据库）；`test_shell_app_import_flow`（离屏：开发登录 → 主页导入文件夹 “Shoot 01” → 精修出帧 → 曝光 +1 EV 提交 → 照片标“已编辑” → 图库列出 → 回主页看到项目 → 再次打开项目，曝光仍在（红色均值 229）；数据库和 `photo-*.pxedit` 写在 `--data-dir` 里）。
 
-已知不足（缩略图见 §5.2，已补上）：拖到程序坞图标的三种情况（需求 3.2）未做；`resolve_photo` 遇到异常时刷新整个项目库的原图状态，照片很多时会慢。
+已知不足（缩略图见 §5.2、拖到应用图标见 §5.3，均已补上）：`resolve_photo` 遇到异常时刷新整个项目库的原图状态，照片很多时会慢。
 
 ### 5.2 缩略图（2026-11-06）
 
@@ -113,6 +113,19 @@ renderd 每个进程只服务一个连接：30 秒内没有壳层连接退出码
 验证：`test_preview_protocol`（10/11 往返、上限、不能互相解码）；`test_preview_server`（三张缩略图排队时来了预览请求：先回预览，再逐张回缩略图，全部回完后空闲）；`test_thumbnail_service`（真实 renderd：原图与带 +1 EV 文档的缩略图、同一照片重新请求后旧结果不出现、原图缺失返回 `SourceMissing`）；`test_shell_app_import_flow`（两张照片都有缩略图，编辑过的那张红色均值 229、原图 133，精修底部缩略图条列出两张）。截图确认图库网格、状态行与底部缩略图条。
 
 另外修了 `tests/apps/check_shell_single_instance.sh`：去掉 `--page home`（发布构建按 S-25 拒绝它，导致 T21 在 Release 下必然失败）；开发与发布构建都通过。
+
+### 5.3 拖到应用图标与进入项目（2026-11-06）
+
+| 部分 | 位置 | 说明 |
+|---|---|---|
+| 规则 | `ui/shell`：`icon_drop_action` | 需求 3.2：模态层开着不导入（B-71）；未登录不导入；在项目里（精修，以及同属项目的图库、创意）追加；主页新建项目 |
+| 事件 | `ShellWindow` 的应用级事件过滤 | macOS 把拖到程序坞图标、访达里的 `.app` 和“打开方式”的文件都作为 `QFileOpenEvent` 交给应用；一次拖多个文件是多个事件，收集 150 毫秒后作为一批导入（一个项目，按第一个文件命名）；拖入那一刻有模态窗口就丢弃 |
+| 文档类型 | `apps/shell/Info.plist.in` | CMake 默认模板加 `CFBundleDocumentTypes`：`public.image` 与 `public.folder`，`LSHandlerRank` 为 `Alternate`（接受拖入，但不成为图片的默认打开程序）；没有它程序坞不接受拖放 |
+| 进入项目 | `ShellDisplay::open_project(landing)`、`ShellController::request_open_project` | 用户裁决：主页单击项目进图库，不打开照片、不启动预览 renderd；图库双击照片进精修；从图库切到精修且没有打开的照片时打开第一张；导入新建的项目仍进精修（需求 5.3）。待与像素蛋糕-test 核对 |
+
+验证：`test_shell_display`（四种去向、进入项目只能落在图库或精修）；`test_shell_app_import_flow`（单击项目进图库且没有打开照片，双击已编辑照片进精修、红色均值 229；三次 `QFileOpenEvent`：精修追加 1 张不新建项目，模态窗口下不导入且页面不变，主页新建项目 “Drop Shoot” 并进精修）。真实系统路径：`open -a pixcake_app_shell.app "Dock One.png" --args --dev-sign-in …` 冷启动后新建项目 “Dock One”；应用停在精修时再 `open -a … dock-two.png`，系统把文件交给正在运行的实例，追加进同一项目（项目库里 1 个项目 2 张照片），截图确认底部缩略图条两张。拖到程序坞图标本身需要真实指针拖放，仍按测试清单第 34 行作人工步骤，还没有记录。
+
+顺带修了 T21 脚本的泄漏：`third=$(start_primary third)` 在子 shell 里记录进程号，清理时杀不到第三个主实例，每跑一次留下一个离屏壳层进程（此前累积 82 个，已清掉）；现在三种构建全量跑完不留进程。
 
 ## 6. 不在本次范围
 

@@ -63,7 +63,7 @@
 | B-68 | 批量同步、批量导入或批量导出中一项失败 | `test_b68_same_path_skips_only_that_target`（kernel/sync/test_sync.cpp） |
 | B-69 | 主进程在结果已就绪后、落层前结束 | 未实现：主进程落层（结果就绪后写图层文档） |
 | B-70 | 批量设计进行中，又来了编辑、历史或图层命令 | `test_b70_batch_design_rejects_history_commands`（kernel/history/test_history.cpp） |
-| B-71 | 模态层打开时，文件被拖到应用图标 | 人工步骤：拖到程序坞（测试清单第 34 行），还没有记录 |
+| B-71 | 模态层打开时，文件被拖到应用图标 | `test_b71_icon_drop_follows_the_page`（tests/ui/test_shell_display.cpp）；`test_shell_app_import_flow` 用 `QFileOpenEvent` 走精修追加、模态层不导入、主页新建三种情况；真实 LaunchServices 打开文档事件见 2026-11-06-renderd-transport-and-decoder.md §5.3。拖到程序坞图标本身仍是人工步骤（测试清单第 34 行） |
 | B-72 | 生成进程崩溃，与主进程处理事件同时发生 | 未实现：生成进程崩溃与主进程处理事件并发 |
 | B-73 | 旧修订号的命令晚到 | `test_b73_stale_revision_does_not_write`（kernel/command/test_command_gate.cpp）；`test_c23_b73_failed_document_commands_do_not_notify`（kernel/command/test_command_gate.cpp）；`test_b73_stale_revision_does_not_overwrite`（kernel/editdoc/test_edit_document.cpp）；`test_c23_b73_stale_commit_preview_is_rejected`（kernel/editdoc/test_edit_document.cpp）；`test_c23_b73_stale_fragment_replacement_is_rejected`（kernel/editdoc/test_edit_document.cpp）；`test_c23_b73_stale_baked_reset_is_rejected`（kernel/editdoc/test_edit_document.cpp）；`test_b73_reloaded_handle_commits_next_revision`（kernel/editdoc/test_edit_document.cpp）；`test_b73_older_revision_does_not_append`（kernel/history/test_history.cpp）；`test_c23_b73_stale_layer_save_is_rejected`（kernel/layerdoc/test_layer_document.cpp） |
 | B-74 | 渲染进程只收到旧的预览值，更新的值已经在队列里 | `test_b74_latest_value_wins_without_writing`（kernel/preview/test_preview_coordinator.cpp） |

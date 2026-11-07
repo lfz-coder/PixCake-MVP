@@ -40,6 +40,8 @@ class ShellController final : public PageActions {
                        preview_channel::PreviewSessionOptions preview);
   bool can_import() const override { return projects_ != nullptr; }
   void request_import(const std::vector<std::string>& paths) override;
+  // 需求 §3.2：文件拖到应用图标（程序坞或访达里的 .app）。按当前页面和模态层决定去向，返回实际采取的去向。
+  ui::shell::IconDropAction drop_on_app_icon(const std::vector<std::string>& paths, bool modal_open);
   std::vector<ProjectEntry> projects() const override;
   void request_open_project(std::int64_t project_id) override;
   std::vector<PhotoEntry> photos() const override;

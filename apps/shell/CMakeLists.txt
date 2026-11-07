@@ -36,6 +36,8 @@ set_target_properties(pixcake_app_shell PROPERTIES
   MACOSX_BUNDLE_BUNDLE_NAME "PixCake Desktop Shell"
   MACOSX_BUNDLE_SHORT_VERSION_STRING "0.1"
   MACOSX_BUNDLE_BUNDLE_VERSION "0.1"
+  # CMake's default template plus the document types for drops on the app icon.
+  MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in
 )
 target_link_libraries(pixcake_app_shell PRIVATE
   pixcake_instance

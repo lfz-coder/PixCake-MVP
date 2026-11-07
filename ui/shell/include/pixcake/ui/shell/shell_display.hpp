@@ -52,7 +52,9 @@ class ShellDisplay {
   const std::vector<Region>& regions() const;
 
   // Navigation is the only state-changing operation in this batch.
-  ResultCode open_project();
+  // 从主页进入项目。landing 只能是图库或精修：主页单击项目进图库（用户裁决 2026-11-06），
+  // 导入新建的项目进精修（需求 5.3）。
+  ResultCode open_project(Page landing = Page::Refine);
   ResultCode navigate(Page target);
   // 登录成功后换成主页；会话没有登录时拒绝。退出登录回到登录页，不保留项目（需求第 226 行）。
   ResultCode signed_in(const SessionState& session);
@@ -86,5 +88,13 @@ class ShellDisplay {
 
   void rebuild_regions();
 };
+
+// 需求 §3.2：文件拖到应用图标（Mac 程序坞或访达里的 .app）时的去向。
+//   - 模态层开着：不导入，窗口保持原样（边界 B-71）。
+//   - 未登录（登录页）：业务命令不可用，不导入。
+//   - 在项目里（精修，以及同属项目的图库、创意）：追加进当前项目。
+//   - 主页：按第 5.2 节新建项目。
+enum class IconDropAction { NewProject, AppendToProject, Ignore };
+IconDropAction icon_drop_action(const ShellDisplay& display, bool modal_open);
 
 }  // namespace pixcake::ui::shell

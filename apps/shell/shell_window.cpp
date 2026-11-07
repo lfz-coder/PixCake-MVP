@@ -2,6 +2,8 @@
 
 #include "pages.hpp"
 
+#include <QApplication>
+#include <QFileOpenEvent>
 #include <QFont>
 #include <QVBoxLayout>
 
@@ -27,6 +29,44 @@ ShellWindow::ShellWindow(ShellDisplay display) : controller_(std::move(display))
   setCentralWidget(root);
   controller_.on_changed([this] { render(); });
   render();
+  // macOS delivers files dropped on the Dock icon or the .app in Finder (and
+  // "Open With") to the application as file-open events.
+  icon_drop_timer_ = new QTimer(this);
+  icon_drop_timer_->setSingleShot(true);
+  icon_drop_timer_->setInterval(150);
+  connect(icon_drop_timer_, &QTimer::timeout, this, [this] { flushIconDrop(); });
+  qApp->installEventFilter(this);
+}
+
+bool ShellWindow::eventFilter(QObject* watched, QEvent* event) {
+  if (watched != qApp || event->type() != QEvent::FileOpen) return QMainWindow::eventFilter(watched, event);
+  const auto* open = static_cast<QFileOpenEvent*>(event);
+  const QString path = open->file().isEmpty() ? open->url().toLocalFile() : open->file();
+  if (path.isEmpty()) return true;
+  // B-71: a modal layer open at the moment of the drop keeps the window as it is.
+  if (QApplication::activeModalWidget() != nullptr) {
+    qInfo("icon drop ignored: a modal layer is open");
+    return true;
+  }
+  icon_drop_.push_back(path.toStdString());
+  icon_drop_timer_->start();
+  return true;
+}
+
+void ShellWindow::flushIconDrop() {
+  std::vector<std::string> paths;
+  paths.swap(icon_drop_);
+  const bool modal_open = QApplication::activeModalWidget() != nullptr;
+  const auto action = controller_.drop_on_app_icon(paths, modal_open);
+  if (action == ui::shell::IconDropAction::Ignore) {
+    qInfo("icon drop of %zu file(s) ignored on this page", paths.size());
+    return;
+  }
+  qInfo("icon drop of %zu file(s): %s", paths.size(),
+        action == ui::shell::IconDropAction::NewProject ? "new project" : "appended to the project");
+  showNormal();
+  raise();
+  activateWindow();
 }
 
 ResultCode ShellWindow::openPhoto(const std::string& photo_path,

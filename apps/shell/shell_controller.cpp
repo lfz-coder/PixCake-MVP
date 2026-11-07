@@ -12,6 +12,13 @@ ShellController::~ShellController() {
 void ShellController::request_page(Page target) {
   if (display_.navigate(target) != ResultCode::Ok) return;
   if (target == Page::Home) close_project();
+  // Refine from the library tab with nothing open yet: show the project's first photo.
+  if (target == Page::Refine && projects_ && current_project_ && !current_photo_) {
+    std::vector<PhotoRow> rows;
+    if (projects_->list_photos(*current_project_, rows) == ResultCode::Ok && !rows.empty()) {
+      open_project_photo(rows.front().id);
+    }
+  }
   if (changed_) changed_();
 }
 
@@ -138,6 +145,17 @@ void ShellController::request_import(const std::vector<std::string>& paths) {
   if (changed_) changed_();
 }
 
+ui::shell::IconDropAction ShellController::drop_on_app_icon(const std::vector<std::string>& paths, bool modal_open) {
+  using ui::shell::IconDropAction;
+  IconDropAction action = ui::shell::icon_drop_action(display_, modal_open);
+  // A project page with no project behind it (development previews) has nothing to append to.
+  if (!projects_ || paths.empty() || (action == IconDropAction::AppendToProject && !current_project_)) {
+    action = IconDropAction::Ignore;
+  }
+  if (action != IconDropAction::Ignore) request_import(paths);  // new project on home, append in a project
+  return action;
+}
+
 std::vector<ProjectEntry> ShellController::projects() const {
   std::vector<ProjectEntry> out;
   std::vector<ProjectRow> rows;
@@ -148,10 +166,10 @@ std::vector<ProjectEntry> ShellController::projects() const {
 }
 
 void ShellController::request_open_project(std::int64_t project_id) {
-  if (!projects_ || display_.open_project() != ResultCode::Ok) return;
+  // A click on a project shows its photos in the library; a double-click on a
+  // photo opens it in refine (user ruling 2026-11-06).  No photo is opened yet.
+  if (!projects_ || display_.open_project(Page::Library) != ResultCode::Ok) return;
   current_project_ = project_id;
-  std::vector<PhotoRow> rows;
-  if (projects_->list_photos(project_id, rows) == ResultCode::Ok && !rows.empty()) open_project_photo(rows.front().id);
   request_thumbnails();
   if (changed_) changed_();
 }
