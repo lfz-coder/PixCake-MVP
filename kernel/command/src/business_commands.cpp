@@ -16,6 +16,26 @@ ProjectResult BusinessCommands::create_project(ProjectLibrary& library, std::str
   return library.create_project(std::move(name), std::move(origin), cloud_marked);
 }
 
+namespace {
+ProjectResult refused_without_session() {
+  ProjectResult refused;
+  refused.code = ResultCode::StateConflict;
+  return refused;
+}
+}  // namespace
+
+ProjectResult BusinessCommands::trash_project(ProjectLibrary& library, std::int64_t project_id) {
+  return session_.signed_in() ? library.trash_project(project_id) : refused_without_session();
+}
+
+ProjectResult BusinessCommands::trash_photo(ProjectLibrary& library, std::int64_t photo_id) {
+  return session_.signed_in() ? library.trash_photo(photo_id) : refused_without_session();
+}
+
+ProjectResult BusinessCommands::trash_virtual_copy(ProjectLibrary& library, std::int64_t copy_id) {
+  return session_.signed_in() ? library.trash_virtual_copy(copy_id) : refused_without_session();
+}
+
 ProjectResult BusinessCommands::create_virtual_copy(ProjectLibrary& library, std::int64_t photo_id,
                                                     std::string document_id) {
   if (!session_.signed_in()) {

@@ -155,6 +155,47 @@ int main() {
     assert(projects->resolve_photo(copy, copy_path, diagnostic) == ResultCode::Ok && copy_path == shoot + "/a.BMP");
     assert(projects->load_photo(copy, row) == ResultCode::Ok && row && row->id == copy && row->absolute_path == copy_path);
     assert(projects->mark_edited(copy) == ResultCode::Ok);
+    // 删除与回收站：删一个副本只少它自己；删原图连副本一起走；恢复副本时原图一并回来。
+    assert(projects->trash_items({second}, diagnostic) == ResultCode::Ok);
+    assert(projects->list_photos(imported.project_id, photos) == ResultCode::Ok && photos.size() == 3);
+    std::vector<ProjectSession::TrashEntry> trash;
+    assert(projects->list_trash(trash) == ResultCode::Ok && trash.size() == 1);
+    assert(trash[0].subject == kTrashVirtualCopy && trash[0].copy == 2 && trash[0].name == "a.BMP" &&
+           trash[0].project_name == "婚礼 2026" && trash[0].days_left == 30);
+    assert(projects->restore(trash[0], diagnostic) == ResultCode::Ok);
+    assert(projects->list_photos(imported.project_id, photos) == ResultCode::Ok && photos.size() == 4);
+    assert(projects->trash_items({a}, diagnostic) == ResultCode::Ok);
+    assert(projects->trash_items({a}, diagnostic) == ResultCode::Ok);  // already there: skipped
+    assert(projects->list_photos(imported.project_id, photos) == ResultCode::Ok && photos.size() == 1);
+    assert(photos[0].id == imported.photo_ids[1]);
+    assert(projects->list_trash(trash) == ResultCode::Ok && trash.size() >= 1);
+    ProjectSession::TrashEntry gone;
+    for (const auto& entry : trash) {
+      if (entry.subject == kTrashPhoto && entry.id == a) gone = entry;
+    }
+    assert(gone.id == a && gone.name == "a.BMP");
+    assert(projects->restore(gone, diagnostic) == ResultCode::Ok);
+    assert(projects->list_photos(imported.project_id, photos) == ResultCode::Ok && photos.size() >= 2);
+    // 删项目：从项目列表消失，回收站里按项目列出；恢复回来；彻底删除只清索引。
+    assert(projects->trash_project(mixed.project_id, diagnostic) == ResultCode::Ok);
+    assert(projects->list_projects(list) == ResultCode::Ok && list.size() == 1);
+    assert(projects->list_trash(trash) == ResultCode::Ok);
+    ProjectSession::TrashEntry gone_project;
+    for (const auto& entry : trash) {
+      if (entry.subject == kTrashProject) gone_project = entry;
+    }
+    assert(gone_project.id == mixed.project_id && gone_project.name == "single" && gone_project.days_left == 30);
+    assert(projects->restore(gone_project, diagnostic) == ResultCode::Ok);
+    assert(projects->list_projects(list) == ResultCode::Ok && list.size() == 2);
+    assert(projects->trash_project(mixed.project_id, diagnostic) == ResultCode::Ok);
+    assert(projects->erase_trashed_project(mixed.project_id, diagnostic) == ResultCode::Ok);
+    assert(projects->list_trash(trash) == ResultCode::Ok);
+    for (const auto& entry : trash) assert(entry.id != mixed.project_id || entry.subject != kTrashProject);
+    assert(std::ifstream(shoot + "/a.BMP").good());  // 原图还在磁盘上
+    assert(projects->list_projects(list) == ResultCode::Ok && list.size() == 1);
+    // 后面的测试要两个项目：补回一个（同一个文件再导入一次）
+    mixed = projects->import_new_project({root + "/single.bmp"});
+    assert(mixed.accepted == 1);
     // Signed out: nothing is created.
     session.in = false;
     std::int64_t refused_copy = 0;

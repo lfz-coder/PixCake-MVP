@@ -149,6 +149,31 @@ Texts build_texts() {
   // 本机账本的张数：同一张图扣过就不再扣，原图和免费效果图不扣。
   t["export.sheets"] = "本次预计扣除 %1 张，剩余 %2 张";
   // 导出列表的计费一栏（test 版导出明细：精修效果图、免费功能、实际计费）。
+  // 删除与回收站（需求 §7）。官方回收站按项目卡片显示“还剩：N天”，右键“还原”“彻底删除”（2026-11-07 观察）；
+  // 这里是一个弹窗，图片和副本也列出来。
+  t["trash.title"] = "回收站";
+  t["trash.count"] = "共%1个项目";
+  t["trash.empty"] = "回收站是空的";
+  t["trash.left"] = "还剩：%1天";
+  t["trash.restore"] = "还原";
+  t["trash.erase"] = "彻底删除";
+  t["trash.cancel"] = "取消";
+  t["trash.col.name"] = "名称";
+  t["trash.col.kind"] = "类型";
+  t["trash.col.project"] = "所在项目";
+  t["trash.col.left"] = "保留时间";
+  t["trash.name.copy"] = "%1 · 副本 %2";
+  t["trash.kind.project"] = "项目";
+  t["trash.kind.photo"] = "图片";
+  t["trash.kind.copy"] = "虚拟副本";
+  t["trash.confirm.title"] = "确认删除";
+  t["trash.confirm.ok"] = "删除";
+  t["trash.confirm.photo"] = "确认删除该图片？删除后进入回收站，保留 30 天。";
+  t["trash.confirm.photos"] = "确认删除所选的 %1 张图片？删除后进入回收站，保留 30 天。";
+  t["trash.confirm.project"] = "确认删除项目“%1”？删除后进入回收站，保留 30 天。";
+  t["trash.erase.confirm"] = "彻底删除项目“%1”后不能恢复（磁盘上的原图不会被删除）。确认彻底删除？";
+  t["library.delete.menu"] = "删除";
+  t["home.project.delete"] = "删除项目";
   // 虚拟副本（需求 §7）。
   t["library.copy.create"] = "创建虚拟副本";
   t["library.copy.batch"] = "批量创建虚拟副本";

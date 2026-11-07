@@ -298,6 +298,76 @@ void ShellController::request_virtual_copy(const std::vector<std::int64_t>& phot
   if (changed_) changed_();
 }
 
+void ShellController::request_delete_photos(const std::vector<std::int64_t>& photo_ids) {
+  if (!projects_ || !current_project_ || photo_ids.empty()) return;
+  std::string diagnostic;
+  const ResultCode code = projects_->trash_items(photo_ids, diagnostic);
+  if (code != ResultCode::Ok) show_notices({}, NoticeScene::OpenDocument, code);
+  const auto gone = [&photo_ids](std::int64_t id) {
+    return std::find(photo_ids.begin(), photo_ids.end(), id) != photo_ids.end();
+  };
+  // 原图删了，它的副本也跟着走：以列表为准，不在列表里的都不再选、不再打开。
+  std::vector<std::int64_t> alive;
+  for (const auto& entry : photos()) alive.push_back(entry.id);
+  const auto present = [&alive](std::int64_t id) { return std::find(alive.begin(), alive.end(), id) != alive.end(); };
+  if (current_photo_ && (gone(*current_photo_) || !present(*current_photo_))) close_photo();
+  std::vector<std::int64_t> kept;
+  for (const std::int64_t id : selection_) {
+    if (present(id)) kept.push_back(id);
+  }
+  selection_ = kept;
+  selected_photo_ = kept.empty() ? std::nullopt : std::optional<std::int64_t>(kept.back());
+  remember_place();
+  selection_changed();
+  if (changed_) changed_();
+}
+
+void ShellController::request_delete_project(std::int64_t project_id) {
+  if (!projects_) return;
+  std::string diagnostic;
+  const ResultCode code = projects_->trash_project(project_id, diagnostic);
+  if (code != ResultCode::Ok) show_notices({}, NoticeScene::OpenDocument, code);
+  if (changed_) changed_();
+}
+
+std::vector<TrashItem> ShellController::trash() const {
+  std::vector<TrashItem> out;
+  std::vector<project_session::ProjectSession::TrashEntry> entries;
+  if (!projects_ || projects_->list_trash(entries) != ResultCode::Ok) return out;
+  for (const auto& entry : entries) {
+    TrashItem item;
+    item.kind = entry.subject == kTrashProject ? TrashKind::Project
+                                               : (entry.subject == kTrashVirtualCopy ? TrashKind::Copy : TrashKind::Photo);
+    item.id = entry.id;
+    item.name = entry.name;
+    item.project = entry.project_name;
+    item.copy = entry.copy;
+    item.days_left = entry.days_left;
+    out.push_back(std::move(item));
+  }
+  return out;
+}
+
+void ShellController::request_restore(TrashKind kind, std::int64_t id) {
+  if (!projects_) return;
+  project_session::ProjectSession::TrashEntry entry;
+  entry.subject = kind == TrashKind::Project ? kTrashProject : (kind == TrashKind::Copy ? kTrashVirtualCopy : kTrashPhoto);
+  entry.id = id;
+  std::string diagnostic;
+  const ResultCode code = projects_->restore(entry, diagnostic);
+  if (code != ResultCode::Ok) show_notices({}, NoticeScene::OpenDocument, code);
+  request_thumbnails();
+  if (changed_) changed_();
+}
+
+void ShellController::request_erase_project(std::int64_t project_id) {
+  if (!projects_) return;
+  std::string diagnostic;
+  const ResultCode code = projects_->erase_trashed_project(project_id, diagnostic);
+  if (code != ResultCode::Ok) show_notices({}, NoticeScene::OpenDocument, code);
+  if (changed_) changed_();
+}
+
 void ShellController::request_open_photo(std::int64_t photo_id) {
   if (!projects_ || !current_project_) return;
   // Navigate first: a page change clears notices, and opening may post one.

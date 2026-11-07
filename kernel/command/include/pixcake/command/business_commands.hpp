@@ -19,6 +19,9 @@ class BusinessCommands {
   explicit BusinessCommands(const SessionState& session);
 
   ProjectResult create_project(ProjectLibrary& library, std::string name, std::string origin, bool cloud_marked);
+  ProjectResult trash_project(ProjectLibrary& library, std::int64_t project_id);
+  ProjectResult trash_photo(ProjectLibrary& library, std::int64_t photo_id);
+  ProjectResult trash_virtual_copy(ProjectLibrary& library, std::int64_t copy_id);
   ProjectResult create_virtual_copy(ProjectLibrary& library, std::int64_t photo_id, std::string document_id);
   image_import::ImportBatchResult import_into(image_import::ImportCoordinator& importer, std::int64_t project_id,
                                               const std::vector<image_import::ImportCandidate>& candidates);

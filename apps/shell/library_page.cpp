@@ -3,6 +3,7 @@
 #include "pixcake_theme.hpp"
 #include "pixcake_widgets.hpp"
 #include "shell_icons.hpp"
+#include "trash_dialog.hpp"
 
 #include <QGroupBox>
 #include <QListWidget>
@@ -60,7 +61,15 @@ QWidget* buildLibraryPage(const PageContext& context) {
   show_selected();
   actions->watch_selection(selected, show_selected);
   controls_layout->addWidget(selected);
-  controls_layout->addWidget(action(qtext("region.library-delete"), controls));
+  auto* remove = action(qtext("region.library-delete"), controls);
+  remove->setObjectName(QStringLiteral("library-delete"));
+  remove->setEnabled(!actions->selected_photos().empty());
+  actions->watch_selection(remove, [remove, actions] { remove->setEnabled(!actions->selected_photos().empty()); });
+  QObject::connect(remove, &QPushButton::clicked, remove, [remove, actions] {
+    const auto ids = actions->selected_photos();
+    if (!ids.empty() && confirmDeletePhotos(remove->window(), ids.size())) actions->request_delete_photos(ids);
+  });
+  controls_layout->addWidget(remove);
   outer->addWidget(controls);
 
   auto* content = new QHBoxLayout;

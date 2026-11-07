@@ -2,10 +2,12 @@
 #include "pages.hpp"
 #include "pixcake_widgets.hpp"
 #include "shell_icons.hpp"
+#include "trash_dialog.hpp"
 
 #include <QFileDialog>
 #include <QIcon>
 #include <QListWidget>
+#include <QMenu>
 #include <QLineEdit>
 
 namespace pixcake::shell {
@@ -54,6 +56,18 @@ QFrame* projectList(QWidget* parent, PageActions* actions) {
     item->setToolTip(qs(project.name));
     item->setData(Qt::UserRole, QVariant::fromValue<qlonglong>(project.id));
   }
+  list->setContextMenuPolicy(Qt::CustomContextMenu);
+  QObject::connect(list, &QWidget::customContextMenuRequested, list, [list, actions](const QPoint& at) {
+    QListWidgetItem* under = list->itemAt(at);
+    if (under == nullptr) return;
+    QMenu menu(list);
+    menu.setObjectName(QStringLiteral("project-menu"));
+    QAction* remove = menu.addAction(qtext("home.project.delete"));
+    remove->setObjectName(QStringLiteral("project-menu-delete"));
+    if (menu.exec(list->viewport()->mapToGlobal(at)) == remove && confirmDeleteProject(list->window(), under->text())) {
+      actions->request_delete_project(under->data(Qt::UserRole).toLongLong());
+    }
+  });
   QObject::connect(list, &QListWidget::itemActivated, list, [actions](QListWidgetItem* item) {
     actions->request_open_project(item->data(Qt::UserRole).toLongLong());
   });
@@ -89,8 +103,11 @@ QWidget* buildHomePage(const PageContext& context) {
   nav_layout->addWidget(brand_row);
   nav_layout->addSpacing(18);
   for (const auto& entry : ui::shell::page_list("home-nav")) {
-    auto* button = itemAction("home-nav", entry, nav, entry.id == "home");
+    auto* button = itemAction("home-nav", entry, nav, entry.id == "home" || entry.id == "trash");
     button->setObjectName(QStringLiteral("home-nav"));
+    if (entry.id == "trash") {
+      QObject::connect(button, &QPushButton::clicked, button, [button, actions] { openTrashDialog(button, actions); });
+    }
     button->setProperty("selected", entry.id == "home");
     nav_layout->addWidget(button);
   }

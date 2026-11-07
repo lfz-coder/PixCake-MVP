@@ -4,6 +4,7 @@
 
 #include "pixcake_widgets.hpp"
 #include "shell_icons.hpp"
+#include "trash_dialog.hpp"
 
 #include <QFileDialog>
 #include <QListWidget>
@@ -193,7 +194,11 @@ QListWidget* photoList(QWidget* parent, PageActions* actions, bool grid, std::fu
     menu.setObjectName(QStringLiteral("photo-menu"));
     QAction* create = menu.addAction(qtext(ids.size() > 1 ? "library.copy.batch" : "library.copy.create"));
     create->setObjectName(QStringLiteral("photo-menu-copy"));
-    if (menu.exec(list->viewport()->mapToGlobal(at)) == create) actions->request_virtual_copy(ids);
+    QAction* remove = menu.addAction(qtext("library.delete.menu"));
+    remove->setObjectName(QStringLiteral("photo-menu-delete"));
+    QAction* chosen = menu.exec(list->viewport()->mapToGlobal(at));
+    if (chosen == create) actions->request_virtual_copy(ids);
+    if (chosen == remove && confirmDeletePhotos(list->window(), ids.size())) actions->request_delete_photos(ids);
   });
   if (grid) {
     auto* shortcut = new QShortcut(QKeySequence(QStringLiteral("Ctrl+'")), list);

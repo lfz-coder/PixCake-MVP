@@ -242,6 +242,8 @@ ResultCode ProjectSession::list_photos(std::int64_t project_id, std::vector<Phot
   const ResultCode code = library_->list_photos(project_id, photos);
   out.clear();
   for (auto& photo : photos) {
+    std::optional<TrashRow> gone;
+    if (library_->load_trash(kTrashPhoto, photo.id, gone) == ResultCode::Ok && gone) continue;
     const PhotoRow original = photo;
     out.push_back(std::move(photo));
     // 副本跟在原图右边，按序号；进了回收站的不显示。
@@ -254,6 +256,87 @@ ResultCode ProjectSession::list_photos(std::int64_t project_id, std::vector<Phot
     }
   }
   return code;
+}
+
+ResultCode ProjectSession::trash_items(const std::vector<std::int64_t>& items, std::string& diagnostic) {
+  diagnostic.clear();
+  ResultCode first = ResultCode::Ok;
+  for (const std::int64_t item : items) {
+    std::optional<TrashRow> already;
+    const bool copy = is_copy(item);
+    const std::int64_t id = copy ? -item : item;
+    if (library_->load_trash(copy ? kTrashVirtualCopy : kTrashPhoto, id, already) == ResultCode::Ok && already) continue;
+    const ProjectResult result = copy ? commands_.trash_virtual_copy(*library_, id) : commands_.trash_photo(*library_, id);
+    if (result.code != ResultCode::Ok && first == ResultCode::Ok) {
+      first = result.code;
+      diagnostic = result.notice;
+    }
+  }
+  return first;
+}
+
+ResultCode ProjectSession::trash_project(std::int64_t project_id, std::string& diagnostic) {
+  const ProjectResult result = commands_.trash_project(*library_, project_id);
+  diagnostic = result.notice;
+  return result.code;
+}
+
+ResultCode ProjectSession::list_trash(std::vector<TrashEntry>& out) const {
+  out.clear();
+  std::vector<TrashRow> rows;
+  const ResultCode code = library_->list_trash(rows);
+  if (code != ResultCode::Ok) return code;
+  const std::int64_t now = clock_.unix_seconds();
+  for (const auto& row : rows) {
+    TrashEntry entry;
+    entry.subject = row.subject;
+    entry.id = row.subject_id;
+    const std::int64_t left = row.deleted_at + kTrashRetentionSeconds - now;
+    entry.days_left = left <= 0 ? 0 : (left + 86399) / 86400;
+    std::optional<PhotoRow> photo;
+    std::optional<ProjectRow> project;
+    if (row.subject == kTrashProject) {
+      if (library_->load_project(row.subject_id, project) != ResultCode::Ok || !project) continue;
+      entry.project_id = project->id;
+      entry.name = project->name;
+      entry.project_name = project->name;
+    } else {
+      std::int64_t photo_id = row.subject_id;
+      if (row.subject == kTrashVirtualCopy) {
+        std::optional<VirtualCopyRow> copy;
+        if (library_->load_virtual_copy(row.subject_id, copy) != ResultCode::Ok || !copy) continue;
+        photo_id = copy->source_photo_id;
+        entry.copy = copy->sequence;
+      }
+      if (library_->load_photo(photo_id, photo) != ResultCode::Ok || !photo) continue;
+      if (library_->load_project(photo->project_id, project) != ResultCode::Ok || !project) continue;
+      if (project->deleted_at) continue;  // 项目在回收站里，图片跟着项目走
+      entry.project_id = photo->project_id;
+      entry.name = photo->file_name;
+      entry.project_name = project->name;
+    }
+    out.push_back(std::move(entry));
+  }
+  return ResultCode::Ok;
+}
+
+ResultCode ProjectSession::restore(const TrashEntry& entry, std::string& diagnostic) {
+  ProjectResult result;
+  if (entry.subject == kTrashProject) {
+    result = library_->restore_project(entry.id);
+  } else if (entry.subject == kTrashVirtualCopy) {
+    result = library_->restore_virtual_copies({entry.id});
+  } else {
+    result = library_->restore_photos({entry.id});
+  }
+  diagnostic = result.notice;
+  return result.code;
+}
+
+ResultCode ProjectSession::erase_trashed_project(std::int64_t project_id, std::string& diagnostic) {
+  const ProjectResult result = library_->erase_trashed_project(project_id);
+  diagnostic = result.notice;
+  return result.code;
 }
 
 ResultCode ProjectSession::load_photo(std::int64_t photo_id, std::optional<PhotoRow>& out) const {

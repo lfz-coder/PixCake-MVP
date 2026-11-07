@@ -70,6 +70,24 @@ class ProjectSession {
   // 复制原图或副本当前已提交的调整，新副本排在原图的副本最后；new_item 是新副本的编号。
   ResultCode create_virtual_copy(std::int64_t item, std::int64_t& new_item, std::string& diagnostic);
 
+  // 删除与回收站（需求 §7）：删除只进回收站，保留 30 天；删原图时它的副本一起进去；恢复任一副本时原图一并恢复。
+  struct TrashEntry {
+    std::string subject;          // kTrashProject / kTrashPhoto / kTrashVirtualCopy
+    std::int64_t id = 0;          // 项目编号、照片编号、副本编号（不是条目编号）
+    std::int64_t project_id = 0;  // 图片和副本所在的项目
+    std::string name;             // 项目名；图片和副本是文件名
+    std::string project_name;
+    std::int64_t copy = 0;        // 副本的序号
+    std::int64_t days_left = 0;
+  };
+  // 删除照片或副本（条目编号）。已经在回收站里的跳过。
+  ResultCode trash_items(const std::vector<std::int64_t>& items, std::string& diagnostic);
+  ResultCode trash_project(std::int64_t project_id, std::string& diagnostic);
+  ResultCode list_trash(std::vector<TrashEntry>& out) const;
+  ResultCode restore(const TrashEntry& entry, std::string& diagnostic);
+  // 彻底删除回收站里的项目；只清项目库的索引，不碰磁盘上的原图。
+  ResultCode erase_trashed_project(std::int64_t project_id, std::string& diagnostic);
+
   ResultCode list_projects(std::vector<ProjectRow>& out) const;
   ResultCode list_photos(std::int64_t project_id, std::vector<PhotoRow>& out) const;
   ResultCode load_photo(std::int64_t photo_id, std::optional<PhotoRow>& out) const;

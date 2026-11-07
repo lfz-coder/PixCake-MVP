@@ -46,6 +46,16 @@ struct ProjectEntry {
   std::int64_t id = 0;
   std::string name;
 };
+// 回收站里的一行：项目、图片或虚拟副本。id 是项目编号、照片编号或副本编号（不是条目编号）。
+enum class TrashKind { Project, Photo, Copy };
+struct TrashItem {
+  TrashKind kind = TrashKind::Project;
+  std::int64_t id = 0;
+  std::string name;
+  std::string project;  // 图片和副本所在的项目
+  std::int64_t copy = 0;
+  std::int64_t days_left = 0;
+};
 struct PhotoEntry {
   std::int64_t id = 0;
   std::string file_name;
@@ -95,6 +105,12 @@ class PageActions {
   virtual void select_photos(const std::vector<std::int64_t>&, std::int64_t) {}
   // 选择变化时回调（导出按钮、“已选 N 张”跟着变）；owner 删除后不再回调。
   virtual void watch_selection(QObject*, std::function<void()>) {}
+  // 删除与回收站（需求 §7）：删照片、副本（条目编号）或项目都只进回收站，保留 30 天。
+  virtual void request_delete_photos(const std::vector<std::int64_t>&) {}
+  virtual void request_delete_project(std::int64_t) {}
+  virtual std::vector<TrashItem> trash() const { return {}; }
+  virtual void request_restore(TrashKind, std::int64_t) {}
+  virtual void request_erase_project(std::int64_t) {}
   // 创建虚拟副本（需求 §7）：每个编号（原图或副本）各建一个，副本排在原图右边，继承当前全部调整。
   virtual void request_virtual_copy(const std::vector<std::int64_t>&) {}
   // 在精修打开（精修底部缩略图条单击）。

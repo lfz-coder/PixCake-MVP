@@ -8,6 +8,7 @@
 #include "pixcake/ui/shell/shell_display.hpp"
 #include "pixcake_theme.hpp"
 #include "pixcake_widgets.hpp"
+#include "trash_dialog.hpp"
 #include "shell_window.hpp"
 
 #include <QApplication>
@@ -39,6 +40,7 @@
 #include <QTabBar>
 #include <QTableWidget>
 #include <QMenu>
+#include <QMessageBox>
 #include <QThread>
 #include <QTimer>
 
@@ -641,6 +643,84 @@ int smoke_virtual_copy(pixcake::shell::ShellWindow& window) {
   if (plain_copy == 0 || controller.thumbnail(plain_copy).isNull() || mean_red(controller.thumbnail(plain_copy)) > 160) {
     qCritical("the copy of an unedited photo has no (or an edited) thumbnail: %lld", static_cast<long long>(plain_copy));
     return 12;
+  }
+  // Delete and trash: the bulk delete asks first; a copy goes alone; the original takes its copies; restore.
+  {
+    const auto total = controller.photos().size();
+    controller.request_page(Page::Library);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    controller.select_photos({controller.photos().back().id}, controller.photos().back().id);  // a copy
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    QPushButton* remove = nullptr;
+    for (auto* candidate : window.findChildren<QPushButton*>(QStringLiteral("library-delete"))) {
+      if (candidate->isVisibleTo(&window)) remove = candidate;
+    }
+    QString confirm_text;
+    QTimer answer;
+    answer.setInterval(20);
+    QObject::connect(&answer, &QTimer::timeout, [&confirm_text, &answer] {
+      auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+      if (box == nullptr) return;
+      answer.stop();
+      confirm_text = box->text();
+      for (auto* candidate : box->buttons()) {
+        if (box->buttonRole(candidate) == QMessageBox::AcceptRole) candidate->click();
+      }
+    });
+    answer.start();
+    if (remove == nullptr || !remove->isEnabled()) {
+      qCritical("library delete button missing or disabled");
+      return 12;
+    }
+    remove->click();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    auto trash = controller.trash();
+    if (confirm_text != qtext_for_smoke("trash.confirm.photo") || controller.photos().size() != total - 1 ||
+        trash.size() != 1 || trash[0].kind != pixcake::shell::TrashKind::Copy) {
+      qCritical("delete of a copy: confirm '%s', %zu -> %zu, trash %zu", qPrintable(confirm_text), total,
+                controller.photos().size(), trash.size());
+      return 12;
+    }
+    controller.request_restore(trash[0].kind, trash[0].id);
+    if (controller.photos().size() != total || !controller.trash().empty()) {
+      qCritical("restoring the copy: %zu photos, %zu in trash", controller.photos().size(), controller.trash().size());
+      return 12;
+    }
+    // Deleting the original takes its copy too; restoring the original brings it back.
+    controller.request_delete_photos({source});
+    trash = controller.trash();
+    bool original_listed = false;
+    for (const auto& entry : trash) original_listed = original_listed || entry.kind == pixcake::shell::TrashKind::Photo;
+    if (controller.photos().size() != total - 2 || !original_listed || controller.current_photo()) {
+      qCritical("delete of the original: %zu photos (was %zu), original listed %d", controller.photos().size(), total,
+                original_listed);
+      return 12;
+    }
+    // The trash dialog lists them (name, kind, left); restoring the selected original from it.
+    pixcake::shell::openTrashDialog(&window, &controller);
+    auto* dialog = window.findChild<QDialog*>(QStringLiteral("trash-dialog"));
+    auto* table = dialog != nullptr ? dialog->findChild<QTableWidget*>(QStringLiteral("trash-table")) : nullptr;
+    auto* restore = dialog != nullptr ? dialog->findChild<QPushButton*>(QStringLiteral("trash-restore")) : nullptr;
+    int original_row = -1;
+    for (int row = 0; table != nullptr && row < table->rowCount(); ++row) {
+      if (table->item(row, 1)->text() == qtext_for_smoke("trash.kind.photo")) original_row = row;
+    }
+    if (table == nullptr || restore == nullptr || table->rowCount() != static_cast<int>(trash.size()) ||
+        original_row < 0 || table->item(original_row, 3)->text() != qtext_for_smoke("trash.left").arg(30)) {
+      qCritical("trash dialog missing or wrong: %d rows for %zu entries", table != nullptr ? table->rowCount() : -1,
+                trash.size());
+      return 12;
+    }
+    table->selectRow(original_row);
+    restore->click();
+    dialog->close();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    const auto restored = controller.photos();
+    if (restored.size() < total - 1 || restored.front().id != source) {
+      qCritical("restoring the original: %zu photos", restored.size());
+      return 12;
+    }
+    controller.request_open_photo(source);
   }
   std::printf("virtual copy ok: copy %lld follows the original, thumbnail red %.1f\n",
               static_cast<long long>(after[1].id), copy_red);
