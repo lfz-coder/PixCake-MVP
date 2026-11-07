@@ -287,6 +287,14 @@ target_link_libraries(test_exportd PRIVATE pixcake_exportd_service pixcake_platf
   "-framework CoreFoundation" "-framework CoreGraphics" "-framework ImageIO")
 add_test(NAME test_exportd COMMAND test_exportd)
 
+if(TARGET pixcake_app_bundle)
+  add_test(NAME test_app_bundle
+           COMMAND ${CMAKE_COMMAND} -DBUNDLE=$<TARGET_BUNDLE_DIR:pixcake_app_shell> -DINFERENCE=${PIXCAKE_ENABLE_INFERENCE}
+                   -DLOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/process-logs/bundle
+                   -P ${CMAKE_SOURCE_DIR}/tests/apps/check_app_bundle.cmake)
+  set_tests_properties(test_app_bundle PROPERTIES TIMEOUT 120)
+endif()
+
 add_executable(test_export_masks apps/test_export_masks.cpp)
 target_link_libraries(test_export_masks PRIVATE pixcake_exportd_service pixcake_warnings)
 add_test(NAME test_export_masks COMMAND test_export_masks)

@@ -52,6 +52,8 @@ target_link_libraries(pixcake_app_renderd PRIVATE pixcake_renderd_service pixcak
 if(PIXCAKE_ENABLE_INFERENCE)
   # Development fallback when the executable is not inside an app bundle.
   target_link_libraries(pixcake_app_renderd PRIVATE pixcake_renderd_inference)
+  # Inside the app bundle the runtime library is in Contents/Frameworks.
+  target_link_options(pixcake_app_renderd PRIVATE "LINKER:-rpath,@executable_path/../Frameworks")
   target_compile_definitions(pixcake_app_renderd PRIVATE PIXCAKE_DEFAULT_MODEL_DIR="${PIXCAKE_MODEL_DIR}")
 endif()
 target_compile_features(pixcake_app_renderd PRIVATE cxx_std_17)

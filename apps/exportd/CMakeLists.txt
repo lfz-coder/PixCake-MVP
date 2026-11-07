@@ -36,4 +36,6 @@ target_link_libraries(pixcake_app_exportd PRIVATE pixcake_exportd_service pixcak
 target_compile_features(pixcake_app_exportd PRIVATE cxx_std_17)
 if(PIXCAKE_ENABLE_INFERENCE)
   target_compile_definitions(pixcake_app_exportd PRIVATE PIXCAKE_DEFAULT_MODEL_DIR="${PIXCAKE_MODEL_DIR}")
+  # Inside the app bundle the runtime library is in Contents/Frameworks.
+  target_link_options(pixcake_app_exportd PRIVATE "LINKER:-rpath,@executable_path/../Frameworks")
 endif()

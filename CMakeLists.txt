@@ -65,6 +65,7 @@ add_subdirectory(apps/generated)
 if(APPLE)
   add_subdirectory(platform/macos)
 endif()
+include(cmake/PixcakeBundle.cmake)
 add_subdirectory(tests)
 
 # Architecture rules are a build gate as well as a test.  A forbidden kernel
