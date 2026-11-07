@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <string>
 #include <thread>
@@ -91,6 +92,11 @@ std::vector<std::uint8_t> document_at(const std::string& path, const std::string
   return document->encode();
 }
 
+std::vector<std::uint8_t> read_bytes(const std::string& path) {
+  std::ifstream in(path, std::ios::binary);
+  return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+}
+
 // Waits until no task is queued or running.
 std::vector<ExportRow> settle(ExportSession& exports) {
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
@@ -121,6 +127,7 @@ int main() {
   write_image(shoot + "/p.png", platform::MacEncodeFormat::Png, 1.0, pattern(w, h, false), w, h);
   write_image(shoot + "/p-copy.jpg", platform::MacEncodeFormat::Jpeg, 0.7, pattern(w, h, false), w, h);
   write_image(shoot + "/q.png", platform::MacEncodeFormat::Png, 1.0, pattern(w, h, true), w, h);
+  write_image(shoot + "/r.png", platform::MacEncodeFormat::Png, 1.0, pattern(h, w, false), h, w);  // portrait
 
   // The picture identity: re-encoding keeps it, a mirror does not.
   std::string p_id, copy_id, q_id, diagnostic;
@@ -148,7 +155,7 @@ int main() {
   assert(project_session::ProjectSession::open(root + "/data", session, access, path_bookmark, projects,
                                                diagnostic) == ResultCode::Ok);
   const auto imported = projects->import_new_project({shoot});
-  assert(imported.code == ResultCode::Ok && imported.photo_ids.size() == 3);
+  assert(imported.code == ResultCode::Ok && imported.photo_ids.size() == 4);
   std::map<std::string, std::int64_t> photo;
   for (const std::int64_t id : imported.photo_ids) {
     std::optional<PhotoRow> row;
@@ -162,15 +169,16 @@ int main() {
   refine("p.png");
   refine("p-copy.jpg");
   refine("q.png");
+  refine("r.png");
 
   ExportOptions options;
   options.exportd_executable = PIXCAKE_EXPORTD_EXE;
   options.log_directory = root + "/logs";
   options.data_directory = root + "/data";
-  options.opening_sheets = 1;
+  options.opening_sheets = 2;
   std::unique_ptr<ExportSession> exports;
   assert(ExportSession::open(*projects, session, options, exports, diagnostic) == ResultCode::Ok);
-  assert(exports->remaining_sheets() == 1);
+  assert(exports->remaining_sheets() == 2);
 
   // The dialog's estimate: three refined, two pictures.
   const ExportEstimate all = exports->estimate({photo["p.png"], photo["p-copy.jpg"], photo["q.png"]});
@@ -180,11 +188,36 @@ int main() {
   request.folder = root + "/out";
   ::mkdir(request.folder.c_str(), 0700);
   std::vector<std::string> notices;
+  std::vector<ExportRow> rows;
+
+  // 同时导出无水印图片: r is written twice, into out_有水印 and out_无水印; one sheet, the
+  // watermark-free second is not charged.
+  {
+    std::vector<std::uint8_t> green(10 * 10 * 4, 0);
+    for (std::size_t i = 0; i < green.size(); i += 4) green[i + 1] = green[i + 3] = 255;
+    write_image(root + "/logo.png", platform::MacEncodeFormat::Png, 1.0, green, 10, 10);
+    ExportRequest marked = request;
+    marked.photo_ids = {photo["r.png"]};
+    marked.settings.watermark.emplace();
+    assert(exports->store_watermark(root + "/logo.png", marked.settings.watermark->material, diagnostic) ==
+           ResultCode::Ok);
+    marked.watermark_free_copy = true;
+    assert(exports->submit(marked, notices, diagnostic) == ResultCode::Ok && notices.empty());
+    rows = settle(*exports);
+    assert(rows.size() == 2 && rows[0].status == "成功" && rows[1].status == "成功");
+    assert(rows[1].destination_path == request.folder + "/out_有水印/r.png");
+    assert(rows[0].destination_path == request.folder + "/out_无水印/r.png");
+    rows = exports->rows();
+    assert(rows[1].charge == ExportCharge::Charged && rows[0].charge == ExportCharge::FreeCopy);
+    assert(exports->remaining_sheets() == 1);
+    // The watermarked copy differs from the plain one (the green mark).
+    assert(read_bytes(rows[0].destination_path) != read_bytes(rows[1].destination_path));
+  }
 
   // First refined export of p: one sheet.
   request.photo_ids = {photo["p.png"]};
   assert(exports->submit(request, notices, diagnostic) == ResultCode::Ok && notices.empty());
-  auto rows = settle(*exports);
+  rows = settle(*exports);
   assert(rows[0].status == "成功");
   assert(exports->remaining_sheets() == 0);
   assert(exports->estimate({photo["p.png"]}).sheets == 0);
@@ -204,7 +237,7 @@ int main() {
   request.photo_ids = {photo["q.png"]};
   assert(exports->submit(request, notices, diagnostic) == ResultCode::StateConflict);
   assert(notices.size() == 1 && notices[0] == "q.png: 剩余张数不足");
-  assert(exports->rows().size() == 3);
+  assert(exports->rows().size() == 5);
 
   // ...but with only free tools it exports, free.
   const std::string q_document = project_session::ProjectSession::document_id(photo["q.png"]);

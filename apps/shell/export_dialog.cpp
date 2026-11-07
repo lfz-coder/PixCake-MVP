@@ -437,9 +437,12 @@ class ExportDialog final : public QDialog {
     opacity_ = sliderRow(layout, group, "export.wm.opacity", "export-wm-opacity", 0, 100);
     x_ = sliderRow(layout, group, "export.wm.x", "export-wm-x", -100, 100);
     y_ = sliderRow(layout, group, "export.wm.y", "export-wm-y", -100, 100);
-    auto* plain = new QCheckBox(qtext("export.wm.plain"), group);
-    unavailable(plain, "export.why.wm_plain");
-    layout->addRow(plain);
+    plain_ = new QCheckBox(qtext("export.wm.plain"), group);
+    plain_->setObjectName(QStringLiteral("export-wm-plain"));
+    plain_->setToolTip(qtext("export.wm.plain.tip"));
+    plain_->setAccessibleDescription(qtext("export.wm.plain.tip"));
+    plain_->setChecked(target_.defaults.watermark_free_copy);  // 实测记住上次的勾选
+    layout->addRow(plain_);
 
     connect(shapes_, &QButtonGroup::idClicked, this, [this](int shape) {
       shape_ = shape;
@@ -548,6 +551,7 @@ class ExportDialog final : public QDialog {
   // 记住水印开关和参数（导出时随默认值一起写；取消时单独写）。
   ExportDefaults withWatermark(ExportDefaults defaults) const {
     defaults.watermark_on = static_cast<QGroupBox*>(watermark_)->isChecked();
+    defaults.watermark_free_copy = plain_->isChecked();
     if (!material_.empty()) {
       defaults.watermark = ExportWatermark{material_, placements_};
     }
@@ -629,6 +633,7 @@ class ExportDialog final : public QDialog {
         return;
       }
       request.settings.watermark = ExportWatermark{material_, placements_};
+      request.watermark_free_copy = plain_->isChecked();
     }
 
     ExportDefaults defaults = withWatermark(target_.defaults);
@@ -683,6 +688,7 @@ class ExportDialog final : public QDialog {
   QToolButton* material_button_ = nullptr;
   SliderRow wm_size_;
   QCheckBox* fit_ = nullptr;
+  QCheckBox* plain_ = nullptr;
   SliderRow opacity_;
   SliderRow x_;
   SliderRow y_;
@@ -769,6 +775,7 @@ class ExportList final : public QDialog {
       case ExportCharge::Repeat: return qtext("export.charge.repeat");
       case ExportCharge::Free: return qtext("export.charge.free");
       case ExportCharge::Original: return qtext("export.charge.original");
+      case ExportCharge::FreeCopy: return qtext("export.charge.copy");
       case ExportCharge::None: break;
     }
     return {};

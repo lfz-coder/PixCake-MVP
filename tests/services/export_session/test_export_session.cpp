@@ -229,12 +229,14 @@ int main() {
     // Remembered with the switch, across sessions.
     ExportDefaults with = exports->defaults();
     with.watermark_on = true;
+    with.watermark_free_copy = true;
     with.watermark = marked.settings.watermark;
     assert(exports->remember_defaults(with) == ResultCode::Ok);
     exports.reset();
     assert(ExportSession::open(*projects, session, options, exports, diagnostic) == ResultCode::Ok);
     const auto back = exports->defaults();
     assert(back.watermark_on && back.watermark && *back.watermark == *marked.settings.watermark);
+    assert(back.watermark_free_copy);
     assert(back.folder == out && back.format == ExportFormat::Tiff16);
   }
 

@@ -24,6 +24,7 @@
 #include <QElapsedTimer>
 #include <QStandardPaths>
 #include <QTemporaryDir>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QCommandLineOption>
 #include <QCommandLineParser>
@@ -365,6 +366,13 @@ int smoke_export(pixcake::shell::ShellWindow& window, const QString& folder) {
         !portrait->isChecked() || centre == nullptr || top_left == nullptr || x == nullptr || y == nullptr ||
         format == nullptr || format->count() != 4 || path == nullptr) {
       problem = QStringLiteral("export dialog controls differ from the observed dialog");
+      dialog->reject();
+      return;
+    }
+    // 同时导出无水印图片 is available inside the watermark group, with the observed explanation.
+    auto* plain = dialog->findChild<QCheckBox*>(QStringLiteral("export-wm-plain"));
+    if (plain == nullptr || !plain->isEnabled() || plain->toolTip() != qtext_for_smoke("export.wm.plain.tip")) {
+      problem = QStringLiteral("the watermark-free copy option is missing or disabled");
       dialog->reject();
       return;
     }

@@ -52,6 +52,8 @@ struct ExportRequest {
   // 导出位置 sub-folder (the project name), empty for none.
   std::string subfolder;
   ExportSettings settings;
+  // 同时导出无水印图片：有水印时，每张出两份，分放“文件夹名_有水印”“文件夹名_无水印”。
+  bool watermark_free_copy = false;
 };
 
 // 导出明细的计费一栏（test 版“导出明细”的实际计费）：成功的导出记账后才有结论。
@@ -62,6 +64,7 @@ enum class ExportCharge {
   Repeat,     // 精修效果图，这张图以前扣过
   Free,       // 免费效果图
   Original,   // 原图
+  FreeCopy,   // 精修效果图的无水印那份（同时导出无水印图片，不另计）
 };
 
 struct ExportRow {
@@ -85,6 +88,7 @@ struct ExportDefaults {
   // 水印：开关与素材、三套摆放都记住（test 版关掉弹窗再开仍是上次的状态）。
   bool watermark_on = false;
   std::optional<ExportWatermark> watermark;
+  bool watermark_free_copy = false;  // 同时导出无水印图片的勾选（实测会记住）
 };
 
 // File extension for a format; Original takes the original's (JPEG, PNG, TIFF

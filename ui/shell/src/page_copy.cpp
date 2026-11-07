@@ -154,6 +154,7 @@ Texts build_texts() {
   t["export.charge.repeat"] = "不扣：这张图已扣过";
   t["export.charge.free"] = "不扣：免费效果图";
   t["export.charge.original"] = "不扣：原图";
+  t["export.charge.copy"] = "不扣：无水印图片不另计";
   // 个人中心：剩余张数来自本机账本（没有服务器，不跨设备同步）。
   t["account.sheets"] = "剩余张数：%1 张";
   t["account.sheets.note"] = "本机记账，不跨设备同步";
@@ -202,11 +203,12 @@ Texts build_texts() {
   t["export.wm.x"] = "水平位置";
   t["export.wm.y"] = "垂直位置";
   t["export.wm.plain"] = "同时导出无水印图片";
+  // 问号说明原文（test 版实测）。
+  t["export.wm.plain.tip"] = "开启该功能后，导出时将在指定导出路径下创建两个子文件夹，分别包含带水印图片和无水印图片";
   t["export.wm.choose"] = "选择水印素材";
   t["export.wm.need_material"] = "请先上传水印素材，或关闭水印";
   t["export.wm.not_saved"] = "水印素材没有保存：";
   t["export.why.wm_sync"] = "水印同步的作用还没有核实，暂不可用";
-  t["export.why.wm_plain"] = "同时导出无水印图片还没有接入";
   t["export.why.overlay"] = "保留叠加层的作用还没有核实，暂不可用";
   t["export.why.print"] = "排版印刷还没有接入";
   t["export.why.keep_path"] = "保留导入时的完整路径还没有接入";

@@ -190,6 +190,9 @@ ResultCode ExportSession::submit(const ExportRequest& request, std::vector<std::
     if (status != "取消" && queue.find_job(id, job)) taken.insert(job.destination_path);
   }
   const std::string settings = encode_export_settings(request.settings);
+  ExportSettings without_watermark = request.settings;
+  without_watermark.watermark.reset();
+  const std::string plain_settings = encode_export_settings(without_watermark);
   BusinessCommands commands(session_);
   std::vector<ExportJob> accepted;
   std::vector<std::string> charging;  // pictures this request will charge
@@ -235,31 +238,49 @@ ResultCode ExportSession::submit(const ExportRequest& request, std::vector<std::
         continue;
       }
     }
-    // Name collisions: "name_(2).jpg", "name_(3).jpg" -- what the test build
-    // writes (docs/superpowers/evidence/2026-11-07-export-credit-observation.md).
-    const std::string stem = stem_of(photo->file_name);
-    const std::string extension = extension_for(request.settings.format, photo->format);
-    std::string destination = folder + "/" + stem + "." + extension;
-    for (int n = 2; taken.count(destination) != 0 || ::access(destination.c_str(), F_OK) == 0; ++n) {
-      destination = folder + "/" + stem + "_(" + std::to_string(n) + ")." + extension;
+    // 同时导出无水印图片（test 版实测，docs/superpowers/evidence/2026-11-07-watermark-observation.md）：
+    // 导出文件夹下建“文件夹名_有水印”“文件夹名_无水印”两个子文件夹，各放一份同名图。
+    // 无水印那份是同一批的第二个任务，标 watermark_free_second，不另扣张数。
+    const bool both = request.watermark_free_copy && request.settings.watermark.has_value();
+    std::vector<std::pair<std::string, bool>> targets;  // folder, the watermark-free second
+    if (both) {
+      const std::string base = name_of(folder);
+      targets = {{folder + "/" + base + "_有水印", false}, {folder + "/" + base + "_无水印", true}};
+      if (!make_directory(targets[0].first) || !make_directory(targets[1].first)) {
+        notices.push_back(photo->file_name + ": " + failure_label(ResultCode::PermissionDenied));
+        continue;
+      }
+    } else {
+      targets = {{folder, false}};
     }
-    ExportJob job;
-    job.export_id = next_export_id();
-    if (batch_id.empty()) batch_id = "batch-" + job.export_id.substr(4);
-    job.batch_id = batch_id;
-    job.original_id = ProjectSession::document_id(photo_id);
-    job.document_revision = decoded->revision();
-    job.document_snapshot = std::move(document);
-    job.destination_path = destination;
-    job.destination_root = root;
-    job.settings_snapshot = settings;
-    code = commands.enqueue_export(queue, job);
-    if (code != ResultCode::Ok) {
-      notices.push_back(photo->file_name + ": " + failure_label(code));
-      continue;
+    for (const auto& [target, free_second] : targets) {
+      // Name collisions: "name_(2).jpg", "name_(3).jpg" -- what the test build
+      // writes (docs/superpowers/evidence/2026-11-07-export-credit-observation.md).
+      const std::string stem = stem_of(photo->file_name);
+      const std::string extension = extension_for(request.settings.format, photo->format);
+      std::string destination = target + "/" + stem + "." + extension;
+      for (int n = 2; taken.count(destination) != 0 || ::access(destination.c_str(), F_OK) == 0; ++n) {
+        destination = target + "/" + stem + "_(" + std::to_string(n) + ")." + extension;
+      }
+      ExportJob job;
+      job.export_id = next_export_id();
+      if (batch_id.empty()) batch_id = "batch-" + job.export_id.substr(4);
+      job.batch_id = batch_id;
+      job.original_id = ProjectSession::document_id(photo_id);
+      job.document_revision = decoded->revision();
+      job.document_snapshot = document;
+      job.destination_path = destination;
+      job.destination_root = root;
+      job.settings_snapshot = free_second ? plain_settings : settings;
+      job.watermark_free_second = free_second;
+      code = commands.enqueue_export(queue, job);
+      if (code != ResultCode::Ok) {
+        notices.push_back(photo->file_name + ": " + failure_label(code));
+        break;
+      }
+      taken.insert(destination);
+      accepted.push_back(std::move(job));
     }
-    taken.insert(destination);
-    accepted.push_back(std::move(job));
   }
   for (const auto& job : accepted) {
     code = hand_over(job, diagnostic);
@@ -454,6 +475,7 @@ ExportDefaults ExportSession::defaults() const {
       if (parse_export_settings("format=" + value, settings) == ResultCode::Ok) out.format = settings.format;
     }
     if (key == "watermark_on") out.watermark_on = value == "1";
+    if (key == "watermark_free_copy") out.watermark_free_copy = value == "1";
     if (key == "watermark") {
       ExportSettings settings;
       if (parse_export_settings(value, settings) == ResultCode::Ok) out.watermark = settings.watermark;
@@ -473,6 +495,7 @@ ResultCode ExportSession::remember_defaults(const ExportDefaults& defaults) {
     text += encode_export_settings(settings) + "\n";  // "format=<name>"
   }
   text += std::string("watermark_on=") + (defaults.watermark_on ? "1" : "0") + "\n";
+  text += std::string("watermark_free_copy=") + (defaults.watermark_free_copy ? "1" : "0") + "\n";
   if (defaults.watermark) {
     ExportSettings settings;
     settings.watermark = defaults.watermark;
@@ -517,7 +540,8 @@ std::vector<ExportRow> ExportSession::rows() {
       } else {
         auto effect = effects_.find(id);
         if (effect == effects_.end()) effect = effects_.emplace(id, classify_export(job.document_snapshot)).first;
-        row.charge = effect->second == ExportEffect::Refined ? ExportCharge::Repeat
+        row.charge = effect->second == ExportEffect::Refined && job.watermark_free_second ? ExportCharge::FreeCopy
+                     : effect->second == ExportEffect::Refined ? ExportCharge::Repeat
                      : effect->second == ExportEffect::Free  ? ExportCharge::Free
                                                              : ExportCharge::Original;
       }
