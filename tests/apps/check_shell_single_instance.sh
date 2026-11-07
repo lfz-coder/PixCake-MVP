@@ -20,10 +20,12 @@ wait_for() {  # wait_for <tries> <command...>
   return 1
 }
 
-start_primary() {  # start_primary <name>
+# Called directly, never as $(...): a command substitution runs in a subshell,
+# and the pid would not reach `pids`, so cleanup would leave the instance running.
+start_primary() {  # start_primary <name>; the pid is in $primary
   "$shell_bin" --instance-dir "$instance" >"$work/$1.out" 2>"$work/$1.err" &
-  pids+=($!)
-  echo $!
+  primary=$!
+  pids+=($primary)
 }
 
 second_launch() {  # second_launch <name>; prints exit status
@@ -35,7 +37,8 @@ second_launch() {  # second_launch <name>; prints exit status
   echo $?
 }
 
-first=$(start_primary first)
+start_primary first
+first=$primary
 wait_for 100 test -S "$instance/instance.sock" || fail "first instance never listened"
 sleep 0.3
 status=$(second_launch second)
@@ -46,7 +49,8 @@ kill -0 "$first" 2>/dev/null || fail "first instance exited"
 
 # 主实例被强杀：锁随进程释放，残留的套接字文件不挡住下一次启动。
 kill -9 "$first"; wait "$first" 2>/dev/null
-third=$(start_primary third)
+start_primary third
+third=$primary
 sleep 1
 kill -0 "$third" 2>/dev/null || fail "third launch did not become the primary instance"
 grep -q "already running" "$work/third.out" && fail "third launch thought another instance was running"
