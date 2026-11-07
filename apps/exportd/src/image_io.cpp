@@ -13,6 +13,10 @@ ResultCode validate_encode_request(const ExportEncodeRequest& request, std::stri
     diagnostic = "export quality is outside the documented 0..14 range";
     return ResultCode::StateConflict;
   }
+  if (!request.color_space.empty() && request.color_space != "sRGB") {
+    diagnostic = "export colour space is either the original or sRGB";
+    return ResultCode::StateConflict;
+  }
   if (request.limits.max_output_bytes == 0) {
     diagnostic = "export output limit is not configured";
     return ResultCode::StateConflict;

@@ -128,7 +128,26 @@ class TextureImpl final : public detail::Texture2DImpl {
  public:
   ~TextureImpl() override { std::string e; if (handle_ != 0) if (auto* gl = current(e)) gl->glDeleteTextures(1, &handle_); }
   bool allocate(std::uint32_t width, std::uint32_t height, PixelFormat, std::string& error) override { auto* gl = current(error); if (gl == nullptr) return false; if (handle_ == 0) gl->glGenTextures(1, &handle_); gl->glBindTexture(GL_TEXTURE_2D, handle_); gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR); gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE); gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE); gl->glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, static_cast<GLsizei>(width), static_cast<GLsizei>(height), 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr); width_ = width; height_ = height; return true; }
-  bool upload(const ImageView& image, std::string& error) override { if (image.data == nullptr || image.width == 0 || image.height == 0) { error = "image view is empty"; return false; } if (handle_ == 0 || width_ != image.width || height_ != image.height) if (!allocate(image.width, image.height, image.format, error)) return false; auto* gl = current(error); if (gl == nullptr) return false; gl->glBindTexture(GL_TEXTURE_2D, handle_); gl->glPixelStorei(GL_UNPACK_ALIGNMENT, 1); gl->glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, static_cast<GLsizei>(image.width), static_cast<GLsizei>(image.height), GL_RGBA, GL_UNSIGNED_BYTE, image.data); return true; }
+  bool upload(const ImageView& image, std::string& error) override {
+    if (image.data == nullptr || image.width == 0 || image.height == 0) { error = "image view is empty"; return false; }
+    // Rows keep the view's stride (a tile cut from a larger image); the last
+    // row needs only its own pixels.  Same rule as the native backend.
+    const std::uint32_t stride = image.row_stride == 0 ? image.width * 4 : image.row_stride;
+    if (stride < image.width * 4 || stride % 4 != 0 ||
+        image.bytes < static_cast<std::size_t>(stride) * (image.height - 1) + static_cast<std::size_t>(image.width) * 4) {
+      error = "image view row stride or size is invalid";
+      return false;
+    }
+    if (handle_ == 0 || width_ != image.width || height_ != image.height) if (!allocate(image.width, image.height, image.format, error)) return false;
+    auto* gl = current(error);
+    if (gl == nullptr) return false;
+    gl->glBindTexture(GL_TEXTURE_2D, handle_);
+    gl->glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    gl->glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(stride / 4));
+    gl->glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, static_cast<GLsizei>(image.width), static_cast<GLsizei>(image.height), GL_RGBA, GL_UNSIGNED_BYTE, image.data);
+    gl->glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    return true;
+  }
   bool bind(std::uint32_t unit, std::string& error) override { auto* gl = current(error); if (gl == nullptr || handle_ == 0) return false; gl->glActiveTexture(GL_TEXTURE0 + unit); gl->glBindTexture(GL_TEXTURE_2D, handle_); return true; }
   GLuint handle() const { return handle_; }
  private: GLuint handle_ = 0; std::uint32_t width_ = 0; std::uint32_t height_ = 0;

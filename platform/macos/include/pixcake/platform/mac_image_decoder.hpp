@@ -34,6 +34,9 @@ struct MacDecodedImage {
   std::uint32_t stride = 0;         // width * 4
   bool has_alpha = false;           // true: RGB values are premultiplied by alpha
   std::vector<std::uint8_t> rgba;   // sRGB, 8 bits per channel, R G B A
+  // ICC profile of the stored image (empty when it has none): an export that
+  // keeps the original colour space converts back to it.
+  std::vector<std::uint8_t> source_icc_profile;
 };
 
 // SourceMissing: no such file.  ImageCorrupt: ImageIO cannot read it.

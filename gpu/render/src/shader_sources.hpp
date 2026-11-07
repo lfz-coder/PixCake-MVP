@@ -257,6 +257,7 @@ void main() {
 inline constexpr const char* kGrain = R"(
 uniform vec4 grain0;  // amount, shadows, midtones, highlights
 uniform vec4 grain1;  // 1 / cell, roughness, colour, -
+uniform vec4 grain2;  // the tile's origin in the frame: x, y
 
 float hash01(uint x, uint y, uint channel) {
   uint h = x * 0x8da6b343u ^ y * 0xd8163841u ^ channel * 0xcb1ab31fu;
@@ -283,7 +284,7 @@ float noise(uint x, uint y, uint channel) {
 }
 
 void main() {
-  uint x = uint(gl_FragCoord.x), y = uint(gl_FragCoord.y);
+  uint x = uint(gl_FragCoord.x) + uint(grain2.x), y = uint(gl_FragCoord.y) + uint(grain2.y);
   vec4 before = texelFetch(source, ivec2(gl_FragCoord.xy), 0);
   vec3 p = before.rgb;
   float l = luminance(p);

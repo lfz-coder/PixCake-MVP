@@ -152,6 +152,13 @@ ResultCode mac_decode_image(const std::string& path, const MacDecodeOptions& opt
                      image.ref);
   CGContextRelease(context);
 
+  if (CGColorSpaceRef space = CGImageGetColorSpace(image.ref)) {
+    CfHolder<CFDataRef> icc(CGColorSpaceCopyICCData(space));
+    if (icc.ref != nullptr) {
+      const auto* bytes = CFDataGetBytePtr(icc.ref);
+      out.source_icc_profile.assign(bytes, bytes + CFDataGetLength(icc.ref));
+    }
+  }
   out.kind = kind;
   out.type_identifier = type;
   out.source_width = static_cast<std::uint32_t>(width);

@@ -815,14 +815,24 @@ void draw_layer_reference(const PreparedLayer& prepared, RgbaImage& frame) {
 
 // Up to four masks in the R, G, B, A channels of one RGBA8 frame; unused
 // channels are 255 (weight 1).
-void pack_masks(const std::vector<const RenderMask*>& masks, std::uint32_t width, std::uint32_t height,
+// A rectangle of the frame drawn in one GPU pass sequence.
+struct Tile {
+  std::uint32_t x = 0, y = 0, width = 0, height = 0;
+};
+
+// Up to four masks, cut to the tile, in the R, G, B, A channels of one RGBA8
+// buffer; unused channels are 255 (weight 1).
+void pack_masks(const std::vector<const RenderMask*>& masks, std::uint32_t frame_width, const Tile& tile,
                 std::vector<std::uint8_t>& packed) {
-  packed.resize(static_cast<std::size_t>(width) * height * 4);
+  packed.resize(static_cast<std::size_t>(tile.width) * tile.height * 4);
   const std::size_t used = std::min(masks.size(), kGpuMasksPerOperation);
-  for_rows(width, height, [&](std::uint32_t first, std::uint32_t end) {
-    for (std::size_t i = static_cast<std::size_t>(first) * width; i < static_cast<std::size_t>(end) * width; ++i) {
-      std::uint8_t* out = packed.data() + i * 4;
-      for (std::size_t m = 0; m < 4; ++m) out[m] = m < used ? masks[m]->alpha[i] : 255;
+  for_rows(tile.width, tile.height, [&](std::uint32_t first, std::uint32_t end) {
+    for (std::uint32_t row = first; row < end; ++row) {
+      const std::size_t source = static_cast<std::size_t>(tile.y + row) * frame_width + tile.x;
+      std::uint8_t* out = packed.data() + static_cast<std::size_t>(row) * tile.width * 4;
+      for (std::uint32_t x = 0; x < tile.width; ++x, out += 4) {
+        for (std::size_t m = 0; m < 4; ++m) out[m] = m < used ? masks[m]->alpha[source + x] : 255;
+      }
     }
   });
 }
@@ -927,12 +937,21 @@ bool ready_program(gl::Context& context, GpuCache& cache, gl::Program& program, 
 }
 
 bool upload_masks(GpuCache& cache, gl::Context& context, const std::vector<const RenderMask*>& masks,
-                  std::uint32_t width, std::uint32_t height, std::string& error) {
+                  std::uint32_t frame_width, const Tile& tile, std::string& error) {
   if (!cache.masks.valid()) cache.masks = context.createTexture2D();
-  pack_masks(masks, width, height, cache.packed);
-  const gl::ImageView view{width, height, width * 4, gl::PixelFormat::Rgba8,
+  pack_masks(masks, frame_width, tile, cache.packed);
+  const gl::ImageView view{tile.width, tile.height, tile.width * 4, gl::PixelFormat::Rgba8,
                            reinterpret_cast<const std::byte*>(cache.packed.data()), cache.packed.size()};
   return cache.masks.valid() && cache.masks.upload(view, error);
+}
+
+// The tile of an RGBA image as an upload view: rows keep the image's stride,
+// so nothing is copied.
+gl::ImageView tile_view(const RgbaImage& image, const Tile& tile) {
+  const std::size_t stride = image.row_stride == 0 ? static_cast<std::size_t>(image.width) * 4 : image.row_stride;
+  const std::size_t offset = static_cast<std::size_t>(tile.y) * stride + static_cast<std::size_t>(tile.x) * 4;
+  return {tile.width, tile.height, static_cast<std::uint32_t>(stride), gl::PixelFormat::Rgba8,
+          reinterpret_cast<const std::byte*>(image.pixels.data() + offset), image.pixels.size() - offset};
 }
 
 }  // namespace
@@ -957,7 +976,7 @@ bool RenderExecutor::execute(gl::Context& context, const pixcake::render::Render
   std::vector<PreparedOperation> draws;
   RenderResult prepared;
   const bool frame_ok = prepare(description, input, inputs, prepared, draws, false);
-  bool gpu_supported = frame_ok && input.row_stride == input.width * 4;
+  bool gpu_supported = frame_ok;
   for (const auto& draw : draws) {
     gpu_supported = gpu_supported && !draw.has_lut && draw.masks.size() <= kGpuMasksPerOperation &&
                     gpu_formula_supported(*draw.operation);
@@ -979,8 +998,10 @@ bool RenderExecutor::execute(gl::Context& context, const pixcake::render::Render
     return true;
   }
 
-  // Programs compile once per context; the two frame textures are
-  // reallocated only when the frame size changes.
+  // Programs compile once per context.  A frame larger than the tile size
+  // (full-resolution export) draws tile by tile; the two frame textures are
+  // reallocated only when the tile size changes.  Grain takes the tile's
+  // origin, so tiles join without seams.
   if (!gpu_cache_ || gpu_cache_->context != context.identity()) {
     gpu_cache_ = std::make_shared<GpuCache>();
     gpu_cache_->context = context.identity();
@@ -988,72 +1009,82 @@ bool RenderExecutor::execute(gl::Context& context, const pixcake::render::Render
   GpuCache& cache = *gpu_cache_;
   bool ok = cache.vertex.valid() || ((cache.vertex = context.createShader()).valid() &&
                                      cache.vertex.compile(gl::ShaderStage::Vertex, shaders::kVertex, error));
-  if (ok && (cache.width != input.width || cache.height != input.height)) {
-    for (int i = 0; ok && i < 2; ++i) {
-      cache.textures[i] = context.createTexture2D();
-      cache.framebuffers[i] = context.createFramebuffer();
-      ok = cache.textures[i].valid() && cache.framebuffers[i].valid() &&
-           cache.textures[i].allocate(input.width, input.height, gl::PixelFormat::Rgba8, error) &&
-           cache.framebuffers[i].attachColor(cache.textures[i], error) && cache.framebuffers[i].complete(error);
-    }
-    cache.width = ok ? input.width : 0;
-    cache.height = ok ? input.height : 0;
-  }
-  // Two RGBA8 textures ping-pong: each pass reads one and draws into the
-  // other, so every pass is quantised to 8 bits like the reference.
-  const gl::ImageView view{input.width, input.height, input.row_stride, gl::PixelFormat::Rgba8,
-                           reinterpret_cast<const std::byte*>(input.pixels.data()), input.pixels.size()};
-  ok = ok && cache.textures[0].upload(view, error);
-  int current = 0;
-  // A pass without masks still gives the mask sampler a complete texture
-  // (the frame it reads); the driver warns about an empty unit otherwise.
-  const auto pass = [&](gl::Program& program, bool masked, const auto& set_uniforms) {
-    const int next = 1 - current;
-    ok = ok && program.use(error) && cache.framebuffers[next].bind(error) &&
-         context.setViewport(input.width, input.height, error) && cache.textures[current].bind(0, error) &&
-         (masked || cache.textures[current].bind(1, error)) && program.setTextureUnit("source", 0, error) &&
-         set_uniforms() && context.drawTriangles(3, error);
-    current = next;
-  };
-  for (const auto& draw : draws) {
-    if (!ok) break;
-    const bool grain = draw.is_detail;
-    gl::Program& program = grain ? cache.grain_program : cache.color_program;
-    ok = ready_program(context, cache, program, grain ? shaders::kGrain : shaders::kColor, error);
-    const auto masks = static_cast<float>(draw.masks.size());
-    // Upload first, bind after: an upload binds its texture to the active unit.
-    ok = ok && (draw.masks.empty() || upload_masks(cache, context, draw.masks, input.width, input.height, error)) &&
-         (draw.masks.empty() || cache.masks.bind(1, error));
-    pass(program, !draw.masks.empty(), [&] {
-      return program.setTextureUnit("masks", 1, error) &&
-             program.setVec4("blend0", {masks, static_cast<float>(draw.blend), 0.0F, 0.0F}, error) &&
-             (grain ? set_grain_uniforms(program, draw, error) : set_color_uniforms(program, draw, error));
-    });
-  }
-  for (const auto& layer : layers) {
-    if (!ok) break;
-    ok = ready_program(context, cache, cache.layer_program, shaders::kLayer, error);
-    if (ok && !cache.layer.valid()) cache.layer = context.createTexture2D();
-    const RgbaImage& image = layer.layer->image;
-    const gl::ImageView layer_view{image.width, image.height, image.row_stride, gl::PixelFormat::Rgba8,
-                                   reinterpret_cast<const std::byte*>(image.pixels.data()), image.pixels.size()};
-    // Upload first, bind after: an upload binds its texture to the active unit.
-    ok = ok && cache.layer.valid() && cache.layer.upload(layer_view, error) &&
-         (layer.mask == nullptr || upload_masks(cache, context, {layer.mask}, input.width, input.height, error)) &&
-         cache.layer.bind(2, error) && (layer.mask == nullptr || cache.masks.bind(1, error));
-    pass(cache.layer_program, layer.mask != nullptr, [&] {
-      return cache.layer_program.setTextureUnit("layer", 2, error) &&
-             cache.layer_program.setTextureUnit("masks", 1, error) &&
-             cache.layer_program.setVec4("layer0", {layer.layer->opacity, layer.mask != nullptr ? 1.0F : 0.0F,
-                                                    static_cast<float>(layer.blend), 0.0F}, error);
-    });
-  }
+  result.image.row_stride = input.width * 4;
+  result.image.pixels.resize(static_cast<std::size_t>(result.image.row_stride) * input.height);
+  const std::uint32_t edge = std::max<std::uint32_t>(1, gpu_tile_);
   std::vector<std::byte> pixels;
-  ok = ok && context.readPixels(input.width, input.height, pixels, error);
+  for (std::uint32_t tile_y = 0; ok && tile_y < input.height; tile_y += edge) {
+    for (std::uint32_t tile_x = 0; ok && tile_x < input.width; tile_x += edge) {
+      const Tile tile{tile_x, tile_y, std::min(edge, input.width - tile_x), std::min(edge, input.height - tile_y)};
+      if (cache.width != tile.width || cache.height != tile.height) {
+        for (int i = 0; ok && i < 2; ++i) {
+          cache.textures[i] = context.createTexture2D();
+          cache.framebuffers[i] = context.createFramebuffer();
+          ok = cache.textures[i].valid() && cache.framebuffers[i].valid() &&
+               cache.textures[i].allocate(tile.width, tile.height, gl::PixelFormat::Rgba8, error) &&
+               cache.framebuffers[i].attachColor(cache.textures[i], error) && cache.framebuffers[i].complete(error);
+        }
+        cache.width = ok ? tile.width : 0;
+        cache.height = ok ? tile.height : 0;
+      }
+      // Two RGBA8 textures ping-pong: each pass reads one and draws into the
+      // other, so every pass is quantised to 8 bits like the reference.
+      ok = ok && cache.textures[0].upload(tile_view(input, tile), error);
+      int current = 0;
+      // A pass without masks still gives the mask sampler a complete texture
+      // (the frame it reads); the driver warns about an empty unit otherwise.
+      const auto pass = [&](gl::Program& program, bool masked, const auto& set_uniforms) {
+        const int next = 1 - current;
+        ok = ok && program.use(error) && cache.framebuffers[next].bind(error) &&
+             context.setViewport(tile.width, tile.height, error) && cache.textures[current].bind(0, error) &&
+             (masked || cache.textures[current].bind(1, error)) && program.setTextureUnit("source", 0, error) &&
+             set_uniforms() && context.drawTriangles(3, error);
+        current = next;
+      };
+      for (const auto& draw : draws) {
+        if (!ok) break;
+        const bool grain = draw.is_detail;
+        gl::Program& program = grain ? cache.grain_program : cache.color_program;
+        ok = ready_program(context, cache, program, grain ? shaders::kGrain : shaders::kColor, error);
+        const auto masks = static_cast<float>(draw.masks.size());
+        // Upload first, bind after: an upload binds its texture to the active unit.
+        ok = ok && (draw.masks.empty() || upload_masks(cache, context, draw.masks, input.width, tile, error)) &&
+             (draw.masks.empty() || cache.masks.bind(1, error));
+        pass(program, !draw.masks.empty(), [&] {
+          return program.setTextureUnit("masks", 1, error) &&
+                 program.setVec4("blend0", {masks, static_cast<float>(draw.blend), 0.0F, 0.0F}, error) &&
+                 (grain ? set_grain_uniforms(program, draw, error) &&
+                              program.setVec4("grain2", {static_cast<float>(tile.x), static_cast<float>(tile.y), 0.0F, 0.0F}, error)
+                        : set_color_uniforms(program, draw, error));
+        });
+      }
+      for (const auto& layer : layers) {
+        if (!ok) break;
+        ok = ready_program(context, cache, cache.layer_program, shaders::kLayer, error);
+        if (ok && !cache.layer.valid()) cache.layer = context.createTexture2D();
+        // Upload first, bind after: an upload binds its texture to the active unit.
+        ok = ok && cache.layer.valid() && cache.layer.upload(tile_view(layer.layer->image, tile), error) &&
+             (layer.mask == nullptr || upload_masks(cache, context, {layer.mask}, input.width, tile, error)) &&
+             cache.layer.bind(2, error) && (layer.mask == nullptr || cache.masks.bind(1, error));
+        pass(cache.layer_program, layer.mask != nullptr, [&] {
+          return cache.layer_program.setTextureUnit("layer", 2, error) &&
+                 cache.layer_program.setTextureUnit("masks", 1, error) &&
+                 cache.layer_program.setVec4("layer0", {layer.layer->opacity, layer.mask != nullptr ? 1.0F : 0.0F,
+                                                        static_cast<float>(layer.blend), 0.0F}, error);
+        });
+      }
+      ok = ok && context.readPixels(tile.width, tile.height, pixels, error);
+      if (ok) {
+        const std::size_t row_bytes = static_cast<std::size_t>(tile.width) * 4;
+        for (std::uint32_t row = 0; row < tile.height; ++row) {
+          std::memcpy(result.image.pixels.data() + static_cast<std::size_t>(tile.y + row) * result.image.row_stride +
+                          static_cast<std::size_t>(tile.x) * 4,
+                      pixels.data() + row * row_bytes, row_bytes);
+        }
+      }
+    }
+  }
   if (ok) {
-    result.image.row_stride = input.width * 4;
-    result.image.pixels.resize(pixels.size());
-    std::memcpy(result.image.pixels.data(), pixels.data(), pixels.size());
     result.success = true;
   } else {
     gpu_cache_.reset();  // rebuild from scratch next time
@@ -1062,6 +1093,8 @@ bool RenderExecutor::execute(gl::Context& context, const pixcake::render::Render
   if (!ok && error.empty()) error = "GPU pass failed";
   return ok;
 }
+
+void RenderExecutor::setGpuTileSize(std::uint32_t edge) { gpu_tile_ = edge; }
 
 ResultCode RenderExecutor::validate(const render::RenderDescription& description,
                                     std::string& error) {

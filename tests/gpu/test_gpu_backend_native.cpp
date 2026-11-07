@@ -267,6 +267,32 @@ int main() {
       {"five masks (reference)", {colour("color.local", "pixcake.color.local", {v("exposure", 0.5)},
                                          {"m0", "m1", "m2", "m3", "m4"})}, &extras, false},
   };
+  // The same cases drawn in 32 px tiles (full-resolution export) from a frame
+  // whose rows are padded: tiles must join without seams (grain included).
+  pixcake::gpu::RenderExecutor tiled;
+  tiled.setGpuTileSize(32);
+  pixcake::gpu::RgbaImage padded = frame;
+  padded.row_stride = frame.row_stride + 12;
+  padded.pixels.assign(static_cast<std::size_t>(padded.row_stride) * frame.height, 0);
+  for (std::uint32_t y = 0; y < frame.height; ++y) {
+    std::copy_n(frame.pixels.data() + static_cast<std::size_t>(y) * frame.row_stride, frame.row_stride,
+                padded.pixels.data() + static_cast<std::size_t>(y) * padded.row_stride);
+  }
+  const auto worst_of = [&](const pixcake::gpu::RgbaImage& a, const pixcake::gpu::RgbaImage& b, std::size_t& off) {
+    int worst = 0;
+    off = 0;
+    if (a.width != b.width || a.height != b.height) return 999;
+    const std::size_t sa = a.row_stride == 0 ? a.width * 4 : a.row_stride, sb = b.row_stride == 0 ? b.width * 4 : b.row_stride;
+    if (a.pixels.size() < sa * a.height || b.pixels.size() < sb * b.height) return 999;
+    for (std::uint32_t y = 0; y < a.height; ++y) {
+      for (std::uint32_t x = 0; x < a.width * 4; ++x) {
+        const int diff = std::abs(static_cast<int>(a.pixels[y * sa + x]) - static_cast<int>(b.pixels[y * sb + x]));
+        worst = std::max(worst, diff);
+        if (diff > 0) ++off;
+      }
+    }
+    return worst;
+  };
   for (const auto& item : cases) {
     pixcake::render::RenderDescription multi;
     multi.document_revision = 19;
@@ -296,6 +322,18 @@ int main() {
                 on_cpu.image.pixels.size());
     if (worst > 1) std::fprintf(stderr, "FAIL %s: GPU differs from reference by %d (%s)\n", item.name, worst, error.c_str());
     if (worst > 1) ++failures;
+    if (item.on_gpu) {
+      pixcake::gpu::RenderResult in_tiles;
+      std::string tile_error;
+      const bool tiles_drawn = tiled.execute(context, multi, padded, case_inputs, in_tiles, tile_error);
+      std::size_t tile_off = 0;
+      const int tile_worst = tiles_drawn && !in_tiles.reference_fallback ? worst_of(in_tiles.image, on_cpu.image, tile_off) : 999;
+      std::printf("gpu tiles    %-20s max diff %d, %zu differ\n", item.name, tile_worst, tile_off);
+      if (tile_worst > 1) {
+        std::fprintf(stderr, "FAIL %s in tiles: differs from reference by %d (%s)\n", item.name, tile_worst, tile_error.c_str());
+        ++failures;
+      }
+    }
     bool same_statuses = on_gpu.statuses.size() == on_cpu.statuses.size();
     for (std::size_t i = 0; same_statuses && i < on_cpu.statuses.size(); ++i) {
       same_statuses = on_gpu.statuses[i].status == on_cpu.statuses[i].status &&

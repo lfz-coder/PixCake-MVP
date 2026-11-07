@@ -298,7 +298,9 @@ class TextureImpl final : public detail::Texture2DImpl {
     if (image.data == nullptr || image.width == 0 || image.height == 0) { error = "image view is empty"; return false; }
     const std::uint32_t stride = image.row_stride == 0 ? image.width * 4 : image.row_stride;
     if (stride < image.width * 4 || stride % 4 != 0 ||
-        image.bytes < static_cast<std::size_t>(stride) * image.height) {
+        // The last row needs only its own pixels, not a whole stride: a tile
+        // cut from a larger image ends inside the image's last row.
+        image.bytes < static_cast<std::size_t>(stride) * (image.height - 1) + static_cast<std::size_t>(image.width) * 4) {
       error = "image view row stride or size is invalid";
       return false;
     }

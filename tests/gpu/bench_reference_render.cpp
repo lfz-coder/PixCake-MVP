@@ -103,5 +103,23 @@ int main() {
     }
     std::printf("%-20s %7.1f ms %7.1f ms\n", item.name, reference, on_gpu);
   }
+  // A 24 MP export (6000 x 4000) is drawn in 4096 px tiles on the GPU.
+  pixcake::gpu::RgbaImage full;
+  full.width = 6000;
+  full.height = 4000;
+  full.row_stride = full.width * 4;
+  full.pixels.resize(static_cast<std::size_t>(full.row_stride) * full.height);
+  for (std::size_t i = 0; i < full.pixels.size(); ++i) full.pixels[i] = static_cast<std::uint8_t>((i * 2654435761u) >> 24);
+  const auto& all = cases[6].description;
+  pixcake::gpu::RenderResult result;
+  const double reference = best_ms([&] { return pixcake::gpu::RenderExecutor{}.renderReference(all, full, {}, result); });
+  double on_gpu = -1;
+  if (gpu) {
+    on_gpu = best_ms([&] {
+      std::string error;
+      return executor.execute(context, all, full, {}, result, error) && !result.reference_fallback;
+    });
+  }
+  std::printf("%-20s %7.1f ms %7.1f ms\n", "24 MP export, all", reference, on_gpu);
   return 0;
 }

@@ -88,8 +88,14 @@ class RenderExecutor {
   // per context to reuse its programs and textures between frames.
   bool execute(gl::Context&, const pixcake::render::RenderDescription&, const RgbaImage&,
                const RenderInputs&, RenderResult&, std::string&) const;
+  // Largest tile edge of the GPU path; larger frames draw tile by tile.  The
+  // default fits every preview (<= 4000) in one tile and stays well under
+  // the texture limit of any Mac GPU.  Tests set a small edge.
+  static constexpr std::uint32_t kDefaultGpuTile = 4096;
+  void setGpuTileSize(std::uint32_t edge);
 
  private:
   mutable std::shared_ptr<GpuCache> gpu_cache_;
+  std::uint32_t gpu_tile_ = kDefaultGpuTile;
 };
 }  // namespace pixcake::gpu

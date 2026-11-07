@@ -55,6 +55,8 @@ Task 0 结果：项目顶层只冻结 C++17 和现有 CMake 目标；`kernel/imp
 - Task 0：用户裁决解码用 macOS ImageIO，不用 libvips；证据 `docs/superpowers/evidence/2026-11-06-renderd-transport-and-decoder.md` §2。
 - Task 2：用户裁决 Unix 套接字 + 共享内存；协议见同一证据 §3。
 - Task 3（renderd 部分）：ImageIO 解码、预览源/结果消息、传输层、`PreviewServer` 与 `--socket` 已实现并测试（同一证据 §4）。exportd 的全分辨率解码与编码、壳层启动 renderd 和显示帧仍未做。
+- 后续（2026-11-06）：壳层启动 renderd 并显示帧已在壳层任务里完成；renderd 预览改为 GPU 优先。
+- Task 3（exportd 部分，2026-11-06）：ImageIO 全分辨率解码（含原图 ICC）、GPU 分块绘制（失败回退参考）、ImageIO 编码 JPG/TIFF（品质 0–14、色彩空间原始/sRGB）、经 `ExportQueue` 提交产品已实现并测试；证据 `docs/superpowers/evidence/2026-11-06-exportd-full-resolution.md`。壳层导出弹窗与到 exportd 的进程通信、蒙版、水印、原始格式仍未做。
 
 ## 启动条件
 

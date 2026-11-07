@@ -273,7 +273,8 @@ if(PIXCAKE_ENABLE_INFERENCE AND APPLE)
 endif()
 
 add_executable(test_exportd apps/test_exportd.cpp)
-target_link_libraries(test_exportd PRIVATE pixcake_exportd_service pixcake_warnings)
+target_include_directories(test_exportd PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+target_link_libraries(test_exportd PRIVATE pixcake_exportd_service pixcake_platform_macos_image pixcake_warnings)
 add_test(NAME test_exportd COMMAND test_exportd)
 
 add_executable(test_generated apps/test_generated.cpp)
