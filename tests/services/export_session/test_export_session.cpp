@@ -124,10 +124,10 @@ int main() {
   auto bytes = read_all(out + "/shoot/a.jpg");
   assert(bytes.size() > 100 && bytes[0] == 0xFF && bytes[1] == 0xD8);
 
-  // The same again does not overwrite: a(1).jpg.
+  // The same again does not overwrite: a_(2).jpg (as the test build names it).
   assert(exports->submit(request, notices, diagnostic) == ResultCode::Ok);
   rows = settle(*exports);
-  assert(rows.size() == 2 && rows[0].status == "成功" && rows[0].file_name == "a(1).jpg");
+  assert(rows.size() == 2 && rows[0].status == "成功" && rows[0].file_name == "a_(2).jpg");
 
   // TIFF 16-bit, next to the original.
   ExportRequest tiff = request;

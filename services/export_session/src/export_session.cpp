@@ -207,13 +207,13 @@ ResultCode ExportSession::submit(const ExportRequest& request, std::vector<std::
         continue;
       }
     }
-    // Name collisions: "name(1).jpg", "name(2).jpg" -- a project choice; what
-    // the official build does on a collision was not observed.
+    // Name collisions: "name_(2).jpg", "name_(3).jpg" -- what the test build
+    // writes (docs/superpowers/evidence/2026-11-07-export-credit-observation.md).
     const std::string stem = stem_of(photo->file_name);
     const std::string extension = extension_for(request.settings.format, photo->format);
     std::string destination = folder + "/" + stem + "." + extension;
-    for (int n = 1; taken.count(destination) != 0 || ::access(destination.c_str(), F_OK) == 0; ++n) {
-      destination = folder + "/" + stem + "(" + std::to_string(n) + ")." + extension;
+    for (int n = 2; taken.count(destination) != 0 || ::access(destination.c_str(), F_OK) == 0; ++n) {
+      destination = folder + "/" + stem + "_(" + std::to_string(n) + ")." + extension;
     }
     ExportJob job;
     job.export_id = next_export_id();
