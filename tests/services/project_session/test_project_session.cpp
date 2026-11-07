@@ -165,6 +165,25 @@ int main() {
     assert(projects->set_rating({copy}, 6) == ResultCode::StateConflict);
     assert(projects->set_flag({a}, "") == ResultCode::Ok && projects->set_color({a}, "") == ResultCode::Ok);
     assert(projects->load_photo(a, row) == ResultCode::Ok && row->flag.empty() && row->color_label.empty());
+    // 筛选与排序：原图被筛掉，它的副本也不出现；排序只排原图，副本跟在后面。
+    assert(projects->set_rating({a}, 2) == ResultCode::Ok);
+    PhotoQuery query;
+    query.rating_min = 2;
+    assert(projects->list_photos(imported.project_id, photos, &query) == ResultCode::Ok && photos.size() == 3);
+    assert(photos[0].id == a && photos[1].id == copy && photos[2].id == second);
+    query = {};
+    query.edit_statuses = {""};  // 未编辑
+    assert(projects->list_photos(imported.project_id, photos, &query) == ResultCode::Ok && photos.size() == 1);
+    assert(photos[0].id == imported.photo_ids[1]);
+    query = {};
+    query.sort = PhotoSortKey::FileName;
+    query.descending = true;
+    assert(projects->list_photos(imported.project_id, photos, &query) == ResultCode::Ok && photos.size() == 4);
+    assert(photos[0].id == imported.photo_ids[1] && photos[1].id == a && photos[2].id == copy);
+    query = {};
+    query.rating_min = 4;
+    query.rating_max = 2;  // 倒置
+    assert(projects->list_photos(imported.project_id, photos, &query) == ResultCode::StateConflict);
     assert(projects->set_rating({a}, 0) == ResultCode::Ok);
     session.in = false;
     assert(projects->set_rating({a}, 2) == ResultCode::StateConflict);

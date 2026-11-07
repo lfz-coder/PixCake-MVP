@@ -2,6 +2,7 @@
 #include "pages.hpp"
 #include "pixcake_theme.hpp"
 #include "pixcake_widgets.hpp"
+#include "filter_dialog.hpp"
 #include "shell_icons.hpp"
 #include "trash_dialog.hpp"
 
@@ -48,7 +49,8 @@ QWidget* buildLibraryPage(const PageContext& context) {
   controls_layout->addWidget(status);
   controls_layout->addWidget(iconAction(qtext("region.library-effect"), QString(), controls));
   for (const auto& entry : ui::shell::page_list("library-tools")) {
-    controls_layout->addWidget(itemAction("library-tools", entry, controls));
+    controls_layout->addWidget(entry.id == "import" ? itemAction("library-tools", entry, controls)
+                                                    : filterAction("library-tools", entry, controls, actions));
   }
   controls_layout->addStretch();
   // “已选 N 张（共 M 张）”跟着图库的选择变。
@@ -82,7 +84,10 @@ QWidget* buildLibraryPage(const PageContext& context) {
   // 图库网格双击照片、单视图里点底部缩略图：都在图库里看大图（与像素蛋糕一致，不进精修）。
   const auto view = [actions](std::int64_t photo) { actions->request_view_photo(photo); };
   if (photos.empty()) {
-    grid_layout->addWidget(new PixCakeEmptyState(qtext("library.empty"), qtext("library.empty.hint"), grid), 1);
+    grid_layout->addWidget(actions->photo_filtered()
+                               ? new PixCakeEmptyState(qtext("library.filtered_empty"), QString(), grid)
+                               : new PixCakeEmptyState(qtext("library.empty"), qtext("library.empty.hint"), grid),
+                           1);
   } else if (single) {
     // 单视图：选中照片的大图，是 renderd 按已提交编辑渲染的预览。
     auto* image_view = new PixCakeImageView(grid);

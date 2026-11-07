@@ -95,7 +95,8 @@ class ProjectSession {
   ResultCode erase_trashed_project(std::int64_t project_id, std::string& diagnostic);
 
   ResultCode list_projects(std::vector<ProjectRow>& out) const;
-  ResultCode list_photos(std::int64_t project_id, std::vector<PhotoRow>& out) const;
+  // query 非空时按筛选和排序（需求 §6.2、§6.3）列出；副本跟在原图后面（原图被筛掉，它的副本也不出现）。
+  ResultCode list_photos(std::int64_t project_id, std::vector<PhotoRow>& out, const PhotoQuery* query = nullptr) const;
   ResultCode load_photo(std::int64_t photo_id, std::optional<PhotoRow>& out) const;
   // The original's current path through its bookmark.  A moved or deleted
   // original is SourceMissing and the photo is marked missing (its edits stay).

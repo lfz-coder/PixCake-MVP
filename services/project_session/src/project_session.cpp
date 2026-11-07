@@ -237,9 +237,17 @@ ResultCode ProjectSession::create_virtual_copy(std::int64_t item, std::int64_t& 
   return ResultCode::Ok;
 }
 
-ResultCode ProjectSession::list_photos(std::int64_t project_id, std::vector<PhotoRow>& out) const {
+ResultCode ProjectSession::list_photos(std::int64_t project_id, std::vector<PhotoRow>& out,
+                                       const PhotoQuery* query) const {
   std::vector<PhotoRow> photos;
-  const ResultCode code = library_->list_photos(project_id, photos);
+  ResultCode code;
+  if (query != nullptr) {
+    PhotoQuery scoped = *query;
+    scoped.project_id = project_id;
+    code = library_->query_photos(scoped, photos);
+  } else {
+    code = library_->list_photos(project_id, photos);
+  }
   out.clear();
   for (auto& photo : photos) {
     std::optional<TrashRow> gone;

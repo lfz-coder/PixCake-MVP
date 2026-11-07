@@ -67,6 +67,10 @@ class ShellController final : public PageActions {
   void watch_selection(QObject* owner, std::function<void()> changed) override;
   void request_open_photo(std::int64_t photo_id) override;
   void request_virtual_copy(const std::vector<std::int64_t>& photo_ids) override;
+  PhotoQuery photo_filter() const override { return filter_; }
+  void request_photo_filter(const PhotoQuery& query) override;
+  bool photo_filtered() const override;
+  std::size_t photo_total() const override;
   void request_rating(const std::vector<std::int64_t>& photo_ids, int rating) override;
   void request_flag(const std::vector<std::int64_t>& photo_ids, const std::string& flag) override;
   void request_color(const std::vector<std::int64_t>& photo_ids, const std::string& color) override;
@@ -126,6 +130,7 @@ class ShellController final : public PageActions {
   // Library multi-selection; meaningful only while it contains selected_photo_
   // (other paths that change selected_photo_ fall back to that one photo).
   std::vector<std::int64_t> selection_;
+  PhotoQuery filter_;  // 当前项目的筛选与排序；换项目时清空
   std::vector<std::pair<QPointer<QObject>, std::function<void()>>> selection_watchers_;
   void selection_changed();
   std::unique_ptr<preview_channel::ThumbnailService> thumbnails_;

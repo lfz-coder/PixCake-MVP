@@ -4,6 +4,7 @@
 
 #include "pixcake/project/records.hpp"
 #include "pixcake_widgets.hpp"
+#include "filter_dialog.hpp"
 #include "shell_icons.hpp"
 #include "trash_dialog.hpp"
 
@@ -341,7 +342,9 @@ QFrame* thumbnailStrip(QWidget* parent, bool library, PageActions* actions, std:
       if (entry.id != "add") ids.push_back(entry.id);
     }
   }
-  for (const auto& id : ids) layout->addWidget(itemAction("refine-thumbs", copyItem("refine-thumbs", id), frame));
+  for (const auto& id : ids) {
+    layout->addWidget(filterAction("refine-thumbs", copyItem("refine-thumbs", id), frame, actions));
+  }
   if (library) {
     auto* count = action(qtext("thumbs.selected").arg(0), frame);
     count->setObjectName(QStringLiteral("thumbs-selected"));

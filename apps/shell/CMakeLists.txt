@@ -15,6 +15,7 @@ add_executable(pixcake_app_shell
   refine_page.cpp
   export_dialog.cpp
   trash_dialog.cpp
+  filter_dialog.cpp
   creative_page.cpp
   pixcake_widgets.hpp
 )

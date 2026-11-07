@@ -3,6 +3,7 @@
 // 页面构建的公共部件（代码质量清单 Q-12）：页面文件只画控件，状态变化经 PageActions 交给
 // ShellController。文字来自 ui/shell 的文案表，图标按“组/条目编号”查。
 #include "pixcake/export_session/export_session.hpp"
+#include "pixcake/project/records.hpp"
 #include "pixcake/ui/panels/histogram.hpp"
 #include "pixcake/ui/panels/slider_spec.hpp"
 #include "pixcake/ui/shell/page_copy.hpp"
@@ -99,6 +100,13 @@ class PageActions {
   virtual std::vector<ProjectEntry> projects() const { return {}; }
   virtual void request_open_project(std::int64_t) {}
   virtual std::vector<PhotoEntry> photos() const { return {}; }
+  // 筛选与排序（需求 §6.2、§6.3）：当前项目图库的条件；photos() 已按它列出。
+  virtual PhotoQuery photo_filter() const { return {}; }
+  virtual void request_photo_filter(const PhotoQuery&) {}
+  // 条件和默认（不限、导入顺序）不同。
+  virtual bool photo_filtered() const { return false; }
+  // 当前项目一共多少张（不受筛选影响，副本不算）。
+  virtual std::size_t photo_total() const { return 0; }
   // 项目里选中的照片（图库单击选中；精修显示的就是它）。
   virtual std::optional<std::int64_t> current_photo() const { return std::nullopt; }
   virtual void select_photo(std::int64_t) {}

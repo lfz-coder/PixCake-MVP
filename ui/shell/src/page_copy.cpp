@@ -149,6 +149,32 @@ Texts build_texts() {
   // 本机账本的张数：同一张图扣过就不再扣，原图和免费效果图不扣。
   t["export.sheets"] = "本次预计扣除 %1 张，剩余 %2 张";
   // 导出列表的计费一栏（test 版导出明细：精修效果图、免费功能、实际计费）。
+  // 筛选与排序（需求 §6.2、§6.3）。
+  t["filter.title"] = "筛选与排序";
+  t["filter.rating"] = "星级";
+  t["filter.rating.from"] = "大于等于";
+  t["filter.rating.to"] = "小于等于";
+  t["filter.flag"] = "按旗标";
+  t["filter.color"] = "按色标";
+  t["filter.none.flag"] = "无旗标";
+  t["filter.none.color"] = "无色标";
+  t["filter.edit"] = "修图状态";
+  t["filter.not.edited"] = "未编辑";
+  t["filter.export"] = "导出状态";
+  t["filter.not.exported"] = "未导出";
+  t["filter.format"] = "格式";
+  t["filter.sort"] = "排序";
+  t["filter.sort.import"] = "导入顺序";
+  t["filter.sort.capture"] = "拍摄时间";
+  t["filter.sort.edit"] = "编辑时间";
+  t["filter.sort.rating"] = "星级";
+  t["filter.sort.type"] = "文件类型";
+  t["filter.sort.size"] = "文件大小";
+  t["filter.sort.name"] = "文件名";
+  t["filter.sort.descending"] = "降序";
+  t["filter.reset"] = "重置";
+  t["filter.shown"] = "显示 %1 张（共 %2 张）";
+  t["library.filtered_empty"] = "没有符合条件的图片";
   // 标记（需求 §6.1）。
   t["mark.star"] = "★%1";
   t["mark.menu.rating"] = "设置星级";

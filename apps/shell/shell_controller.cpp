@@ -213,6 +213,7 @@ void ShellController::request_import(const std::vector<std::string>& paths) {
     // Requirement 5.3: entering a project shows refine with the first photo.
     if (display_.open_project() == ResultCode::Ok) {
       current_project_ = outcome.project_id;
+      filter_ = {};
       open_project_photo(outcome.photo_ids.front());
       remember_place();
     }
@@ -251,6 +252,7 @@ void ShellController::request_open_project(std::int64_t project_id) {
   const Page landing = place.workspace == project_session::Workspace::Library ? Page::Library : Page::Refine;
   if (display_.open_project(landing) != ResultCode::Ok) return;
   current_project_ = project_id;
+  filter_ = {};
   selected_photo_ = place.photo_id;
   if (landing == Page::Library) {
     display_.set_library_view("grid");
@@ -264,7 +266,8 @@ void ShellController::request_open_project(std::int64_t project_id) {
 std::vector<PhotoEntry> ShellController::photos() const {
   std::vector<PhotoEntry> out;
   std::vector<PhotoRow> rows;
-  if (projects_ && current_project_ && projects_->list_photos(*current_project_, rows) == ResultCode::Ok) {
+  if (projects_ && current_project_ &&
+      projects_->list_photos(*current_project_, rows, photo_filtered() ? &filter_ : nullptr) == ResultCode::Ok) {
     for (const auto& row : rows) {
       // Only an abnormal original (missing, delete pending) is worth a line.
       out.push_back({row.id, row.file_name, row.presence == kPresenceEditable ? std::string() : row.presence,
@@ -295,6 +298,43 @@ void ShellController::request_virtual_copy(const std::vector<std::int64_t>& phot
   request_thumbnails();
   // 新副本成为选中的（图库里一眼看到它们在哪）。
   select_photos(created, created.back());
+  if (changed_) changed_();
+}
+
+bool ShellController::photo_filtered() const {
+  const PhotoQuery none;
+  return filter_.rating_min != none.rating_min || filter_.rating_max != none.rating_max || !filter_.flags.empty() ||
+         !filter_.colors.empty() || !filter_.formats.empty() || !filter_.edit_statuses.empty() ||
+         !filter_.export_statuses.empty() || filter_.sort != none.sort || filter_.descending;
+}
+
+std::size_t ShellController::photo_total() const {
+  std::vector<PhotoRow> rows;
+  if (!projects_ || !current_project_ || projects_->list_photos(*current_project_, rows) != ResultCode::Ok) return 0;
+  return static_cast<std::size_t>(std::count_if(rows.begin(), rows.end(), [](const PhotoRow& row) { return row.id > 0; }));
+}
+
+void ShellController::request_photo_filter(const PhotoQuery& query) {
+  if (!projects_ || !current_project_) return;
+  const PhotoQuery before = filter_;
+  filter_ = query;
+  std::vector<PhotoRow> rows;
+  if (projects_->list_photos(*current_project_, rows, photo_filtered() ? &filter_ : nullptr) != ResultCode::Ok) {
+    filter_ = before;  // 条件不合法：保持原来的
+    show_notices({}, NoticeScene::OpenDocument, ResultCode::StateConflict);
+    return;
+  }
+  // 被筛掉的照片不再选中；正在精修的那张不关（它还开着，只是不在列表里）。
+  std::vector<std::int64_t> kept;
+  for (const std::int64_t id : selection_) {
+    if (std::any_of(rows.begin(), rows.end(), [id](const PhotoRow& row) { return row.id == id; })) kept.push_back(id);
+  }
+  if (kept.size() != selection_.size()) {
+    selection_ = kept;
+    selected_photo_ = kept.empty() ? std::nullopt : std::optional<std::int64_t>(kept.back());
+    selection_changed();
+  }
+  request_thumbnails();
   if (changed_) changed_();
 }
 

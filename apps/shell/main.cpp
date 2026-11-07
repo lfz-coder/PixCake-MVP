@@ -6,6 +6,7 @@
 #include "pixcake/ui/panels/slider_spec.hpp"
 #include "pixcake/ui/shell/page_copy.hpp"
 #include "pixcake/ui/shell/shell_display.hpp"
+#include "filter_dialog.hpp"
 #include "pixcake_theme.hpp"
 #include "pixcake_widgets.hpp"
 #include "trash_dialog.hpp"
@@ -660,6 +661,45 @@ int smoke_virtual_copy(pixcake::shell::ShellWindow& window) {
     }
     controller.request_rating({entries[0].id}, 0);
     controller.request_color({entries[0].id}, "");
+  }
+  // Filter and sort: the dialog's controls change the library's list; reset brings everything back.
+  {
+    controller.request_page(Page::Library);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    const auto all = controller.photos();
+    controller.request_rating({all[0].id}, 5);
+    QPushButton* filter = nullptr;
+    for (auto* candidate : window.findChildren<QPushButton*>(QStringLiteral("photo-filter"))) {
+      if (candidate->isVisibleTo(&window)) filter = candidate;
+    }
+    if (filter == nullptr || !filter->isEnabled()) {
+      qCritical("filter button missing or disabled");
+      return 12;
+    }
+    filter->click();
+    auto* dialog = window.findChild<QDialog*>(QStringLiteral("filter-dialog"));
+    auto* minimum = dialog != nullptr ? dialog->findChild<QSpinBox*>(QStringLiteral("filter-rating-min")) : nullptr;
+    auto* reset = dialog != nullptr ? dialog->findChild<QPushButton*>(QStringLiteral("filter-reset")) : nullptr;
+    auto* shown = dialog != nullptr ? dialog->findChild<QLabel*>(QStringLiteral("filter-shown")) : nullptr;
+    if (minimum == nullptr || reset == nullptr || shown == nullptr) {
+      qCritical("filter dialog incomplete");
+      return 12;
+    }
+    minimum->setValue(5);
+    const auto narrowed = controller.photos();
+    if (!controller.photo_filtered() || narrowed.size() != 2 || narrowed[0].id != all[0].id ||
+        shown->text() != qtext_for_smoke("filter.shown").arg(1).arg(2)) {
+      qCritical("filter: %zu photos, label '%s'", narrowed.size(), qPrintable(shown->text()));
+      return 12;
+    }
+    reset->click();
+    if (controller.photo_filtered() || controller.photos().size() != all.size() || minimum->value() != 0) {
+      qCritical("filter reset: %zu photos", controller.photos().size());
+      return 12;
+    }
+    dialog->close();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    controller.request_rating({all[0].id}, 0);
   }
   // Delete and trash: the bulk delete asks first; a copy goes alone; the original takes its copies; restore.
   {
