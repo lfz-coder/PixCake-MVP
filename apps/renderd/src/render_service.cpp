@@ -113,24 +113,38 @@ PreviewResult RenderService::render_latest() {
     pending_.reset();
   }
 
+  return render_now(work.client_sequence, work.request.image_id, work.description, work.input, work.request.max_edge);
+}
+
+PreviewResult RenderService::render_now(std::uint64_t sequence, const std::string& image_id,
+                                        const render::RenderDescription& description, const RgbaInput& input,
+                                        std::uint32_t max_edge) {
   PreviewResult result;
-  result.client_sequence = work.client_sequence;
-  if (work.input.width > work.request.max_edge || work.input.height > work.request.max_edge) {
+  result.client_sequence = sequence;
+  std::string invalid;
+  if (validate_input(input, invalid) != ResultCode::Ok) {
+    result.code = ResultCode::StateConflict;
+    result.diagnostic = invalid;
+    return result;
+  }
+  if (input.width > max_edge || input.height > max_edge) {
     result.code = ResultCode::UnsupportedFormat;
     result.diagnostic = "preview resampling backend is not registered";
     return result;
   }
-  if (has_enabled_operations(work.description)) return render_operations(work, std::move(result));
+  if (has_enabled_operations(description)) {
+    return render_operations(sequence, image_id, description, input, max_edge, std::move(result));
+  }
 
-  result.header.sequence = work.client_sequence;
-  result.header.document_revision = work.description.document_revision;
-  result.header.width = work.input.width;
-  result.header.height = work.input.height;
-  result.header.stride = copy_stride(work.input.width);
+  result.header.sequence = sequence;
+  result.header.document_revision = description.document_revision;
+  result.header.width = input.width;
+  result.header.height = input.height;
+  result.header.stride = copy_stride(input.width);
   result.header.format = ipc::PixelFormat::Rgba8;
   result.rgba.resize(static_cast<std::size_t>(result.header.stride) * result.header.height);
   for (std::uint32_t row = 0; row < result.header.height; ++row) {
-    const auto* source = work.input.bytes.data() + static_cast<std::size_t>(row) * work.input.stride;
+    const auto* source = input.bytes.data() + static_cast<std::size_t>(row) * input.stride;
     auto* destination = result.rgba.data() + static_cast<std::size_t>(row) * result.header.stride;
     std::copy(source, source + result.header.stride, destination);
   }
@@ -138,25 +152,28 @@ PreviewResult RenderService::render_latest() {
   return result;
 }
 
-PreviewResult RenderService::render_operations(const PreviewWork& work, PreviewResult result) {
-  // Semantic masks are computed on the preview frame itself (requirement 10.4:
+PreviewResult RenderService::render_operations(std::uint64_t sequence, const std::string& image_id,
+                                               const render::RenderDescription& description,
+                                               const RgbaInput& input, std::uint32_t max_edge,
+                                               PreviewResult result) {
+  // Semantic masks are computed on the frame itself (requirement 10.4:
   // preview uses the <= 4000 px image, export the full resolution, same rules).
   SemanticMaskBatch batch;
-  masks_.provide(work.request.image_id, work.input, work.description, batch);
+  masks_.provide(image_id, input, description, batch);
 
   gpu::RgbaImage image;
-  image.width = work.input.width;
-  image.height = work.input.height;
-  image.row_stride = work.input.stride;
-  image.revision = work.description.document_revision;
-  image.pixels = work.input.bytes;
+  image.width = input.width;
+  image.height = input.height;
+  image.row_stride = input.stride;
+  image.revision = description.document_revision;
+  image.pixels = input.bytes;
   gpu::RenderInputs inputs;
   inputs.masks = std::move(batch.masks);
   inputs.preview = true;
-  inputs.preview_max_dimension = work.request.max_edge;
+  inputs.preview_max_dimension = max_edge;
 
   gpu::RenderResult rendered;
-  const bool ok = gpu::RenderExecutor{}.renderReference(work.description, image, inputs, rendered);
+  const bool ok = gpu::RenderExecutor{}.renderReference(description, image, inputs, rendered);
   result.diagnostics = std::move(batch.diagnostics);
   result.diagnostics.insert(result.diagnostics.end(), rendered.diagnostics.begin(), rendered.diagnostics.end());
   result.statuses = std::move(rendered.statuses);
@@ -168,8 +185,8 @@ PreviewResult RenderService::render_operations(const PreviewWork& work, PreviewR
   }
 
   const gpu::RgbaImage& out = rendered.image;
-  result.header.sequence = work.client_sequence;
-  result.header.document_revision = work.description.document_revision;
+  result.header.sequence = sequence;
+  result.header.document_revision = description.document_revision;
   result.header.width = out.width;
   result.header.height = out.height;
   result.header.stride = copy_stride(out.width);

@@ -35,7 +35,9 @@
 - [x] Step 5e：样片验证（第一轮）——`face-skin` 覆盖整张脸（映射“面部”），`others` 为眼镜等配饰；BiSeNet 需人脸裁剪。映射表已更新。缺深肤色、逆光、复杂背景样片，待补。
 - [x] Step 5b：真实推理适配器——第一批 MediaPipe（头发、身体皮肤、面部、全部衣服、全部人物），第二批 BiSeNet（面部皮肤、全部皮肤、眉毛、嘴唇、耳朵）。
 - [x] Step 6a：接入 renderd 预览服务——部位表移到 `kernel/mask`，语义蒙版编号 `semantic:<部位>`；`SemanticMaskProvider` 按内容缓存分割结果并交给参考渲染；不可用部位跳过并给原因；`renderd` 进程创建 `PortraitSegmenter`。见 `docs/superpowers/evidence/2026-11-06-segmentation-preview-integration.md`。
-- [ ] Step 6b：界面/内核写入语义蒙版编号（局部调色蒙版选择），renderd 请求循环与壳层预览请求；多蒙版并集语义、羽化/密度/加减。
+- [x] Step 6b-1：renderd 请求循环——ImageIO 解码（顺带解除预览帧超过 4000 不能缩放的限制）、套接字 + 共享内存、`pixcake_app_renderd --socket`。见 `docs/superpowers/evidence/2026-11-06-renderd-transport-and-decoder.md`。
+- [ ] Step 6b-2：壳层启动 renderd、发送预览源与请求、画布显示帧。
+- [ ] Step 6b-3：局部调色的蒙版选择在能力片段里写入 `semantic:` 编号（要改能力注册，等 Free 分组参数注册结束）；多蒙版并集语义、羽化/密度/加减。
 - [ ] Step 6c：exportd 全分辨率路径；取消、超时、内存上限测试。
 
 ## 当前阶段完成定义

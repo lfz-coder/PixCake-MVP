@@ -8,10 +8,11 @@
 
 namespace pixcake::logging {
 
-// 进程入口的命令行：--health 和 --log-dir <目录> 顺序不限。认不出的参数让 parsed 为空。
+// 进程入口的命令行：--health、--log-dir <目录>、--socket <路径> 顺序不限。认不出的参数让 parsed 为空。
 struct ProcessArguments {
   bool health = false;
   std::string log_directory;  // 没给时为 default_log_directory()
+  std::string socket_path;    // 预览通道（renderd）；没给时为空
 };
 std::optional<ProcessArguments> parse_process_arguments(int argc, char** argv);
 

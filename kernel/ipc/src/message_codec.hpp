@@ -20,6 +20,8 @@ class MessageWriter {
   void u64(std::uint32_t field, std::uint64_t value);
   // 空串或超过 limit、含 NUL 时返回 false；allow_empty 为真时允许空串。
   bool text(std::uint32_t field, const std::string& value, std::size_t limit, bool allow_empty = false);
+  // Raw bytes (may contain NUL); false when larger than limit.
+  bool blob(std::uint32_t field, const std::vector<std::uint8_t>& value, std::size_t limit);
   std::vector<std::uint8_t> bytes() const;
 
  private:
@@ -28,6 +30,10 @@ class MessageWriter {
   std::vector<std::pair<std::uint32_t, std::vector<std::uint8_t>>> fields_;
 };
 
+// Message kind from the envelope, without decoding the fields.  False when the
+// bytes do not start with a valid envelope.
+bool peek_kind(const std::vector<std::uint8_t>& bytes, std::uint32_t& kind, std::uint32_t& version);
+
 class MessageReader {
  public:
   ResultCode open(const std::vector<std::uint8_t>& bytes, std::uint32_t kind, std::uint32_t version,
@@ -35,6 +41,8 @@ class MessageReader {
   bool u32(std::uint32_t field, std::uint32_t& value) const;
   bool u64(std::uint32_t field, std::uint64_t& value) const;
   bool text(std::uint32_t field, std::string& value, std::size_t limit, bool allow_empty = false) const;
+  bool blob(std::uint32_t field, std::vector<std::uint8_t>& value, std::size_t limit) const;
+  bool has(std::uint32_t field) const { return fields_.count(field) != 0; }
 
  private:
   std::map<std::uint32_t, std::vector<std::uint8_t>> fields_;

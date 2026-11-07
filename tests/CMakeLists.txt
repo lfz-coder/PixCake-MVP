@@ -281,6 +281,11 @@ if(APPLE)
   target_include_directories(test_mac_source_access PRIVATE ${CMAKE_SOURCE_DIR}/tests)
   target_link_libraries(test_mac_source_access PRIVATE pixcake_platform_macos pixcake_warnings)
   add_test(NAME test_mac_source_access COMMAND test_mac_source_access)
+
+  add_executable(test_mac_image_decoder platform/test_mac_image_decoder.cpp)
+  target_link_libraries(test_mac_image_decoder PRIVATE pixcake_platform_macos_image pixcake_warnings
+    "-framework CoreFoundation" "-framework CoreGraphics" "-framework ImageIO")
+  add_test(NAME test_mac_image_decoder COMMAND test_mac_image_decoder)
 endif()
 
 add_executable(test_exportd_image_io apps/test_exportd_image_io.cpp)
@@ -320,6 +325,23 @@ add_executable(test_file_log_sink services/logging/test_file_log_sink.cpp)
 target_include_directories(test_file_log_sink PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 target_link_libraries(test_file_log_sink PRIVATE pixcake_logging pixcake_warnings)
 add_test(NAME test_file_log_sink COMMAND test_file_log_sink)
+
+add_executable(test_preview_channel services/preview_channel/test_preview_channel.cpp)
+target_link_libraries(test_preview_channel PRIVATE pixcake_preview_channel pixcake_warnings)
+add_test(NAME test_preview_channel COMMAND test_preview_channel)
+
+if(APPLE)
+  add_executable(test_preview_server apps/test_preview_server.cpp)
+  target_link_libraries(test_preview_server PRIVATE pixcake_renderd_service pixcake_preview_client pixcake_warnings)
+  add_test(NAME test_preview_server COMMAND test_preview_server)
+
+  add_executable(test_renderd_process apps/test_renderd_process.cpp)
+  target_link_libraries(test_renderd_process PRIVATE pixcake_preview_client pixcake_warnings)
+  target_compile_definitions(test_renderd_process PRIVATE PIXCAKE_RENDERD_EXE="$<TARGET_FILE:pixcake_app_renderd>")
+  add_dependencies(test_renderd_process pixcake_app_renderd)
+  add_test(NAME test_renderd_process COMMAND test_renderd_process)
+  set_tests_properties(test_renderd_process PROPERTIES TIMEOUT 60)
+endif()
 
 add_test(NAME test_renderd_health_writes_log
          COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:pixcake_app_renderd>

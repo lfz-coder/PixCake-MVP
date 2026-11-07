@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -30,7 +31,11 @@ struct DecodeLimits {
 struct DecodeRequest {
   std::string source_path;
   SourceFormat expected_format = SourceFormat::Unknown;
-  DecodeLimits limits;
+  DecodeLimits limits;  // checked on the stored image before decoding and on the output
+  // Longest output edge after orientation; 0 decodes at full resolution
+  // (export).  Preview passes its maximum edge (<= 4000) so the decoder
+  // downsamples instead of renderd resampling afterwards.
+  std::uint32_t max_edge = 0;
 };
 
 struct RgbaInput {
@@ -57,5 +62,9 @@ class ImageDecoder {
   virtual ResultCode decode(const DecodeRequest& request, DecodedImage& out,
                             std::string& diagnostic) = 0;
 };
+
+// The platform decoder: macOS ImageIO (evidence 2026-11-06-renderd-transport-
+// and-decoder.md).  Null where no system decoder is built.
+std::unique_ptr<ImageDecoder> make_system_image_decoder();
 
 }  // namespace pixcake::renderd

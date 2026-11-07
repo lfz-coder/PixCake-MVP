@@ -50,6 +50,12 @@ Task 0 结果：项目顶层只冻结 C++17 和现有 CMake 目标；`kernel/imp
 - 每个适配器阶段运行独立构建、目标测试、完整 CTest、架构依赖和能力归属门禁。
 - 使用 Jarvis/官方手册复核 UI 可见行为（预览限制、导出设置、失败/重试反馈）后，再把行为写入服务契约。
 
+## 进展（2026-11-06）
+
+- Task 0：用户裁决解码用 macOS ImageIO，不用 libvips；证据 `docs/superpowers/evidence/2026-11-06-renderd-transport-and-decoder.md` §2。
+- Task 2：用户裁决 Unix 套接字 + 共享内存；协议见同一证据 §3。
+- Task 3（renderd 部分）：ImageIO 解码、预览源/结果消息、传输层、`PreviewServer` 与 `--socket` 已实现并测试（同一证据 §4）。exportd 的全分辨率解码与编码、壳层启动 renderd 和显示帧仍未做。
+
 ## 启动条件
 
 Task 0 和 Task 2 的依赖/协议证据未完成前，不开始真实文件解码、编码或跨进程传输实现。这样可以避免根据手册截图猜测库、格式或 IPC 字节布局。

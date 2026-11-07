@@ -39,6 +39,12 @@ bool MessageWriter::text(std::uint32_t field, const std::string& value, std::siz
   return true;
 }
 
+bool MessageWriter::blob(std::uint32_t field, const std::vector<std::uint8_t>& value, std::size_t limit) {
+  if (value.size() > limit) return false;
+  fields_.emplace_back(field, value);
+  return true;
+}
+
 std::vector<std::uint8_t> MessageWriter::bytes() const {
   std::vector<FragmentRecord> records;
   std::vector<std::uint8_t> envelope = le(kind_, 4);
@@ -47,6 +53,16 @@ std::vector<std::uint8_t> MessageWriter::bytes() const {
   records.push_back({kEnvelopeRecord, std::move(envelope)});
   for (const auto& field : fields_) records.push_back({field.first, field.second});
   return encode_fragment_records(records);
+}
+
+bool peek_kind(const std::vector<std::uint8_t>& bytes, std::uint32_t& kind, std::uint32_t& version) {
+  std::vector<FragmentRecord> records;
+  if (!decode_fragment_records(bytes, records) || records.empty()) return false;
+  const auto& envelope = records.front();
+  if (envelope.type != kEnvelopeRecord || envelope.payload.size() != 8) return false;
+  kind = static_cast<std::uint32_t>(read_le(envelope.payload, 0, 4));
+  version = static_cast<std::uint32_t>(read_le(envelope.payload, 4, 4));
+  return true;
 }
 
 ResultCode MessageReader::open(const std::vector<std::uint8_t>& bytes, std::uint32_t kind, std::uint32_t version,
@@ -88,6 +104,17 @@ bool MessageReader::text(std::uint32_t field, std::string& value, std::size_t li
   if (found == fields_.end()) return false;
   value.assign(found->second.begin(), found->second.end());
   return acceptable_text(value, limit, allow_empty);
+}
+
+}  // namespace pixcake::ipc::detail
+
+namespace pixcake::ipc::detail {
+
+bool MessageReader::blob(std::uint32_t field, std::vector<std::uint8_t>& value, std::size_t limit) const {
+  const auto found = fields_.find(field);
+  if (found == fields_.end() || found->second.size() > limit) return false;
+  value = found->second;
+  return true;
 }
 
 }  // namespace pixcake::ipc::detail

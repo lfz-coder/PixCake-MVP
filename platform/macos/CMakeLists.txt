@@ -5,3 +5,11 @@ add_library(pixcake_platform_macos
 target_include_directories(pixcake_platform_macos PUBLIC include)
 target_link_libraries(pixcake_platform_macos PUBLIC pixcake_project pixcake_support pixcake_warnings
   PRIVATE "-framework CoreFoundation")
+
+# ImageIO decoding for renderd/exportd (evidence 2026-11-06-renderd-transport-and-decoder.md).
+add_library(pixcake_platform_macos_image
+  src/mac_image_decoder.cpp
+)
+target_include_directories(pixcake_platform_macos_image PUBLIC include)
+target_link_libraries(pixcake_platform_macos_image PUBLIC pixcake_support pixcake_warnings
+  PRIVATE "-framework CoreFoundation" "-framework CoreGraphics" "-framework ImageIO")

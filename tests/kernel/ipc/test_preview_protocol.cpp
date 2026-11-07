@@ -168,11 +168,136 @@ void test_c30_truncated_newer_or_extended_messages() {
          pixcake::ResultCode::CapabilityTooNew);
 }
 
+// 证据 2026-11-06-renderd-transport-and-decoder.md §3.2：预览源（8）与预览结果（9）。
+void test_source_and_result_messages() {
+  using namespace pixcake;
+  using namespace pixcake::ipc;
+  PreviewSourceMessage source;
+  source.image_id = "image-1";
+  source.editing_instance_id = "edit-1";
+  source.document_revision = 7;
+  source.source_path = "/Users/a/Pictures/a.jpg";
+  source.document = {0, 1, 2, 0, 255, 0};  // binary, NUL bytes included
+  std::vector<std::uint8_t> bytes;
+  EXPECT(encode_preview_source(source, bytes) == ResultCode::Ok);
+  PreviewMessageKind kind{};
+  EXPECT(peek_preview_message_kind(bytes, kind) == ResultCode::Ok && kind == PreviewMessageKind::Source);
+  PreviewSourceMessage decoded;
+  EXPECT(decode_preview_source(bytes, decoded) == ResultCode::Ok);
+  EXPECT(decoded.image_id == "image-1" && decoded.editing_instance_id == "edit-1");
+  EXPECT(decoded.document_revision == 7 && decoded.source_path == source.source_path);
+  EXPECT(decoded.document == source.document);
+  // A source message is not a request, and vice versa.
+  PreviewRequestMessage request;
+  EXPECT(decode_preview_request(bytes, request) == ResultCode::StateConflict);
+
+  auto bad = source;
+  bad.document.clear();
+  EXPECT(encode_preview_source(bad, bytes) == ResultCode::StateConflict && bytes.empty());
+  bad = source;
+  bad.source_path.clear();
+  EXPECT(encode_preview_source(bad, bytes) == ResultCode::StateConflict);
+  bad = source;
+  bad.document.assign(kMaxPreviewSourceBytes + 1, 1);
+  EXPECT(encode_preview_source(bad, bytes) == ResultCode::StateConflict);
+  bad = source;
+  bad.document.assign(1024 * 1024, 7);  // a large document fits
+  EXPECT(encode_preview_source(bad, bytes) == ResultCode::Ok);
+  EXPECT(decode_preview_source(bytes, decoded) == ResultCode::Ok && decoded.document.size() == 1024 * 1024);
+
+  PreviewResultMessage result;
+  result.client_sequence = 5;
+  result.code = ResultCode::Ok;
+  result.header.sequence = 5;
+  result.header.document_revision = 7;
+  result.header.width = 3;
+  result.header.height = 2;
+  result.header.stride = 12;
+  result.diagnostics = {{"color.local", "牙齿不可用（person.teeth）：模型没有该部位"}, {"", "frame note"}};
+  EXPECT(encode_preview_result(result, bytes) == ResultCode::Ok);
+  EXPECT(peek_preview_message_kind(bytes, kind) == ResultCode::Ok && kind == PreviewMessageKind::Result);
+  PreviewResultMessage back;
+  EXPECT(decode_preview_result(bytes, back) == ResultCode::Ok);
+  EXPECT(back.client_sequence == 5 && back.code == ResultCode::Ok && back.header.width == 3 &&
+         back.header.stride == 12 && back.header.document_revision == 7);
+  EXPECT(back.diagnostics.size() == 2 && back.diagnostics[0].capability_id == "color.local" &&
+         back.diagnostics[0].reason == result.diagnostics[0].reason && back.diagnostics[1].capability_id.empty());
+
+  // Failure: no header, a reason instead.
+  PreviewResultMessage failed;
+  failed.client_sequence = 6;
+  failed.code = ResultCode::ImageCorrupt;
+  failed.diagnostic = "ImageIO cannot read the image";
+  EXPECT(encode_preview_result(failed, bytes) == ResultCode::Ok);
+  EXPECT(decode_preview_result(bytes, back) == ResultCode::Ok && back.code == ResultCode::ImageCorrupt &&
+         back.diagnostic == failed.diagnostic && back.header.width == 0);
+
+  // Ok needs a valid header for the same sequence; reasons cannot carry line breaks.
+  auto wrong = result;
+  wrong.header.sequence = 4;
+  EXPECT(encode_preview_result(wrong, bytes) == ResultCode::StateConflict);
+  wrong = result;
+  wrong.header.width = 0;
+  EXPECT(encode_preview_result(wrong, bytes) == ResultCode::StateConflict);
+  wrong = result;
+  wrong.diagnostics = {{"color.local", "two\nlines"}};
+  EXPECT(encode_preview_result(wrong, bytes) == ResultCode::StateConflict);
+  wrong = result;
+  wrong.client_sequence = 0;
+  EXPECT(encode_preview_result(wrong, bytes) == ResultCode::StateConflict);
+
+  // Garbage is not a message.
+  EXPECT(peek_preview_message_kind({1, 2, 3}, kind) == ResultCode::StateConflict);
+}
+
+// 缩略图请求（10）与结果（11）：排队、每个都回；结果与预览结果同字段但种类不同，不能互相解码。
+void test_thumbnail_messages() {
+  using namespace pixcake;
+  using namespace pixcake::ipc;
+  ThumbnailRequestMessage request;
+  request.request_id = 3;
+  request.image_id = "photo-3";
+  request.source_path = "/Users/a/b.jpg";
+  request.max_edge = 320;
+  std::vector<std::uint8_t> bytes;
+  EXPECT(encode_thumbnail_request(request, bytes) == ResultCode::Ok);  // no document: the original
+  PreviewMessageKind kind{};
+  EXPECT(peek_preview_message_kind(bytes, kind) == ResultCode::Ok && kind == PreviewMessageKind::ThumbnailRequest);
+  ThumbnailRequestMessage back;
+  EXPECT(decode_thumbnail_request(bytes, back) == ResultCode::Ok && back.request_id == 3 && back.max_edge == 320 &&
+         back.document.empty() && back.source_path == request.source_path);
+  request.document = {0, 7, 0};
+  EXPECT(encode_thumbnail_request(request, bytes) == ResultCode::Ok);
+  EXPECT(decode_thumbnail_request(bytes, back) == ResultCode::Ok && back.document == request.document);
+  auto bad = request;
+  bad.max_edge = kMaxThumbnailEdge + 1;
+  EXPECT(encode_thumbnail_request(bad, bytes) == ResultCode::StateConflict);
+  bad = request;
+  bad.request_id = 0;
+  EXPECT(encode_thumbnail_request(bad, bytes) == ResultCode::StateConflict);
+
+  PreviewResultMessage result;
+  result.client_sequence = 3;
+  result.header.sequence = 3;
+  result.header.width = 4;
+  result.header.height = 2;
+  result.header.stride = 16;
+  EXPECT(encode_thumbnail_result(result, bytes) == ResultCode::Ok);
+  EXPECT(peek_preview_message_kind(bytes, kind) == ResultCode::Ok && kind == PreviewMessageKind::ThumbnailResult);
+  PreviewResultMessage decoded;
+  EXPECT(decode_thumbnail_result(bytes, decoded) == ResultCode::Ok && decoded.header.width == 4);
+  EXPECT(decode_preview_result(bytes, decoded) == ResultCode::StateConflict);  // a thumbnail is not a preview frame
+  EXPECT(encode_preview_result(result, bytes) == ResultCode::Ok);
+  EXPECT(decode_thumbnail_result(bytes, decoded) == ResultCode::StateConflict);
+}
+
 int main() {
   test_c30_preview_messages_use_the_document_record_codec();
   test_c30_process_messages_round_trip();
   test_c30_truncated_newer_or_extended_messages();
   test_request_round_trip_and_bounds();
   test_b48_cancel_and_frame_header_reject_bad_values();
+  test_source_and_result_messages();
+  test_thumbnail_messages();
   return g_failures == 0 ? 0 : 1;
 }

@@ -56,12 +56,19 @@ class RenderService {
   // operations run through the deterministic reference renderer; renderd has
   // no GL context (architecture rule 5b).
   PreviewResult render_latest();
+  // Renders one frame now, outside the latest-request slot (thumbnails).  The
+  // caller has checked identity; input larger than max_edge is refused.
+  PreviewResult render_now(std::uint64_t sequence, const std::string& image_id,
+                           const render::RenderDescription& description, const RgbaInput& input,
+                           std::uint32_t max_edge);
   bool has_pending() const;
 
  private:
   static ResultCode validate_input(const RgbaInput&, std::string& diagnostic);
   static bool has_enabled_operations(const render::RenderDescription&);
-  PreviewResult render_operations(const PreviewWork& work, PreviewResult result);
+  PreviewResult render_operations(std::uint64_t sequence, const std::string& image_id,
+                                  const render::RenderDescription& description, const RgbaInput& input,
+                                  std::uint32_t max_edge, PreviewResult result);
 
   mutable std::mutex mutex_;
   std::optional<PreviewWork> pending_;
