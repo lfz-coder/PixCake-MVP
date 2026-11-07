@@ -20,6 +20,8 @@ std::uint32_t copy_stride(std::uint32_t width) {
 
 }  // namespace
 
+RenderService::RenderService(std::shared_ptr<SemanticSegmenter> segmenter) : masks_(std::move(segmenter)) {}
+
 ResultCode RenderService::validate_input(const RgbaInput& input, std::string& diagnostic) {
   if (input.width == 0 || input.height == 0) {
     diagnostic = "preview input dimensions are empty";
@@ -102,7 +104,10 @@ PreviewResult RenderService::render_latest() {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!pending_.has_value()) {
-      return {ResultCode::StateConflict, 0, {}, {}, "no preview request is pending"};
+      PreviewResult none;
+      none.code = ResultCode::StateConflict;
+      none.diagnostic = "no preview request is pending";
+      return none;
     }
     work = std::move(*pending_);
     pending_.reset();
@@ -110,16 +115,12 @@ PreviewResult RenderService::render_latest() {
 
   PreviewResult result;
   result.client_sequence = work.client_sequence;
-  if (has_enabled_operations(work.description)) {
-    result.code = ResultCode::UnsupportedFormat;
-    result.diagnostic = "no pixel pass is registered for the render description";
-    return result;
-  }
   if (work.input.width > work.request.max_edge || work.input.height > work.request.max_edge) {
     result.code = ResultCode::UnsupportedFormat;
     result.diagnostic = "preview resampling backend is not registered";
     return result;
   }
+  if (has_enabled_operations(work.description)) return render_operations(work, std::move(result));
 
   result.header.sequence = work.client_sequence;
   result.header.document_revision = work.description.document_revision;
@@ -132,6 +133,52 @@ PreviewResult RenderService::render_latest() {
     const auto* source = work.input.bytes.data() + static_cast<std::size_t>(row) * work.input.stride;
     auto* destination = result.rgba.data() + static_cast<std::size_t>(row) * result.header.stride;
     std::copy(source, source + result.header.stride, destination);
+  }
+  result.code = ResultCode::Ok;
+  return result;
+}
+
+PreviewResult RenderService::render_operations(const PreviewWork& work, PreviewResult result) {
+  // Semantic masks are computed on the preview frame itself (requirement 10.4:
+  // preview uses the <= 4000 px image, export the full resolution, same rules).
+  SemanticMaskBatch batch;
+  masks_.provide(work.request.image_id, work.input, work.description, batch);
+
+  gpu::RgbaImage image;
+  image.width = work.input.width;
+  image.height = work.input.height;
+  image.row_stride = work.input.stride;
+  image.revision = work.description.document_revision;
+  image.pixels = work.input.bytes;
+  gpu::RenderInputs inputs;
+  inputs.masks = std::move(batch.masks);
+  inputs.preview = true;
+  inputs.preview_max_dimension = work.request.max_edge;
+
+  gpu::RenderResult rendered;
+  const bool ok = gpu::RenderExecutor{}.renderReference(work.description, image, inputs, rendered);
+  result.diagnostics = std::move(batch.diagnostics);
+  result.diagnostics.insert(result.diagnostics.end(), rendered.diagnostics.begin(), rendered.diagnostics.end());
+  result.statuses = std::move(rendered.statuses);
+  if (!ok) {
+    result.code = ResultCode::StateConflict;
+    result.diagnostic = result.diagnostics.empty() ? "reference renderer rejected the frame"
+                                                   : result.diagnostics.back().reason;
+    return result;
+  }
+
+  const gpu::RgbaImage& out = rendered.image;
+  result.header.sequence = work.client_sequence;
+  result.header.document_revision = work.description.document_revision;
+  result.header.width = out.width;
+  result.header.height = out.height;
+  result.header.stride = copy_stride(out.width);
+  result.header.format = ipc::PixelFormat::Rgba8;
+  result.rgba.resize(static_cast<std::size_t>(result.header.stride) * result.header.height);
+  const std::size_t source_stride = out.row_stride == 0 ? copy_stride(out.width) : out.row_stride;
+  for (std::uint32_t row = 0; row < out.height; ++row) {
+    const auto* source = out.pixels.data() + static_cast<std::size_t>(row) * source_stride;
+    std::copy(source, source + result.header.stride, result.rgba.data() + static_cast<std::size_t>(row) * result.header.stride);
   }
   result.code = ResultCode::Ok;
   return result;

@@ -45,8 +45,22 @@ int main() {
   effect.description.operations.push_back({"color.global", "global", "pixcake.color.global", 1, {}, {},
                                            "normal", true, {}});
   assert(service.submit(std::move(effect), diagnostic) == pixcake::ResultCode::Ok);
-  const auto unsupported = service.render_latest();
-  assert(unsupported.code == pixcake::ResultCode::UnsupportedFormat);
+  // Enabled operations run through the reference renderer; every operation's
+  // outcome is reported.  No values: the frame is unchanged.
+  const auto rendered = service.render_latest();
+  assert(rendered.code == pixcake::ResultCode::Ok);
+  assert(rendered.client_sequence == 3);
+  assert(rendered.rgba.size() == 8 && rendered.rgba.front() == 1);
+  assert(rendered.statuses.size() == 1 && rendered.statuses.front().capability_id == "color.global");
+
+  auto unregistered = work(31, 1);
+  unregistered.description.operations.push_back({"portrait.skin", "portrait", "pixcake.portrait.skin", 1, {}, {},
+                                                 "normal", true, {}});
+  assert(service.submit(std::move(unregistered), diagnostic) == pixcake::ResultCode::Ok);
+  const auto skipped = service.render_latest();
+  assert(skipped.code == pixcake::ResultCode::Ok);
+  assert(skipped.statuses.front().status == pixcake::gpu::PassStatus::Unregistered);
+  assert(!skipped.diagnostics.empty());
 
   auto too_large = work(4, 1);
   too_large.input.width = 4001;

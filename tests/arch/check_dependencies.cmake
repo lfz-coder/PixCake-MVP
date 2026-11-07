@@ -167,7 +167,9 @@ foreach(path ${kernel_cmake})
   # 图像库链接目标同样禁止（依赖规范第 13、32 行：图像 I/O 放在 renderd/exportd 或平台适配器）。
   foreach(token "Qt5::" "Qt6::" "OpenGL" "GL/" "opencv" "cuda" "torch" "onnxruntime"
                 "PNG::" "JPEG::" "TIFF::" "WebP::" "libjpeg" "libpng" "libtiff" "libwebp" "turbojpeg"
-                "vips" "libraw" "OpenImageIO" "libheif" "Exiv2")
+                "vips" "libraw" "OpenImageIO" "libheif" "Exiv2"
+                # 模型运行时只在 apps/renderd 的推理适配层（语义分割计划 Step 5d+）。
+                "tensorflow-lite" "tflite" "litert" "XNNPACK" "xnnpack")
     string(FIND "${text}" "${token}" found)
     if(NOT found EQUAL -1)
       message(FATAL_ERROR "rule 15: ${path} contains forbidden kernel dependency ${token}")
@@ -179,7 +181,8 @@ endforeach()
 #     kernel/import 的文件头探测是记录在案的手写例外，只读签名和尺寸，不引入任何图像库。
 scan("${SOURCE_DIR}/kernel" "rule 16"
      "<png.h>" "\"png.h\"" "<jpeglib.h>" "\"jpeglib.h\"" "<turbojpeg.h>" "<tiffio.h>" "<tiff.h>"
-     "<webp/" "<vips/" "<libraw/" "<OpenImageIO/" "<libheif/" "<exiv2/")
+     "<webp/" "<vips/" "<libraw/" "<OpenImageIO/" "<libheif/" "<exiv2/"
+     "\"tflite/" "<tflite/" "\"xnnpack.h\"" "<xnnpack.h>" "onnxruntime_cxx_api.h")
 
 # 17. 用户发起的修改都从命令入口进入（架构 6.2、第七轮条件 2）。壳层和界面不直接调用文档提交、
 #     预设应用、粘贴、同步或应用至精修，只调用 CommandGate。

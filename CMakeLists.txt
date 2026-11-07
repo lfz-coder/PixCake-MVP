@@ -48,6 +48,14 @@ add_subdirectory(gpu/render)
 add_subdirectory(gpu/backend/qt)
 add_subdirectory(gpu/backend/native)
 add_subdirectory(gpu/facade)
+# On-device inference (LiteRT + ONNX Runtime + locked models).  Off by default:
+# the first configure downloads ~350 MB of locked sources, packages and models,
+# and the build adds a few minutes.  Release builds turn it on.  macOS arm64
+# only.  See cmake/PixcakeInference.cmake.
+option(PIXCAKE_ENABLE_INFERENCE "Build the on-device inference runtimes and fetch the locked models" OFF)
+if(PIXCAKE_ENABLE_INFERENCE)
+  include(cmake/PixcakeInference.cmake)
+endif()
 add_subdirectory(apps/renderd)
 add_subdirectory(apps/exportd)
 add_subdirectory(apps/generated)

@@ -91,6 +91,10 @@ target_link_libraries(test_capability_modules PRIVATE pixcake_capability_modules
 target_compile_definitions(test_capability_modules PRIVATE PIXCAKE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 add_test(NAME test_capability_modules COMMAND test_capability_modules)
 
+add_executable(test_semantic_parts kernel/mask/test_semantic_parts.cpp)
+target_link_libraries(test_semantic_parts PRIVATE pixcake_mask pixcake_warnings)
+add_test(NAME test_semantic_parts COMMAND test_semantic_parts)
+
 add_executable(test_render_description kernel/render/test_render_description.cpp)
 target_include_directories(test_render_description PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 target_link_libraries(test_render_description PRIVATE pixcake_render pixcake_warnings)
@@ -221,6 +225,42 @@ add_test(NAME test_renderd COMMAND test_renderd)
 add_executable(test_renderd_image_io apps/test_renderd_image_io.cpp)
 target_link_libraries(test_renderd_image_io PRIVATE pixcake_renderd_service pixcake_warnings)
 add_test(NAME test_renderd_image_io COMMAND test_renderd_image_io)
+
+add_executable(test_segmentation_contract apps/test_segmentation_contract.cpp)
+target_link_libraries(test_segmentation_contract PRIVATE pixcake_renderd_service pixcake_warnings)
+add_test(NAME test_segmentation_contract COMMAND test_segmentation_contract)
+
+add_executable(test_semantic_label_adapter apps/test_semantic_label_adapter.cpp)
+target_link_libraries(test_semantic_label_adapter PRIVATE pixcake_renderd_service pixcake_warnings)
+add_test(NAME test_semantic_label_adapter COMMAND test_semantic_label_adapter)
+
+add_executable(test_semantic_mask_provider apps/test_semantic_mask_provider.cpp)
+target_link_libraries(test_semantic_mask_provider PRIVATE pixcake_renderd_service pixcake_warnings)
+add_test(NAME test_semantic_mask_provider COMMAND test_semantic_mask_provider)
+
+add_executable(test_face_detection apps/test_face_detection.cpp)
+target_link_libraries(test_face_detection PRIVATE pixcake_renderd_service pixcake_warnings)
+add_test(NAME test_face_detection COMMAND test_face_detection)
+
+add_executable(test_segmentation_models apps/test_segmentation_models.cpp)
+target_link_libraries(test_segmentation_models PRIVATE pixcake_renderd_service pixcake_warnings)
+add_test(NAME test_segmentation_models COMMAND test_segmentation_models)
+
+if(PIXCAKE_ENABLE_INFERENCE AND APPLE)
+  add_executable(test_litert_inference apps/test_litert_inference.cpp)
+  target_link_libraries(test_litert_inference PRIVATE pixcake_renderd_inference pixcake_warnings
+    "-framework CoreFoundation" "-framework CoreGraphics" "-framework ImageIO")
+  target_compile_definitions(test_litert_inference PRIVATE
+    PIXCAKE_MODEL_DIR="${PIXCAKE_MODEL_DIR}" PIXCAKE_TESTDATA_DIR="${PIXCAKE_TESTDATA_DIR}")
+  add_test(NAME test_litert_inference COMMAND test_litert_inference)
+
+  add_executable(test_portrait_inference apps/test_portrait_inference.cpp)
+  target_link_libraries(test_portrait_inference PRIVATE pixcake_renderd_inference pixcake_warnings
+    "-framework CoreFoundation" "-framework CoreGraphics" "-framework ImageIO")
+  target_compile_definitions(test_portrait_inference PRIVATE
+    PIXCAKE_MODEL_DIR="${PIXCAKE_MODEL_DIR}" PIXCAKE_TESTDATA_DIR="${PIXCAKE_TESTDATA_DIR}")
+  add_test(NAME test_portrait_inference COMMAND test_portrait_inference)
+endif()
 
 add_executable(test_exportd apps/test_exportd.cpp)
 target_link_libraries(test_exportd PRIVATE pixcake_exportd_service pixcake_warnings)
