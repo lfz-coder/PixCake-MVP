@@ -34,6 +34,8 @@ struct PreviewResult {
   // reasons the shell shows for skipped work, e.g. an unavailable semantic part.
   std::vector<gpu::PassStatusRecord> statuses;
   std::vector<gpu::ExecutionDiagnostic> diagnostics;
+  // True when the shaders drew the frame; false for the reference renderer.
+  bool drawn_on_gpu = false;
 };
 
 // Process-side owner of preview work. It deliberately accepts already decoded
@@ -53,8 +55,10 @@ class RenderService {
   // 取消消息的字段只在 kernel/ipc 定义一次（质量清单 Q-25）。
   ResultCode cancel(const ipc::PreviewCancelMessage& message, std::string& diagnostic);
   // Renders on the calling thread (one render thread per service).  Enabled
-  // operations run through the deterministic reference renderer; renderd has
-  // no GL context (architecture rule 5b).
+  // operations draw on the GPU through an offscreen native context when one
+  // can be created (architecture 9.3: the preview context lives in this
+  // process), else -- and for work the shaders do not cover -- through the
+  // reference renderer.  The two agree within one 8-bit step.
   PreviewResult render_latest();
   // Renders one frame now, outside the latest-request slot (thumbnails).  The
   // caller has checked identity; input larger than max_edge is refused.
@@ -70,9 +74,17 @@ class RenderService {
                                   const render::RenderDescription& description, const RgbaInput& input,
                                   std::uint32_t max_edge, PreviewResult result);
 
+  // The offscreen GPU context, created on first use; false once it could not
+  // be created or a GPU pass failed (the reference draws from then on).
+  bool gpu_ready();
+
   mutable std::mutex mutex_;
   std::optional<PreviewWork> pending_;
   SemanticMaskProvider masks_;  // render thread only
+  gl::Context gpu_context_;     // render thread only
+  gpu::RenderExecutor gpu_executor_;  // keeps the context's programs and textures
+  bool gpu_tried_ = false;
+  bool gpu_ok_ = false;
 };
 
 }  // namespace pixcake::renderd

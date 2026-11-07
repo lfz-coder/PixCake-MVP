@@ -1,6 +1,8 @@
-// Time of one reference frame at the preview's maximum size (4000 x 3000) for
-// each colour group, so slider drags can be judged against P-15.  Not a test:
-// run the Release build's binary by hand.  Prints milliseconds per frame.
+// Time of one frame at the preview's maximum size (4000 x 3000) for each
+// colour group, on the reference renderer and on the GPU path renderd uses
+// (native offscreen context), so slider drags can be judged against P-15.
+// Not a test: run the Release build's binary by hand.  Milliseconds per frame.
+#include <pixcake/gl/native_backend.hpp>
 #include <pixcake/gpu/render_executor.hpp>
 
 #include <chrono>
@@ -8,6 +10,7 @@
 #include <cstdio>
 #include <initializer_list>
 #include <string>
+#include <utility>
 
 namespace {
 
@@ -28,12 +31,12 @@ RenderDescription op(const char* capability, const char* stage, const char* prog
   return description;
 }
 
-double time_ms(const RenderDescription& description, const pixcake::gpu::RgbaImage& input) {
-  pixcake::gpu::RenderResult result;
+template <typename Render>
+double best_ms(const Render& render) {
   double best = 1e30;
   for (int run = 0; run < 3; ++run) {
     const auto start = std::chrono::steady_clock::now();
-    pixcake::gpu::RenderExecutor{}.renderReference(description, input, pixcake::gpu::RenderInputs{}, result);
+    if (!render()) return -1;
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     if (ms < best) best = ms;
   }
@@ -66,6 +69,25 @@ int main() {
                                 value("selective_red_cyan", 40), value("grading_global_saturation", 40)})},
       {"grain", op("detail", "detail.grain", "pixcake.detail", {value("grain_amount", 60)})},
   };
-  for (const auto& item : cases) std::printf("%-20s %8.1f ms\n", item.name, time_ms(item.description, input));
+  auto context = pixcake::gl::native::create_context();
+  const bool gpu = pixcake::gl::native::available() && context.valid() && context.makeCurrent();
+  if (gpu) context.doneCurrent();
+  pixcake::gpu::RenderExecutor executor;  // one per context, as renderd keeps it
+  std::printf("%-20s %10s %10s\n", "", "reference", gpu ? "gpu" : "gpu (none)");
+  for (const auto& item : cases) {
+    pixcake::gpu::RenderResult result;
+    const double reference = best_ms([&] {
+      return pixcake::gpu::RenderExecutor{}.renderReference(item.description, input, pixcake::gpu::RenderInputs{}, result);
+    });
+    double on_gpu = -1;
+    if (gpu) {
+      on_gpu = best_ms([&] {
+        std::string error;
+        return executor.execute(context, item.description, input, pixcake::gpu::RenderInputs{}, result, error) &&
+               !result.reference_fallback;
+      });
+    }
+    std::printf("%-20s %7.1f ms %7.1f ms\n", item.name, reference, on_gpu);
+  }
   return 0;
 }

@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <cstddef>
 #include <string>
 #include <string_view>
@@ -67,6 +68,10 @@ class PassRegistry {
   static bool gpuSupported(const pixcake::render::RenderOperation& operation);
 };
 
+// Compiled programs and frame textures of the GPU path, kept between frames
+// for one context (render_executor.cpp).
+struct GpuCache;
+
 class RenderExecutor {
  public:
   using Pass = std::function<bool(gl::Context&, std::string&)>;
@@ -78,7 +83,13 @@ class RenderExecutor {
   bool execute(gl::Context&, const std::vector<Pass>&, std::string&) const;
   bool renderReference(const pixcake::render::RenderDescription&, const RgbaImage&,
                        const RenderInputs&, RenderResult&) const;
+  // Draws on the GPU when every operation that draws has a shader, else falls
+  // back to renderReference (result.reference_fallback).  Keep one executor
+  // per context to reuse its programs and textures between frames.
   bool execute(gl::Context&, const pixcake::render::RenderDescription&, const RgbaImage&,
                const RenderInputs&, RenderResult&, std::string&) const;
+
+ private:
+  mutable std::shared_ptr<GpuCache> gpu_cache_;
 };
 }  // namespace pixcake::gpu

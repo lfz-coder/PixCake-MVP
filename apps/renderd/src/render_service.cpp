@@ -1,5 +1,7 @@
 #include "pixcake/renderd/render_service.hpp"
 
+#include "pixcake/gl/native_backend.hpp"
+
 #include <algorithm>
 #include <limits>
 
@@ -173,7 +175,23 @@ PreviewResult RenderService::render_operations(std::uint64_t sequence, const std
   inputs.preview_max_dimension = max_edge;
 
   gpu::RenderResult rendered;
-  const bool ok = gpu::RenderExecutor{}.renderReference(description, image, inputs, rendered);
+  bool ok = false;
+  bool drawn = false;
+  std::string gpu_failure;
+  if (gpu_ready()) {
+    std::string gpu_error;
+    ok = gpu_executor_.execute(gpu_context_, description, image, inputs, rendered, gpu_error);
+    // A reference fallback that fails rejected the frame itself; only a
+    // failed GPU pass retires the context.
+    drawn = ok || rendered.reference_fallback;
+    if (!drawn) {
+      gpu_ok_ = false;
+      gpu_failure = "GPU 绘制失败，改用 reference：" + gpu_error;
+    }
+  }
+  result.drawn_on_gpu = drawn && ok && !rendered.reference_fallback;
+  if (!drawn) ok = gpu::RenderExecutor{}.renderReference(description, image, inputs, rendered);
+  if (!gpu_failure.empty()) rendered.diagnostics.push_back({"", gpu_failure, false});
   result.diagnostics = std::move(batch.diagnostics);
   result.diagnostics.insert(result.diagnostics.end(), rendered.diagnostics.begin(), rendered.diagnostics.end());
   result.statuses = std::move(rendered.statuses);
@@ -199,6 +217,18 @@ PreviewResult RenderService::render_operations(std::uint64_t sequence, const std
   }
   result.code = ResultCode::Ok;
   return result;
+}
+
+bool RenderService::gpu_ready() {
+  if (!gpu_tried_) {
+    gpu_tried_ = true;
+    if (gl::native::available()) {
+      gpu_context_ = gl::native::create_context();
+      gpu_ok_ = gpu_context_.valid() && gpu_context_.makeCurrent();
+      if (gpu_ok_) gpu_context_.doneCurrent();
+    }
+  }
+  return gpu_ok_;
 }
 
 bool RenderService::has_pending() const {

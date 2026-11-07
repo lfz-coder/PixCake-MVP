@@ -1,10 +1,12 @@
 #include "pixcake/gpu/render_executor.hpp"
 
 #include "pixcake/capability/capability_registry.hpp"
+#include "shader_sources.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <map>
 #include <set>
 #include <string>
@@ -268,6 +270,7 @@ struct ColorGroups {
   float selective_ink[9][4]{};  // target x (cyan, magenta, yellow, black), -1..1
   bool grading = false;
   float zone_hue[4]{}, zone_saturation[4]{}, zone_lightness[4]{}, blending = 0.5F;
+  float zone_tint[4][3]{};  // the zone hue's colour minus its own luminance
   bool editor_offsets = false;
 };
 
@@ -310,6 +313,11 @@ ColorGroups color_groups(const Values& v) {
     g.zone_saturation[z] = param(v, cap, "grading_" + zone + "_saturation") / 100.0F;
     g.zone_lightness[z] = param(v, cap, "grading_" + zone + "_luminance") / 100.0F;
     g.grading = g.grading || g.zone_saturation[z] != 0.0F || g.zone_lightness[z] != 0.0F;
+    const Pixel hue = from_hsl({g.zone_hue[z], 1.0F, 0.5F}, 1.0F);
+    const float hue_l = luminance(hue);
+    g.zone_tint[z][0] = hue.r - hue_l;
+    g.zone_tint[z][1] = hue.g - hue_l;
+    g.zone_tint[z][2] = hue.b - hue_l;
   }
   g.blending = param(v, cap, "grading_blending") / 100.0F;
   for (const char* item : {"hue", "saturation", "luminance"}) {
@@ -418,13 +426,11 @@ Pixel apply_grading(Pixel p, const ColorGroups& g) {
   for (int z = 0; z < 4; ++z) {
     const float w = z == 3 ? 1.0F : std::max(0.0F, 1.0F - std::abs(l - centre[z]) / radius);
     if (w <= 0.0F || (g.zone_saturation[z] == 0.0F && g.zone_lightness[z] == 0.0F)) continue;
-    const Pixel hue = from_hsl({g.zone_hue[z], 1.0F, 0.5F}, 1.0F);
-    const float hue_l = luminance(hue);
     const float tint = w * g.zone_saturation[z] * 0.25F;
     const float lift = w * g.zone_lightness[z] * 0.25F;
-    p.r += tint * (hue.r - hue_l) + lift;
-    p.g += tint * (hue.g - hue_l) + lift;
-    p.b += tint * (hue.b - hue_l) + lift;
+    p.r += tint * g.zone_tint[z][0] + lift;
+    p.g += tint * g.zone_tint[z][1] + lift;
+    p.b += tint * g.zone_tint[z][2] + lift;
   }
   return p;
 }
@@ -450,7 +456,7 @@ Pixel apply_color_groups(Pixel p, const ColorGroups& g) {
 struct Grain {
   bool on = false;
   float amount = 0, shadows = 0, midtones = 0, highlights = 0, size = 0, roughness = 0, colour = 0;
-  float cell = 1;
+  float inv_cell = 1;  // 1 / lattice cell; a multiply rounds the same on CPU and GPU, a divide may not
 };
 Grain grain_of(const Values& v, std::uint32_t width, std::uint32_t height) {
   const char* cap = "detail";
@@ -463,7 +469,7 @@ Grain grain_of(const Values& v, std::uint32_t width, std::uint32_t height) {
   g.size = param(v, cap, "grain_size") / 100.0F;
   g.roughness = param(v, cap, "grain_roughness") / 100.0F;
   g.colour = param(v, cap, "grain_color") / 100.0F;
-  g.cell = std::max(1.0F, static_cast<float>(std::min(width, height)) * (0.0008F + 0.006F * g.size));
+  g.inv_cell = 1.0F / std::max(1.0F, static_cast<float>(std::min(width, height)) * (0.0008F + 0.006F * g.size));
   return g;
 }
 float hash01(std::uint32_t x, std::uint32_t y, std::uint32_t channel) {
@@ -495,7 +501,7 @@ Pixel apply_grain(Pixel p, std::uint32_t x, std::uint32_t y, const Grain& g) {
   const float strength = g.amount * zone * 0.5F;
   if (strength <= 0.0F) return p;
   const auto noise = [&](std::uint32_t channel) {
-    const float smooth = value_noise(static_cast<float>(x) / g.cell, static_cast<float>(y) / g.cell, channel);
+    const float smooth = value_noise(static_cast<float>(x) * g.inv_cell, static_cast<float>(y) * g.inv_cell, channel);
     return smooth + (hash01(x, y, channel + 8U) - smooth) * g.roughness - 0.5F;
   };
   const float mono = noise(0);
@@ -583,42 +589,63 @@ Pixel lut_sample(const Lut3DView& lut, Pixel input) {
 
 namespace {
 
-// Channels with a shader binding and a recorded GPU readback comparison.
+bool has_prefix(std::string_view text, std::string_view prefix) {
+  return text.size() >= prefix.size() && text.compare(0, prefix.size(), prefix) == 0;
+}
+
+// Channels the GPU shaders draw, each with a readback comparison against the
+// reference (test_gpu_backend_C57_C60, test_gpu_shader_path).  A channel
+// outside this list falls back to the reference.  The colour editor's offsets
+// are drawn by neither path (no target colour yet), so they do not block it.
+bool gpu_channel(std::string_view capability, std::string_view channel) {
+  if (capability == "detail") return has_prefix(channel, "grain_");
+  static const std::set<std::string_view> tone = {
+      "temperature", "tint",   "exposure", "contrast", "brightness", "highlights", "shadows",  "whites",
+      "blacks",      "clarity", "texture", "dehaze",   "vibrance",   "saturation", "amount",   "profile",
+      "selective_mode", "color_editor_hue_shift", "color_editor_saturation_shift",
+      "color_editor_luminance_shift"};
+  if (tone.count(channel) != 0) return true;
+  for (const char* prefix : {"levels_rgb_", "hsl_", "bw_mix_", "selective_", "grading_"}) {
+    if (has_prefix(channel, prefix)) return true;
+  }
+  return false;
+}
+
 bool gpu_formula_supported(const pixcake::render::RenderOperation& operation) {
-  if (!operation.enabled || operation.capability_id != "color.global" ||
-      operation.blend_mode != "normal" || !operation.mask_ids.empty()) return false;
-  static const std::set<std::string_view> channels = {"temperature", "tint", "exposure", "contrast"};
+  const bool global = operation.capability_id == "color.global" && operation.program == "pixcake.color.global";
+  const bool detail = operation.capability_id == "detail" && operation.program == "pixcake.detail";
+  if (!operation.enabled || !(global || detail) || operation.blend_mode != "normal" || !operation.mask_ids.empty()) {
+    return false;
+  }
   for (const auto& value : operation.values) {
-    if (channels.find(value.channel) == channels.end() && std::abs(value.numeric_value) > 1e-9) return false;
+    if (!gpu_channel(operation.capability_id, value.channel) && std::abs(value.numeric_value) > 1e-9) return false;
   }
   return true;
 }
 
-}  // namespace
+// One operation that draws, with everything the per-pixel loop needs read
+// once: the reference loop and the shaders both start from this.
+struct PreparedOperation {
+  const pixcake::render::RenderOperation* operation = nullptr;
+  bool has_lut = false;
+  Lut3DView lut;
+  float lut_amount = 1.0F;
+  std::vector<const RenderMask*> masks;
+  bool is_color = false, is_tone = false, is_detail = false, has_groups = false;
+  ColorGroups groups;
+  Grain grain;
+  ToneColor tone_color;
+  Blend blend = Blend::Normal;
+};
 
-PassStatus PassRegistry::classify(const pixcake::render::RenderOperation& operation) {
-  if (!operation.enabled) return PassStatus::Disabled;
-  if (operation.program.find("filter") != std::string::npos || operation.program.find("profile") != std::string::npos) return PassStatus::MissingResource;
-  if (operation.program == "pixcake.color.global") return gpuSupported(operation) ? PassStatus::Implemented : PassStatus::ReferenceOnly;
-  if (operation.program == "pixcake.color.local" || operation.program == "pixcake.color.post" || operation.program == "pixcake.color.match" || operation.program == "pixcake.color.style") return PassStatus::ReferenceOnly;
-  // detail only registers grain parameters so far (reference formula, no shader).
-  if (operation.program == "pixcake.detail") return PassStatus::ReferenceOnly;
-  return PassStatus::Unregistered;
-}
-
-bool PassRegistry::gpuSupported(const pixcake::render::RenderOperation& operation) {
-  // 2026-11-05: temperature, tint, exposure and contrast all passed the
-  // reference/readback comparison on native CGL and the Qt desktop platform
-  // (test_gpu_backend_native, test_gpu_shader_path); dropping any one channel
-  // from the shader makes both tests fail.  The formula gate is therefore also
-  // the evidence gate.  A new channel must add its own readback evidence first.
-  return gpu_formula_supported(operation);
-}
-
-bool RenderExecutor::renderReference(const pixcake::render::RenderDescription& description,
-                                     const RgbaImage& input, const RenderInputs& inputs,
-                                     RenderResult& result) const {
+// Checks the frame, records every operation's status and diagnostics in
+// result (result.image becomes a copy of the input), and lists the
+// operations that draw.  False when the frame itself is rejected.
+bool prepare(const pixcake::render::RenderDescription& description, const RgbaImage& input,
+             const RenderInputs& inputs, RenderResult& result, std::vector<PreparedOperation>& draws,
+             bool copy_pixels = true) {
   result = {};
+  draws.clear();
   const auto stride = input.row_stride == 0 ? input.width * 4 : input.row_stride;
   if (input.width == 0 || input.height == 0 || stride < input.width * 4 ||
       input.pixels.size() < static_cast<std::size_t>(stride) * input.height) {
@@ -630,7 +657,12 @@ bool RenderExecutor::renderReference(const pixcake::render::RenderDescription& d
     result.statuses.push_back({"", "frame", PassStatus::InvalidInput, "输入帧修订号与绘制描述不一致"});
     return false;
   }
-  result.image = input;
+  if (copy_pixels) {
+    result.image = input;
+  } else {  // the GPU path reads its pixels back; skip copying a frame it overwrites
+    result.image.width = input.width;
+    result.image.height = input.height;
+  }
   result.image.row_stride = stride;
   result.image.revision = description.document_revision;
   for (const auto& diagnostic : description.diagnostics) {
@@ -644,12 +676,12 @@ bool RenderExecutor::renderReference(const pixcake::render::RenderDescription& d
     if (status == PassStatus::Unregistered) record.reason = "渲染程序未注册，跳过操作";
     if (status == PassStatus::ReferenceOnly) record.reason = "仅有 reference 实现";
     result.statuses.push_back(record);
-    Lut3DView lut;
-    bool has_lut = false;
+    PreparedOperation draw;
+    draw.operation = &operation;
     if (status == PassStatus::MissingResource && inputs.resources != nullptr) {
       std::string lut_error;
-      if (inputs.resources->resolveLut(operation.program, lut, lut_error) && valid_lut(lut) && lut.revision == description.document_revision) {
-        has_lut = true;
+      if (inputs.resources->resolveLut(operation.program, draw.lut, lut_error) && valid_lut(draw.lut) && draw.lut.revision == description.document_revision) {
+        draw.has_lut = true;
         result.statuses.back().status = PassStatus::ReferenceOnly;
         result.statuses.back().reason = "结构化 3D LUT 已解析，由 reference 三线性采样";
         result.diagnostics.push_back({operation.capability_id, result.statuses.back().reason, false});
@@ -658,7 +690,7 @@ bool RenderExecutor::renderReference(const pixcake::render::RenderDescription& d
         continue;
       }
     }
-    if (status == PassStatus::Unregistered || (status == PassStatus::MissingResource && !has_lut)) {
+    if (status == PassStatus::Unregistered || (status == PassStatus::MissingResource && !draw.has_lut)) {
       result.diagnostics.push_back({operation.capability_id, record.reason, false});
       continue;
     }
@@ -672,49 +704,56 @@ bool RenderExecutor::renderReference(const pixcake::render::RenderDescription& d
       result.diagnostics.push_back({operation.capability_id, "未知混合模式，跳过操作", false});
       continue;
     }
-    std::vector<const RenderMask*> masks;
     bool missing = false;
     for (const auto& id : operation.mask_ids) {
       const auto* mask = mask_for(inputs, id);
       if (mask == nullptr || mask->width != input.width || mask->height != input.height || mask->alpha.size() < static_cast<std::size_t>(input.width) * input.height) { missing = true; break; }
-      masks.push_back(mask);
+      draw.masks.push_back(mask);
     }
     if (missing) { result.statuses.back().status = PassStatus::MissingResource; result.statuses.back().reason = "蒙版缺失或尺寸不匹配，跳过操作"; result.diagnostics.push_back({operation.capability_id, "蒙版缺失或尺寸不匹配，跳过操作", false}); continue; }
     std::map<std::string, float> values;
     for (const auto& value : operation.values) values[value.channel] = static_cast<float>(value.numeric_value);
-    const bool is_color = operation.stage == "color" || operation.program.find("color") != std::string::npos;
-    const bool is_tone = operation.stage == "tone" || operation.capability_id == "color.global" || operation.capability_id == "color.local" || operation.capability_id == "color.post";
-    const bool is_detail = operation.capability_id == "detail";
-    if (!is_color && !is_tone && !is_detail && !has_lut) continue;
+    draw.is_color = operation.stage == "color" || operation.program.find("color") != std::string::npos;
+    draw.is_tone = operation.stage == "tone" || operation.capability_id == "color.global" || operation.capability_id == "color.local" || operation.capability_id == "color.post";
+    draw.is_detail = operation.capability_id == "detail";
+    if (!draw.is_color && !draw.is_tone && !draw.is_detail && !draw.has_lut) continue;
     // Sub-groups of the global colour tool and grain, read once per operation.
-    const bool has_groups = !has_lut && operation.capability_id == "color.global";
-    const ColorGroups groups = has_groups ? color_groups(values) : ColorGroups{};
-    if (groups.editor_offsets) {
+    draw.has_groups = !draw.has_lut && operation.capability_id == "color.global";
+    if (draw.has_groups) draw.groups = color_groups(values);
+    if (draw.groups.editor_offsets) {
       // The colour editor's target colour (eyedropper, range) is not registered,
       // so its offsets have nothing to act on yet.
       result.diagnostics.push_back({operation.capability_id, "色彩编辑器还没有目标颜色参数，偏移暂不绘制", false});
     }
-    const Grain grain = is_detail ? grain_of(values, input.width, input.height) : Grain{};
-    if (is_detail && !grain.on) continue;
-    const ToneColor tone_color = tone_color_of(values);
-    const float lut_amount = values.find("amount") == values.end() ? 1.0F : clamp01(get(values, "amount") / 100.0F);
-    const Blend blend = blend_of(operation.blend_mode);
-    RgbaImage& frame = result.image;
-    for_rows(input.width, input.height, [&](std::uint32_t first, std::uint32_t end) {
-      for (std::uint32_t y = first; y < end; ++y) for (std::uint32_t x = 0; x < input.width; ++x) {
-        const Pixel before = read(frame, x, y);
-        Pixel after = before;
-        if (has_lut) after = mix(before, lut_sample(lut, before), lut_amount);
-        if (!has_lut && is_color) after = color(after, tone_color);
-        if (!has_lut && is_tone) after = tone(after, tone_color);
-        if (has_groups) after = apply_color_groups(after, groups);
-        if (is_detail) after = apply_grain(after, x, y, grain);
-        float weight = 1.0F;
-        for (const auto* mask : masks) weight *= mask->alpha[static_cast<std::size_t>(y) * input.width + x] / 255.0F;
-        write(frame, x, y, composite(before, after, weight, blend));
-      }
-    });
+    if (draw.is_detail) draw.grain = grain_of(values, input.width, input.height);
+    if (draw.is_detail && !draw.grain.on) continue;
+    draw.tone_color = tone_color_of(values);
+    draw.lut_amount = values.find("amount") == values.end() ? 1.0F : clamp01(get(values, "amount") / 100.0F);
+    draw.blend = blend_of(operation.blend_mode);
+    draws.push_back(std::move(draw));
   }
+  return true;
+}
+
+void draw_reference(const PreparedOperation& draw, RgbaImage& frame) {
+  for_rows(frame.width, frame.height, [&](std::uint32_t first, std::uint32_t end) {
+    for (std::uint32_t y = first; y < end; ++y) for (std::uint32_t x = 0; x < frame.width; ++x) {
+      const Pixel before = read(frame, x, y);
+      Pixel after = before;
+      if (draw.has_lut) after = mix(before, lut_sample(draw.lut, before), draw.lut_amount);
+      if (!draw.has_lut && draw.is_color) after = color(after, draw.tone_color);
+      if (!draw.has_lut && draw.is_tone) after = tone(after, draw.tone_color);
+      if (draw.has_groups) after = apply_color_groups(after, draw.groups);
+      if (draw.is_detail) after = apply_grain(after, x, y, draw.grain);
+      float weight = 1.0F;
+      for (const auto* mask : draw.masks) weight *= mask->alpha[static_cast<std::size_t>(y) * frame.width + x] / 255.0F;
+      write(frame, x, y, composite(before, after, weight, draw.blend));
+    }
+  });
+}
+
+void composite_layers(const RenderInputs& inputs, RenderResult& result) {
+  const RgbaImage& input = result.image;
   auto layers = inputs.layers;
   std::sort(layers.begin(), layers.end(), [](const RenderLayer& a, const RenderLayer& b) { return a.order < b.order; });
   for (const auto& layer : layers) {
@@ -736,13 +775,94 @@ bool RenderExecutor::renderReference(const pixcake::render::RenderDescription& d
     result.statuses.push_back({layer_id, "layer", PassStatus::Implemented, {}});
     const Blend layer_blend = blend_of(layer.blend_mode);
     RgbaImage& frame = result.image;
-    for_rows(input.width, input.height, [&](std::uint32_t first, std::uint32_t end) {
-      for (std::uint32_t y = first; y < end; ++y) for (std::uint32_t x = 0; x < input.width; ++x) {
-        const float amount = layer.opacity * (mask == nullptr ? 1.0F : mask->alpha[static_cast<std::size_t>(y) * input.width + x] / 255.0F);
+    for_rows(frame.width, frame.height, [&](std::uint32_t first, std::uint32_t end) {
+      for (std::uint32_t y = first; y < end; ++y) for (std::uint32_t x = 0; x < frame.width; ++x) {
+        const float amount = layer.opacity * (mask == nullptr ? 1.0F : mask->alpha[static_cast<std::size_t>(y) * frame.width + x] / 255.0F);
         write(frame, x, y, composite(read(frame, x, y), read(layer.image, x, y), amount, layer_blend));
       }
     });
   }
+}
+
+// Uniforms of one GPU pass, set from the prepared operation.
+bool set_color_uniforms(gl::Program& program, const PreparedOperation& draw, std::string& error) {
+  const ToneColor& t = draw.tone_color;
+  const ColorGroups& g = draw.groups;
+  const auto& m = t.white_balance_matrix.m;
+  const float on = t.white_balance ? 1.0F : 0.0F;
+  const auto flag = [](bool value) { return value ? 1.0F : 0.0F; };
+  bool ok = program.setVec4("wb0", {m[0][0], m[0][1], m[0][2], on}, error) &&
+            program.setVec4("wb1", {m[1][0], m[1][1], m[1][2], 0.0F}, error) &&
+            program.setVec4("wb2", {m[2][0], m[2][1], m[2][2], 0.0F}, error) &&
+            program.setVec4("tone0", {t.style, t.exposure_gain, t.brightness, t.contrast_amount}, error) &&
+            program.setVec4("tone1", {t.highlights, t.shadows, t.whites, t.blacks}, error) &&
+            program.setVec4("tone2", {t.local, t.saturation, t.vibrance, 0.0F}, error) &&
+            program.setVec4("groups0", {flag(g.levels), flag(g.monochrome), flag(g.hsl), flag(g.selective)}, error) &&
+            program.setVec4("groups1", {flag(g.grading), flag(g.absolute), g.blending, 0.0F}, error) &&
+            program.setVec4("levels0", {g.in_black, g.in_white, g.gamma, g.out_black}, error) &&
+            program.setVec4("levels1", {g.out_white, 0.0F, 0.0F, 0.0F}, error);
+  const auto bands = [&](const char* a, const char* b, const float (&v)[8]) {
+    return program.setVec4(a, {v[0], v[1], v[2], v[3]}, error) && program.setVec4(b, {v[4], v[5], v[6], v[7]}, error);
+  };
+  ok = ok && bands("hue_a", "hue_b", g.hue) && bands("sat_a", "sat_b", g.saturation) &&
+       bands("light_a", "light_b", g.lightness) && bands("mix_a", "mix_b", g.mix);
+  for (int target = 0; ok && target < 9; ++target) {
+    const auto& ink = g.selective_ink[target];
+    ok = program.setVec4("ink" + std::to_string(target), {ink[0], ink[1], ink[2], ink[3]}, error);
+  }
+  ok = ok && program.setVec4("zone_sat", {g.zone_saturation[0], g.zone_saturation[1], g.zone_saturation[2], g.zone_saturation[3]}, error) &&
+       program.setVec4("zone_light", {g.zone_lightness[0], g.zone_lightness[1], g.zone_lightness[2], g.zone_lightness[3]}, error);
+  for (int zone = 0; ok && zone < 4; ++zone) {
+    const auto& tint = g.zone_tint[zone];
+    ok = program.setVec4("zone_tint" + std::to_string(zone), {tint[0], tint[1], tint[2], 0.0F}, error);
+  }
+  return ok;
+}
+bool set_grain_uniforms(gl::Program& program, const PreparedOperation& draw, std::string& error) {
+  const Grain& g = draw.grain;
+  return program.setVec4("grain0", {g.amount, g.shadows, g.midtones, g.highlights}, error) &&
+         program.setVec4("grain1", {g.inv_cell, g.roughness, g.colour, 0.0F}, error);
+}
+
+}  // namespace
+
+PassStatus PassRegistry::classify(const pixcake::render::RenderOperation& operation) {
+  if (!operation.enabled) return PassStatus::Disabled;
+  if (operation.program.find("filter") != std::string::npos || operation.program.find("profile") != std::string::npos) return PassStatus::MissingResource;
+  if (operation.program == "pixcake.color.global" || operation.program == "pixcake.detail") {
+    return gpuSupported(operation) ? PassStatus::Implemented : PassStatus::ReferenceOnly;
+  }
+  if (operation.program == "pixcake.color.local" || operation.program == "pixcake.color.post" || operation.program == "pixcake.color.match" || operation.program == "pixcake.color.style") return PassStatus::ReferenceOnly;
+  return PassStatus::Unregistered;
+}
+
+bool PassRegistry::gpuSupported(const pixcake::render::RenderOperation& operation) {
+  // 2026-11-05: temperature, tint, exposure and contrast passed the
+  // reference/readback comparison on native CGL and the Qt desktop platform.
+  // 2026-11-06: the rest of the global colour tool (tone, levels, HSL,
+  // black-and-white, selective colour, grading) and detail grain joined, each
+  // group with its own readback comparison in test_gpu_backend_C57_C60.  The
+  // formula gate is the evidence gate: a new channel adds its readback first.
+  return gpu_formula_supported(operation);
+}
+
+struct GpuCache {
+  const void* context = nullptr;
+  gl::Shader vertex{nullptr};
+  gl::Program color_program{nullptr};
+  gl::Program grain_program{nullptr};
+  gl::Texture2D textures[2] = {gl::Texture2D{nullptr}, gl::Texture2D{nullptr}};
+  gl::Framebuffer framebuffers[2] = {gl::Framebuffer{nullptr}, gl::Framebuffer{nullptr}};
+  std::uint32_t width = 0, height = 0;
+};
+
+bool RenderExecutor::renderReference(const pixcake::render::RenderDescription& description,
+                                     const RgbaImage& input, const RenderInputs& inputs,
+                                     RenderResult& result) const {
+  std::vector<PreparedOperation> draws;
+  if (!prepare(description, input, inputs, result, draws)) return false;
+  for (const auto& draw : draws) draw_reference(draw, result.image);
+  composite_layers(inputs, result);
   result.success = true;
   return true;
 }
@@ -751,59 +871,87 @@ bool RenderExecutor::execute(gl::Context& context, const pixcake::render::Render
                              const RgbaImage& input, const RenderInputs& inputs, RenderResult& result,
                              std::string& error) const {
   if (!context.valid() || !context.makeCurrent()) { error = context.lastError(); return false; }
-  bool gpu_supported = description.operations.size() == 1 && inputs.layers.empty() && inputs.masks.empty() && input.row_stride == input.width * 4;
-  std::map<std::string, float> values;
-  for (const auto& operation : description.operations) {
-    if (!gpu_formula_supported(operation)) { gpu_supported = false; continue; }
-    for (const auto& value : operation.values) {
-      values[value.channel] = static_cast<float>(value.numeric_value);
-    }
+  std::vector<PreparedOperation> draws;
+  RenderResult prepared;
+  const bool frame_ok = prepare(description, input, inputs, prepared, draws, false);
+  bool gpu_supported = frame_ok && inputs.layers.empty() && input.row_stride == input.width * 4;
+  for (const auto& draw : draws) {
+    gpu_supported = gpu_supported && !draw.has_lut && draw.masks.empty() && gpu_formula_supported(*draw.operation);
   }
   if (!gpu_supported) {
     const bool ok = renderReference(description, input, inputs, result);
     result.reference_fallback = true;
     const std::string reason = (!inputs.layers.empty() || !inputs.masks.empty())
                                    ? "图层或蒙版的 GPU 合成路径尚未接入，已回退 reference"
-                                   : "当前绘制描述包含 GPU 最小路径未覆盖的能力，已回退 reference";
+                                   : "当前绘制描述包含 GPU 路径未覆盖的能力，已回退 reference";
     result.diagnostics.push_back({"", reason, false});
     context.doneCurrent();
     if (!ok) error = "reference render failed";
     return ok;
   }
+  result = std::move(prepared);
+  if (draws.empty()) {
+    result.image.pixels = input.pixels;
+    context.doneCurrent();
+    result.success = true;
+    return true;
+  }
 
-  bool ok = false;
-  {
-    auto shader = context.createShader();
-    auto fragment = context.createShader();
-    auto program = context.createProgram();
-    auto source = context.createTexture2D();
-    auto target = context.createTexture2D();
-    auto framebuffer = context.createFramebuffer();
-    const char* vertex_source = "#version 330 core\nout vec2 uv;\nvoid main(){vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);uv=p;gl_Position=vec4(p*2.0-1.0,0,1);}";
-    // PP-WB-001, PP-EXP-001, and PP-CONTRAST-001: the shader receives the
-    // same linear working buffer and the same CPU-derived Bradford matrix,
-    // EV multiplier, and affine contrast amount.
-    const char* fragment_source = "#version 330 core\nin vec2 uv;out vec4 color;uniform sampler2D source;uniform vec4 adjust;uniform vec4 wb0;uniform vec4 wb1;uniform vec4 wb2;\nvoid main(){vec4 p=texture(source,uv);vec3 balanced=vec3(dot(wb0.xyz,p.rgb),dot(wb1.xyz,p.rgb),dot(wb2.xyz,p.rgb));balanced*=exp2(adjust.z);balanced=(balanced-0.5)*(1.0+adjust.w/100.0)+0.5;color=clamp(vec4(balanced,p.a),0.0,1.0);} ";
-    if (shader.valid() && fragment.valid() && program.valid() && source.valid() && target.valid() && framebuffer.valid()) {
-      ok = shader.compile(gl::ShaderStage::Vertex, vertex_source, error) && fragment.compile(gl::ShaderStage::Fragment, fragment_source, error) && program.link(shader, fragment, error) && program.use(error);
-      const gl::ImageView view{input.width, input.height, input.row_stride, gl::PixelFormat::Rgba8, reinterpret_cast<const std::byte*>(input.pixels.data()), input.pixels.size()};
-      ok = ok && source.upload(view, error) && target.allocate(input.width, input.height, gl::PixelFormat::Rgba8, error) && framebuffer.attachColor(target, error) && framebuffer.complete(error) && framebuffer.bind(error) && context.setViewport(input.width, input.height, error) && source.bind(0, error);
-      const Mat3 white_balance = white_balance_matrix(values["temperature"], values["tint"]);
-      ok = ok && program.setTextureUnit("source", 0, error) &&
-           program.setVec4("adjust", {0.0F, 0.0F, values["exposure"], values["contrast"]}, error) &&
-           program.setVec4("wb0", {white_balance.m[0][0], white_balance.m[0][1], white_balance.m[0][2], 0.0F}, error) &&
-           program.setVec4("wb1", {white_balance.m[1][0], white_balance.m[1][1], white_balance.m[1][2], 0.0F}, error) &&
-           program.setVec4("wb2", {white_balance.m[2][0], white_balance.m[2][1], white_balance.m[2][2], 0.0F}, error) &&
-           context.drawTriangles(3, error);
-      std::vector<std::byte> pixels;
-      ok = ok && context.readPixels(input.width, input.height, pixels, error);
-      if (ok) {
-        result = {};
-        result.image = input; result.image.revision = description.document_revision; result.image.pixels.resize(pixels.size());
-        std::transform(pixels.begin(), pixels.end(), result.image.pixels.begin(), [](std::byte value) { return static_cast<std::uint8_t>(value); });
-        result.success = true;
-      }
-    } else error = "GPU resources unavailable";
+  // Programs compile once per context; the two frame textures are
+  // reallocated only when the frame size changes.
+  if (!gpu_cache_ || gpu_cache_->context != context.identity()) {
+    gpu_cache_ = std::make_shared<GpuCache>();
+    gpu_cache_->context = context.identity();
+  }
+  GpuCache& cache = *gpu_cache_;
+  bool ok = cache.vertex.valid() || ((cache.vertex = context.createShader()).valid() &&
+                                     cache.vertex.compile(gl::ShaderStage::Vertex, shaders::kVertex, error));
+  if (ok && (cache.width != input.width || cache.height != input.height)) {
+    for (int i = 0; ok && i < 2; ++i) {
+      cache.textures[i] = context.createTexture2D();
+      cache.framebuffers[i] = context.createFramebuffer();
+      ok = cache.textures[i].valid() && cache.framebuffers[i].valid() &&
+           cache.textures[i].allocate(input.width, input.height, gl::PixelFormat::Rgba8, error) &&
+           cache.framebuffers[i].attachColor(cache.textures[i], error) && cache.framebuffers[i].complete(error);
+    }
+    cache.width = ok ? input.width : 0;
+    cache.height = ok ? input.height : 0;
+  }
+  // Two RGBA8 textures ping-pong: each operation reads one and draws into
+  // the other, so every pass is quantised to 8 bits like the reference.
+  const gl::ImageView view{input.width, input.height, input.row_stride, gl::PixelFormat::Rgba8,
+                           reinterpret_cast<const std::byte*>(input.pixels.data()), input.pixels.size()};
+  ok = ok && cache.textures[0].upload(view, error);
+  int current = 0;
+  for (const auto& draw : draws) {
+    if (!ok) break;
+    const bool grain = draw.is_detail;
+    gl::Program& program = grain ? cache.grain_program : cache.color_program;
+    if (!program.valid()) {
+      gl::Shader fragment = context.createShader();
+      gl::Program linked = context.createProgram();
+      ok = fragment.valid() && linked.valid() &&
+           fragment.compile(gl::ShaderStage::Fragment, grain ? shaders::kGrain : shaders::kColorGlobal, error) &&
+           linked.link(cache.vertex, fragment, error);
+      if (ok) program = linked;
+    }
+    const int next = 1 - current;
+    ok = ok && program.use(error) && cache.framebuffers[next].bind(error) &&
+         context.setViewport(input.width, input.height, error) && cache.textures[current].bind(0, error) &&
+         program.setTextureUnit("source", 0, error) &&
+         (grain ? set_grain_uniforms(program, draw, error) : set_color_uniforms(program, draw, error)) &&
+         context.drawTriangles(3, error);
+    current = next;
+  }
+  std::vector<std::byte> pixels;
+  ok = ok && context.readPixels(input.width, input.height, pixels, error);
+  if (ok) {
+    result.image.row_stride = input.width * 4;
+    result.image.pixels.resize(pixels.size());
+    std::memcpy(result.image.pixels.data(), pixels.data(), pixels.size());
+    result.success = true;
+  } else {
+    gpu_cache_.reset();  // rebuild from scratch next time
   }
   context.doneCurrent();
   if (!ok && error.empty()) error = "GPU pass failed";

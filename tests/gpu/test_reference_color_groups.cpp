@@ -160,8 +160,9 @@ void test_grain() {
   const auto detail = [](std::initializer_list<RenderValue> values) {
     return op("detail", "detail.grain", "pixcake.detail", values);
   };
+  // Grain has a shader with a readback comparison (test_gpu_backend_C57_C60).
   assert(pixcake::gpu::PassRegistry::classify(detail({value("grain_amount", 50)}).operations[0]) ==
-         pixcake::gpu::PassStatus::ReferenceOnly);
+         pixcake::gpu::PassStatus::Implemented);
   // Amount 0 (the default) draws nothing, whatever the other values.
   RenderResult result;
   render(detail({value("grain_amount", 0), value("grain_size", 100)}), image(128, 128, 128, 64), &result);
@@ -204,8 +205,6 @@ void test_document_to_pixels() {
     for (const auto& item : operation.values) {
       if (item.channel == "profile") {
         found = item.display_value == "monochrome" && item.numeric_value == 2.0;
-        std::fprintf(stderr, "profile value: %s %.1f in %s/%s\n", item.display_value.c_str(), item.numeric_value,
-                     operation.capability_id.c_str(), operation.program.c_str());
       }
     }
   }

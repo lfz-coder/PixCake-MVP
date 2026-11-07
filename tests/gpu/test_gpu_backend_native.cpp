@@ -4,12 +4,14 @@
 #include <pixcake/gl/native_backend.hpp>
 #include <pixcake/gpu/render_executor.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -142,6 +144,102 @@ int main() {
     for (std::size_t i = 0; i < 3; ++i) {
       EXPECT(std::abs(static_cast<int>(gpu_result.image.pixels[i]) - static_cast<int>(reference.image.pixels[i])) <= 3);
     }
+  }
+  // Every group the shaders draw, on a frame that covers hues, greys, dark and
+  // light values and partial alpha: the GPU readback must match the
+  // reference within one step (float rounding), and the pass must not fall
+  // back.  Dropping any group from the shader makes its case fail.
+  pixcake::gpu::RgbaImage frame;
+  frame.width = 97;
+  frame.height = 61;
+  frame.row_stride = frame.width * 4;
+  frame.revision = 19;
+  frame.pixels.resize(static_cast<std::size_t>(frame.row_stride) * frame.height);
+  for (std::uint32_t y = 0; y < frame.height; ++y) {
+    for (std::uint32_t x = 0; x < frame.width; ++x) {
+      auto* px = frame.pixels.data() + static_cast<std::size_t>(y) * frame.row_stride + x * 4;
+      px[0] = static_cast<std::uint8_t>((x * 255) / (frame.width - 1));
+      px[1] = static_cast<std::uint8_t>((y * 255) / (frame.height - 1));
+      px[2] = static_cast<std::uint8_t>(((x + y) * 37) % 256);
+      px[3] = static_cast<std::uint8_t>(y % 7 == 0 ? 128 : 255);
+      if (x % 11 == 0) px[1] = px[2] = px[0];  // greys
+    }
+  }
+  using pixcake::render::RenderValue;
+  const auto v = [](const char* channel, double number) {
+    return RenderValue{channel, channel, std::to_string(number), number};
+  };
+  const auto global = [](std::vector<RenderValue> values) {
+    pixcake::render::RenderOperation op;
+    op.capability_id = "color.global";
+    op.stage = "color";
+    op.program = "pixcake.color.global";
+    op.values = std::move(values);
+    return op;
+  };
+  const auto grain = [](std::vector<RenderValue> values) {
+    pixcake::render::RenderOperation op;
+    op.capability_id = "detail";
+    op.stage = "detail.grain";
+    op.program = "pixcake.detail";
+    op.order = 9;
+    op.values = std::move(values);
+    return op;
+  };
+  struct Case {
+    const char* name;
+    std::vector<pixcake::render::RenderOperation> operations;
+  };
+  const Case cases[] = {
+      {"tone", {global({v("temperature", -30), v("exposure", 0.4), v("brightness", 10), v("contrast", 25),
+                        v("highlights", -40), v("shadows", 35), v("whites", 20), v("blacks", -15), v("clarity", 30),
+                        v("texture", 10), v("dehaze", 5), v("vibrance", 40), v("saturation", -20)})}},
+      {"levels", {global({v("levels_rgb_input_black", 20), v("levels_rgb_input_white", 230),
+                          v("levels_rgb_input_gray", 0.3), v("levels_rgb_output_black", 10),
+                          v("levels_rgb_output_white", 240)})}},
+      {"hsl", {global({v("hsl_hue_red", 60), v("hsl_saturation_green", -50), v("hsl_luminance_blue", 70),
+                       v("hsl_hue_aqua", -40), v("hsl_luminance_orange", -60), v("hsl_saturation_magenta", 80)})}},
+      {"black-and-white", {global({{"profile", "profile", "monochrome", 2.0}, v("bw_mix_red", 60),
+                                   v("bw_mix_blue", -70), v("bw_mix_yellow", 40)})}},
+      {"selective relative", {global({v("selective_red_cyan", 50), v("selective_neutral_black", 30),
+                                      v("selective_blue_yellow", -60), v("selective_white_magenta", 40)})}},
+      {"selective absolute", {global({{"selective_mode", "selective_mode", "absolute", 1.0},
+                                      v("selective_green_magenta", 70), v("selective_black_black", -50)})}},
+      {"grading", {global({v("grading_shadows_hue", 220), v("grading_shadows_saturation", 60),
+                           v("grading_highlights_hue", 40), v("grading_highlights_saturation", 50),
+                           v("grading_midtones_luminance", -30), v("grading_global_saturation", 20),
+                           v("grading_global_hue", 300), v("grading_blending", 80)})}},
+      {"grain", {grain({v("grain_amount", 80), v("grain_size", 30), v("grain_roughness", 60), v("grain_color", 50),
+                        v("grain_shadows", 70), v("grain_midtones", 100), v("grain_highlights", 40)})}},
+      {"colour then grain", {global({v("exposure", 0.3), v("hsl_hue_red", 30), v("grading_global_saturation", 30)}),
+                             grain({v("grain_amount", 60)})}},
+  };
+  for (const auto& item : cases) {
+    pixcake::render::RenderDescription multi;
+    multi.document_revision = 19;
+    multi.operations = item.operations;
+    pixcake::gpu::RenderResult on_gpu;
+    pixcake::gpu::RenderResult on_cpu;
+    const bool drawn = executor.execute(context, multi, frame, inputs, on_gpu, error);
+    EXPECT(drawn);
+    EXPECT(!on_gpu.reference_fallback);
+    EXPECT(executor.renderReference(multi, frame, inputs, on_cpu));
+    int worst = 0;
+    std::size_t off = 0;
+    if (drawn && on_gpu.image.pixels.size() == on_cpu.image.pixels.size()) {
+      for (std::size_t i = 0; i < on_cpu.image.pixels.size(); ++i) {
+        const int diff = std::abs(static_cast<int>(on_gpu.image.pixels[i]) - static_cast<int>(on_cpu.image.pixels[i]));
+        worst = std::max(worst, diff);
+        if (diff > 0) ++off;
+      }
+    } else {
+      worst = 999;
+    }
+    std::printf("gpu readback %-20s max diff %d, %zu of %zu channels differ\n", item.name, worst, off,
+                on_cpu.image.pixels.size());
+    if (worst > 1) std::fprintf(stderr, "FAIL %s: GPU differs from reference by %d (%s)\n", item.name, worst, error.c_str());
+    if (worst > 1) ++failures;
+    EXPECT(on_gpu.statuses.size() == on_cpu.statuses.size());
   }
   std::printf("native GPU backend active\n");
   return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

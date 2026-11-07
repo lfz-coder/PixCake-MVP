@@ -12,6 +12,7 @@ add_library(pixcake_renderd_service
 target_include_directories(pixcake_renderd_service PUBLIC include)
 target_link_libraries(pixcake_renderd_service PUBLIC
   pixcake_gpu_render
+  pixcake_gpu_backend_native
   pixcake_ipc
   pixcake_mask
   pixcake_preview_channel
