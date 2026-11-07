@@ -81,6 +81,8 @@ class PreviewSession {
   // Blocks up to timeout_ms for the frame answering the latest request.
   ResultCode wait_latest_frame(PreviewFrame& out, int timeout_ms, std::string& diagnostic);
   std::uint64_t latest_sequence() const { return sequence_; }
+  // The request the last returned frame answers; equal to latest_sequence() once the newest frame is in.
+  std::uint64_t shown_sequence() const { return shown_; }
   // Called after each successful commit (e.g. to mark the photo edited).
   void on_committed(std::function<void()> callback) { committed_ = std::move(callback); }
 

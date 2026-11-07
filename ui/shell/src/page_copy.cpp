@@ -64,6 +64,7 @@ Texts build_texts() {
   t["widget.histogram"] = "直方图";
   t["widget.canvas"] = "照片预览";
   t["refine.preview.loading"] = "正在生成预览";
+  t["refine.profile.pending"] = "这个配置文件的资源还没有接入";
   t["refine.preview.failed"] = "预览失败：";
 
   t["region.login-account"] = "账号输入框";

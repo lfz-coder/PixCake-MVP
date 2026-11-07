@@ -1,7 +1,10 @@
 #include "pixcake/gpu/render_executor.hpp"
 
+#include "pixcake/capability/capability_registry.hpp"
+
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <map>
 #include <set>
 #include <string>
@@ -155,6 +158,332 @@ Pixel tone(Pixel p, const std::map<std::string, float>& v) {
   p.r = gray + (p.r - gray) * saturation; p.g = gray + (p.g - gray) * saturation; p.b = gray + (p.b - gray) * saturation;
   return p;
 }
+// ---- color.global sub-groups and detail grain (requirement 10.3) -----------
+// 像素蛋糕's own formulas are not published.  These are the project's
+// provisional reference formulas, each written down with its rule; they are
+// the identity at the registered defaults, so documents that do not touch a
+// group render exactly as before.  Absent values take the registered default
+// (ParameterMode is the single source of defaults, render contract §2).
+using Values = std::map<std::string, float>;
+
+float param(const Values& values, const char* capability, const std::string& id) {
+  const auto found = values.find(id);
+  if (found != values.end()) return found->second;
+  const auto* mode = pixcake::find_parameter_mode(capability, id);
+  if (mode == nullptr) return 0.0F;
+  if (mode->choices.empty()) return static_cast<float>(mode->default_value);
+  const auto choice = std::find(mode->choices.begin(), mode->choices.end(), mode->default_choice);
+  return static_cast<float>(choice - mode->choices.begin());
+}
+// Choice parameters arrive as their index in the parameter mode's choices.
+bool choice_is(const Values& values, const char* capability, const std::string& id, std::string_view choice) {
+  const auto* mode = pixcake::find_parameter_mode(capability, id);
+  if (mode == nullptr) return false;
+  const auto found = std::find(mode->choices.begin(), mode->choices.end(), choice);
+  return found != mode->choices.end() &&
+         std::lround(param(values, capability, id)) == static_cast<long>(found - mode->choices.begin());
+}
+
+struct Hsl { float h, s, l; };  // h in degrees [0, 360)
+Hsl to_hsl(Pixel p) {
+  const float high = std::max({p.r, p.g, p.b}), low = std::min({p.r, p.g, p.b});
+  Hsl c{0.0F, 0.0F, (high + low) / 2.0F};
+  const float d = high - low;
+  if (d < 1e-6F) return c;
+  c.s = c.l > 0.5F ? d / (2.0F - high - low) : d / (high + low);
+  if (high == p.r) {
+    c.h = (p.g - p.b) / d + (p.g < p.b ? 6.0F : 0.0F);
+  } else if (high == p.g) {
+    c.h = (p.b - p.r) / d + 2.0F;
+  } else {
+    c.h = (p.r - p.g) / d + 4.0F;
+  }
+  c.h *= 60.0F;
+  return c;
+}
+float hue_channel(float p, float q, float t) {
+  if (t < 0.0F) t += 1.0F;
+  if (t > 1.0F) t -= 1.0F;
+  if (t < 1.0F / 6.0F) return p + (q - p) * 6.0F * t;
+  if (t < 0.5F) return q;
+  if (t < 2.0F / 3.0F) return p + (q - p) * (2.0F / 3.0F - t) * 6.0F;
+  return p;
+}
+Pixel from_hsl(Hsl c, float alpha) {
+  if (c.s <= 0.0F) return {c.l, c.l, c.l, alpha};
+  const float q = c.l < 0.5F ? c.l * (1.0F + c.s) : c.l + c.s - c.l * c.s;
+  const float p = 2.0F * c.l - q;
+  const float h = c.h / 360.0F;
+  return {hue_channel(p, q, h + 1.0F / 3.0F), hue_channel(p, q, h), hue_channel(p, q, h - 1.0F / 3.0F), alpha};
+}
+
+// The eight hue bands of the HSL and black-and-white panels, centred on these
+// hues.  A hue belongs to its two neighbouring bands with linear weights, so
+// the weights always sum to 1 (no band edge shows as a seam).
+constexpr float kBandHue[8] = {0.0F, 30.0F, 60.0F, 120.0F, 180.0F, 240.0F, 270.0F, 300.0F};
+constexpr const char* kBandName[8] = {"red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta"};
+void band_weights(float hue, float weights[8]) {
+  for (int i = 0; i < 8; ++i) weights[i] = 0.0F;
+  for (int i = 0; i < 8; ++i) {
+    const float start = kBandHue[i], end = i == 7 ? 360.0F : kBandHue[i + 1];
+    if (hue >= start && hue < end) {
+      const float t = (hue - start) / (end - start);
+      weights[i] = 1.0F - t;
+      weights[(i + 1) % 8] = t;
+      return;
+    }
+  }
+  weights[0] = 1.0F;
+}
+
+struct ColorGroups {
+  bool levels = false;
+  float in_black = 0, in_white = 1, gamma = 1, out_black = 0, out_white = 1;
+  bool hsl = false;
+  float hue[8]{}, saturation[8]{}, lightness[8]{};
+  bool monochrome = false;
+  float mix[8]{};
+  bool selective = false, absolute = false;
+  float selective_ink[9][4]{};  // target x (cyan, magenta, yellow, black), -1..1
+  bool grading = false;
+  float zone_hue[4]{}, zone_saturation[4]{}, zone_lightness[4]{}, blending = 0.5F;
+  bool editor_offsets = false;
+};
+
+ColorGroups color_groups(const Values& v) {
+  const char* cap = "color.global";
+  ColorGroups g;
+  // Levels (RGB composite).  Input black/white stretch, output black/white
+  // compress, both in 0..255.  The grey box is -1..1 in 像素蛋糕; the project
+  // maps it to a midtone gamma 10^grey (0.1..10, 0 = unchanged) with positive
+  // values brightening the midtones -- provisional, the official mapping is
+  // not published.
+  g.in_black = param(v, cap, "levels_rgb_input_black") / 255.0F;
+  g.in_white = param(v, cap, "levels_rgb_input_white") / 255.0F;
+  g.gamma = std::pow(10.0F, param(v, cap, "levels_rgb_input_gray"));
+  g.out_black = param(v, cap, "levels_rgb_output_black") / 255.0F;
+  g.out_white = param(v, cap, "levels_rgb_output_white") / 255.0F;
+  g.levels = g.in_black != 0.0F || g.in_white != 1.0F || g.gamma != 1.0F || g.out_black != 0.0F || g.out_white != 1.0F;
+  for (int i = 0; i < 8; ++i) {
+    const std::string band = kBandName[i];
+    g.hue[i] = param(v, cap, "hsl_hue_" + band) / 100.0F;
+    g.saturation[i] = param(v, cap, "hsl_saturation_" + band) / 100.0F;
+    g.lightness[i] = param(v, cap, "hsl_luminance_" + band) / 100.0F;
+    g.mix[i] = param(v, cap, "bw_mix_" + band) / 100.0F;
+    g.hsl = g.hsl || g.hue[i] != 0.0F || g.saturation[i] != 0.0F || g.lightness[i] != 0.0F;
+  }
+  g.monochrome = choice_is(v, cap, "profile", "monochrome");
+  const char* targets[9] = {"red", "yellow", "green", "cyan", "blue", "magenta", "white", "neutral", "black"};
+  const char* inks[4] = {"cyan", "magenta", "yellow", "black"};
+  for (int t = 0; t < 9; ++t) {
+    for (int k = 0; k < 4; ++k) {
+      g.selective_ink[t][k] = param(v, cap, std::string("selective_") + targets[t] + "_" + inks[k]) / 100.0F;
+      g.selective = g.selective || g.selective_ink[t][k] != 0.0F;
+    }
+  }
+  g.absolute = choice_is(v, cap, "selective_mode", "absolute");
+  const char* zones[4] = {"shadows", "midtones", "highlights", "global"};
+  for (int z = 0; z < 4; ++z) {
+    const std::string zone = zones[z];
+    g.zone_hue[z] = param(v, cap, "grading_" + zone + "_hue");
+    g.zone_saturation[z] = param(v, cap, "grading_" + zone + "_saturation") / 100.0F;
+    g.zone_lightness[z] = param(v, cap, "grading_" + zone + "_luminance") / 100.0F;
+    g.grading = g.grading || g.zone_saturation[z] != 0.0F || g.zone_lightness[z] != 0.0F;
+  }
+  g.blending = param(v, cap, "grading_blending") / 100.0F;
+  for (const char* item : {"hue", "saturation", "luminance"}) {
+    g.editor_offsets = g.editor_offsets || param(v, cap, std::string("color_editor_") + item + "_shift") != 0.0F;
+  }
+  return g;
+}
+
+Pixel apply_levels(Pixel p, const ColorGroups& g) {
+  const float span = std::max(g.in_white - g.in_black, 1.0F / 255.0F);
+  const auto map = [&](float c) {
+    const float x = std::pow(clamp01((c - g.in_black) / span), 1.0F / g.gamma);
+    return g.out_black + x * (g.out_white - g.out_black);
+  };
+  return {map(p.r), map(p.g), map(p.b), p.a};
+}
+
+// HSL: per band, hue +-100 turns the hue by +-30 degrees (half the distance
+// between the primary bands), saturation scales chroma by 1 + amount (-100
+// removes it), luminance moves lightness toward white or black by up to half
+// the headroom, scaled by the pixel's saturation so greys never move.
+Pixel apply_hsl(Pixel p, const ColorGroups& g) {
+  Hsl c = to_hsl(p);
+  if (c.s <= 0.0F) return p;
+  float w[8];
+  band_weights(c.h, w);
+  float hue = 0, saturation = 0, lightness = 0;
+  for (int i = 0; i < 8; ++i) {
+    hue += w[i] * g.hue[i];
+    saturation += w[i] * g.saturation[i];
+    lightness += w[i] * g.lightness[i];
+  }
+  const float s0 = c.s;
+  c.h = std::fmod(c.h + hue * 30.0F + 360.0F, 360.0F);
+  c.s = clamp01(c.s * (1.0F + saturation));
+  c.l = clamp01(c.l + lightness * 0.5F * s0 * (lightness > 0.0F ? 1.0F - c.l : c.l));
+  return from_hsl(c, p.a);
+}
+
+// Black-and-white profile: Rec. 709 luminance (the same weights as
+// luminance()), then each band's mix slider brightens or darkens pixels of
+// that hue in proportion to their chroma, so neutral pixels keep their grey.
+Pixel apply_monochrome(Pixel p, const ColorGroups& g) {
+  float grey = luminance(p);
+  const float chroma = std::max({p.r, p.g, p.b}) - std::min({p.r, p.g, p.b});
+  if (chroma > 0.0F) {
+    float w[8];
+    band_weights(to_hsl(p).h, w);
+    float mix_amount = 0;
+    for (int i = 0; i < 8; ++i) mix_amount += w[i] * g.mix[i];
+    grey = clamp01(grey + mix_amount * chroma * 0.5F);
+  }
+  return {grey, grey, grey, p.a};
+}
+
+// Selective color, in the shape of the CMYK "selective color" adjustment.
+// How much a pixel belongs to each target: colour targets by how far their
+// primary/secondary leads (max - mid for red/green/blue when that channel is
+// the largest, mid - min for cyan/magenta/yellow when its complement is the
+// smallest); white above mid grey, black below it, neutral by closeness of
+// both extremes to mid grey.  Each channel's ink is 1 - value: cyan acts on
+// red, magenta on green, yellow on blue.  Relative scales the ink already
+// there, absolute adds to it; black adds (or removes) ink in all channels.
+Pixel apply_selective(Pixel p, const ColorGroups& g) {
+  const float r = p.r, gr = p.g, b = p.b;
+  const float high = std::max({r, gr, b}), low = std::min({r, gr, b});
+  const float mid = r + gr + b - high - low;
+  float weight[9] = {
+      r == high ? high - mid : 0.0F,   // red
+      b == low ? mid - low : 0.0F,     // yellow
+      gr == high ? high - mid : 0.0F,  // green
+      r == low ? mid - low : 0.0F,     // cyan
+      b == high ? high - mid : 0.0F,   // blue
+      gr == low ? mid - low : 0.0F,    // magenta
+      low > 0.5F ? (low - 0.5F) * 2.0F : 0.0F,
+      std::max(0.0F, 1.0F - (std::abs(high - 0.5F) + std::abs(low - 0.5F))),
+      high < 0.5F ? (0.5F - high) * 2.0F : 0.0F,
+  };
+  float channel[3] = {r, gr, b};
+  float out[3];
+  for (int c = 0; c < 3; ++c) {
+    const float ink = 1.0F - channel[c];
+    float change = 0;
+    for (int t = 0; t < 9; ++t) {
+      if (weight[t] <= 0.0F) continue;
+      const float s = g.selective_ink[t][c], k = g.selective_ink[t][3];
+      float next = clamp01(g.absolute ? ink + s : ink * (1.0F + s));
+      next += k * (k > 0.0F ? 1.0F - next : next);
+      change += weight[t] * (next - ink);
+    }
+    out[c] = clamp01(channel[c] - change);
+  }
+  return {out[0], out[1], out[2], p.a};
+}
+
+// Color grading: shadows, midtones and highlights are luminance zones centred
+// on 0, 0.5 and 1 with triangular weights; blending widens them from radius
+// 0.5 (blending 0, zones meet at their neighbours' centres) to 1 (blending
+// 100).  Global applies everywhere.  Each zone adds a chroma tint in its hue
+// (the hue's colour with its own luminance removed, so the tint does not
+// brighten) scaled by saturation, and shifts lightness by up to a quarter.
+Pixel apply_grading(Pixel p, const ColorGroups& g) {
+  const float l = luminance(p);
+  const float radius = 0.5F + 0.5F * g.blending;
+  const float centre[3] = {0.0F, 0.5F, 1.0F};
+  for (int z = 0; z < 4; ++z) {
+    const float w = z == 3 ? 1.0F : std::max(0.0F, 1.0F - std::abs(l - centre[z]) / radius);
+    if (w <= 0.0F || (g.zone_saturation[z] == 0.0F && g.zone_lightness[z] == 0.0F)) continue;
+    const Pixel hue = from_hsl({g.zone_hue[z], 1.0F, 0.5F}, 1.0F);
+    const float hue_l = luminance(hue);
+    const float tint = w * g.zone_saturation[z] * 0.25F;
+    const float lift = w * g.zone_lightness[z] * 0.25F;
+    p.r += tint * (hue.r - hue_l) + lift;
+    p.g += tint * (hue.g - hue_l) + lift;
+    p.b += tint * (hue.b - hue_l) + lift;
+  }
+  return p;
+}
+
+Pixel apply_color_groups(Pixel p, const ColorGroups& g) {
+  if (g.levels) p = apply_levels(p, g);
+  if (g.monochrome) {
+    p = apply_monochrome(p, g);
+  } else if (g.hsl) {
+    p = apply_hsl(p, g);
+  }
+  if (g.selective) p = apply_selective(p, g);
+  if (g.grading) p = apply_grading(p, g);
+  return p;
+}
+
+// Grain (detail).  Value noise on a lattice whose cell follows the image size
+// (so a <= 4000 px preview and the full-resolution export look alike), mixed
+// with per-pixel noise by roughness; colour mixes monochrome noise toward
+// independent per-channel noise.  Shadows/midtones/highlights weight it by
+// luminance zone (triangular, radius 0.5).  Deterministic per position: the
+// same frame renders the same grain every time.
+struct Grain {
+  bool on = false;
+  float amount = 0, shadows = 0, midtones = 0, highlights = 0, size = 0, roughness = 0, colour = 0;
+  float cell = 1;
+};
+Grain grain_of(const Values& v, std::uint32_t width, std::uint32_t height) {
+  const char* cap = "detail";
+  Grain g;
+  g.amount = param(v, cap, "grain_amount") / 100.0F;
+  g.on = g.amount > 0.0F;
+  g.shadows = param(v, cap, "grain_shadows") / 100.0F;
+  g.midtones = param(v, cap, "grain_midtones") / 100.0F;
+  g.highlights = param(v, cap, "grain_highlights") / 100.0F;
+  g.size = param(v, cap, "grain_size") / 100.0F;
+  g.roughness = param(v, cap, "grain_roughness") / 100.0F;
+  g.colour = param(v, cap, "grain_color") / 100.0F;
+  g.cell = std::max(1.0F, static_cast<float>(std::min(width, height)) * (0.0008F + 0.006F * g.size));
+  return g;
+}
+float hash01(std::uint32_t x, std::uint32_t y, std::uint32_t channel) {
+  std::uint32_t h = x * 0x8da6b343U ^ y * 0xd8163841U ^ channel * 0xcb1ab31fU;
+  h ^= h >> 16;
+  h *= 0x7feb352dU;
+  h ^= h >> 15;
+  h *= 0x846ca68bU;
+  h ^= h >> 16;
+  return static_cast<float>(h & 0xFFFFFFU) / 16777216.0F;
+}
+float value_noise(float x, float y, std::uint32_t channel) {
+  const float fx = std::floor(x), fy = std::floor(y);
+  const auto ix = static_cast<std::uint32_t>(static_cast<std::int64_t>(fx));
+  const auto iy = static_cast<std::uint32_t>(static_cast<std::int64_t>(fy));
+  float tx = x - fx, ty = y - fy;
+  tx = tx * tx * (3.0F - 2.0F * tx);
+  ty = ty * ty * (3.0F - 2.0F * ty);
+  const float top = hash01(ix, iy, channel) + (hash01(ix + 1, iy, channel) - hash01(ix, iy, channel)) * tx;
+  const float bottom =
+      hash01(ix, iy + 1, channel) + (hash01(ix + 1, iy + 1, channel) - hash01(ix, iy + 1, channel)) * tx;
+  return top + (bottom - top) * ty;
+}
+Pixel apply_grain(Pixel p, std::uint32_t x, std::uint32_t y, const Grain& g) {
+  const float l = luminance(p);
+  const float zone = std::max(0.0F, 1.0F - l / 0.5F) * g.shadows +
+                     std::max(0.0F, 1.0F - std::abs(l - 0.5F) / 0.5F) * g.midtones +
+                     std::max(0.0F, 1.0F - (1.0F - l) / 0.5F) * g.highlights;
+  const float strength = g.amount * zone * 0.5F;
+  if (strength <= 0.0F) return p;
+  const auto noise = [&](std::uint32_t channel) {
+    const float smooth = value_noise(static_cast<float>(x) / g.cell, static_cast<float>(y) / g.cell, channel);
+    return smooth + (hash01(x, y, channel + 8U) - smooth) * g.roughness - 0.5F;
+  };
+  const float mono = noise(0);
+  p.r += strength * (mono + (noise(1) - mono) * g.colour);
+  p.g += strength * (mono + (noise(2) - mono) * g.colour);
+  p.b += strength * (mono + (noise(3) - mono) * g.colour);
+  return p;
+}
+
 Pixel composite(Pixel base, Pixel top, float opacity, const std::string& mode) {
   opacity = clamp01(opacity) * top.a;
   Pixel mixed = top;
@@ -221,6 +550,8 @@ PassStatus PassRegistry::classify(const pixcake::render::RenderOperation& operat
   if (operation.program.find("filter") != std::string::npos || operation.program.find("profile") != std::string::npos) return PassStatus::MissingResource;
   if (operation.program == "pixcake.color.global") return gpuSupported(operation) ? PassStatus::Implemented : PassStatus::ReferenceOnly;
   if (operation.program == "pixcake.color.local" || operation.program == "pixcake.color.post" || operation.program == "pixcake.color.match" || operation.program == "pixcake.color.style") return PassStatus::ReferenceOnly;
+  // detail only registers grain parameters so far (reference formula, no shader).
+  if (operation.program == "pixcake.detail") return PassStatus::ReferenceOnly;
   return PassStatus::Unregistered;
 }
 
@@ -302,7 +633,18 @@ bool RenderExecutor::renderReference(const pixcake::render::RenderDescription& d
     for (const auto& value : operation.values) values[value.channel] = static_cast<float>(value.numeric_value);
     const bool is_color = operation.stage == "color" || operation.program.find("color") != std::string::npos;
     const bool is_tone = operation.stage == "tone" || operation.capability_id == "color.global" || operation.capability_id == "color.local" || operation.capability_id == "color.post";
-    if (!is_color && !is_tone && !has_lut) continue;
+    const bool is_detail = operation.capability_id == "detail";
+    if (!is_color && !is_tone && !is_detail && !has_lut) continue;
+    // Sub-groups of the global colour tool and grain, read once per operation.
+    const bool has_groups = !has_lut && operation.capability_id == "color.global";
+    const ColorGroups groups = has_groups ? color_groups(values) : ColorGroups{};
+    if (groups.editor_offsets) {
+      // The colour editor's target colour (eyedropper, range) is not registered,
+      // so its offsets have nothing to act on yet.
+      result.diagnostics.push_back({operation.capability_id, "色彩编辑器还没有目标颜色参数，偏移暂不绘制", false});
+    }
+    const Grain grain = is_detail ? grain_of(values, input.width, input.height) : Grain{};
+    if (is_detail && !grain.on) continue;
     for (std::uint32_t y = 0; y < input.height; ++y) for (std::uint32_t x = 0; x < input.width; ++x) {
       const Pixel before = read(result.image, x, y);
       Pixel after = before;
@@ -312,6 +654,8 @@ bool RenderExecutor::renderReference(const pixcake::render::RenderDescription& d
       }
       if (!has_lut && is_color) after = color(after, values);
       if (!has_lut && is_tone) after = tone(after, values);
+      if (has_groups) after = apply_color_groups(after, groups);
+      if (is_detail) after = apply_grain(after, x, y, grain);
       float weight = 1.0F;
       for (const auto* mask : masks) weight *= mask->alpha[static_cast<std::size_t>(y) * input.width + x] / 255.0F;
       write(result.image, x, y, composite(before, after, weight, operation.blend_mode));

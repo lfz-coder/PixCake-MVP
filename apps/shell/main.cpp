@@ -18,6 +18,7 @@
 #include <QElapsedTimer>
 #include <QStandardPaths>
 #include <QTemporaryDir>
+#include <QComboBox>
 #include <QCommandLineOption>
 #include <QCommandLineParser>
 #include <QFileInfo>
@@ -111,9 +112,10 @@ int check_refine_sliders(const QWidget& window) {
     ++bound;
     if (binding && binding->parameter_id == "exposure") exposure_ok = true;
   }
-  // 顶层影调 14 + 色阶 5 + HSL 24 + 可选颜色 36 + 颜色分级 13（“平衡”未注册）+ 色彩编辑器偏移 3。
-  if (bound != 95 || !exposure_ok) {
-    qCritical("expected 95 parameter-mode sliders, found %d", bound);
+  // 顶层影调 14 + 色阶 5 + HSL 24 + 黑白混合 8 + 可选颜色 36 + 颜色分级 13（“平衡”未注册）+ 色彩编辑器偏移 3
+  // + 颗粒 7。
+  if (bound != 110 || !exposure_ok) {
+    qCritical("expected 110 parameter-mode sliders, found %d", bound);
     return 4;
   }
   return 0;
@@ -240,6 +242,16 @@ double mean_red(const QImage& image) {
 
 // --open 冒烟：等第一帧；画布有图、直方图有数据、只有全图色彩的滑杆可用；把曝光调高，
 // 等新的一帧，画面整体变亮。
+// Waits until the canvas shows the frame answering the newest request.
+bool wait_current(const pixcake::shell::ShellWindow& window, int timeout_ms) {
+  QElapsedTimer timer;
+  timer.start();
+  while (!window.controller().preview_current() && timer.elapsed() < timeout_ms) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents | QEventLoop::WaitForMoreEvents, 50);
+  }
+  return window.controller().preview_current();
+}
+
 bool wait_frames(const pixcake::shell::ShellWindow& window, std::uint64_t count, int timeout_ms) {
   QElapsedTimer timer;
   timer.start();
@@ -317,12 +329,14 @@ int smoke_import_flow(pixcake::shell::ShellWindow& window, const std::vector<std
     qCritical("a click on a library photo did not just select it");
     return 9;
   }
-  auto before = controller.frames_shown();
+  // The edited photo is still open from refine: the single view shows its current frame at once.
   emit list->itemActivated(item_of(list, edited));
   QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
-  if (!wait_frames(window, before + 1, 60'000) || controller.display().page() != Page::Library ||
-      controller.display().library_view() != "single" || controller.current_photo() != edited ||
-      window.findChild<QFrame*>(QStringLiteral("library-single-image")) == nullptr) {
+  const auto* single = dynamic_cast<const pixcake::shell::PixCakeImageView*>(
+      window.findChild<QFrame*>(QStringLiteral("library-single-image")));
+  if (!wait_current(window, 60'000) || controller.display().page() != Page::Library ||
+      controller.display().library_view() != "single" || controller.current_photo() != edited || single == nullptr ||
+      single->image().isNull()) {
     qCritical("a double-click on a library photo did not show it in the single view");
     return 9;
   }
@@ -360,7 +374,7 @@ int smoke_import_flow(pixcake::shell::ShellWindow& window, const std::vector<std
     return 9;
   }
   // Refine shows the selected photo with its edit; the project is then remembered in refine.
-  before = controller.frames_shown();
+  auto before = controller.frames_shown();
   controller.request_page(Page::Refine);
   if (!wait_frames(window, before + 1, 60'000) || controller.display().page() != Page::Refine) {
     qCritical("refine shows no frame for the selected photo");
@@ -469,18 +483,34 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
     return 8;
   }
   const double before = mean_red(view->image());
+  // Enabled exactly when renderd draws the parameter and no parameter-mode rule blocks it.
   QSlider* exposure = nullptr;
+  QSlider* hsl_red = nullptr;
   int enabled = 0;
   for (auto* slider : window.findChild<QWidget*>(QStringLiteral("refine-color-labels"))->findChildren<QSlider*>()) {
-    if (!slider->isEnabled()) continue;
-    ++enabled;
-    const auto label = panels::slider_label_of(slider->accessibleName().toStdString());
-    const auto binding = panels::refine_color_binding(label);
-    if (!binding || binding->capability_id != "color.global") {
-      qCritical("slider enabled without a previewable binding: %s", label.c_str());
+    const std::string name = slider->accessibleName().toStdString();
+    const auto label = panels::slider_label_of(name);
+    // Unbound rows (the curve's shadows row) share labels with bound ones; their names mark the range pending.
+    std::optional<panels::SliderBinding> binding;
+    if (!panels::slider_range_pending(name)) {
+      binding = panels::refine_color_binding(label);
+      if (!binding) binding = panels::refine_subgroup_binding(label);
+    }
+    const bool expected = binding && pixcake::shell::reference_drawn(*binding) &&
+                          !pixcake::shell::parameter_blocked(&window.controller(), *binding);
+    if (slider->isEnabled() != expected) {
+      qCritical("slider %s is %s", label.c_str(), slider->isEnabled() ? "enabled but not drawable" : "disabled");
       return 8;
     }
+    if (!slider->isEnabled()) continue;
+    ++enabled;
     if (binding->parameter_id == "exposure") exposure = slider;
+    if (binding->parameter_id == "hsl_saturation_red") hsl_red = slider;
+  }
+  // Standard profile: HSL drawn, the black-and-white mix and the colour editor not; grain amount 0 blocks the rest.
+  if (hsl_red == nullptr || enabled != 14 + 5 + 24 + 36 + 13 + 1) {
+    qCritical("unexpected enabled sliders: %d", enabled);
+    return 8;
   }
   if (exposure == nullptr) {
     qCritical("exposure slider is not enabled (%d enabled)", enabled);
@@ -497,14 +527,64 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
     qCritical("exposure did not brighten the preview: %.1f -> %.1f", before, after);
     return 8;
   }
+  // Black-and-white profile: the frame turns grey; HSL is blocked and the mix unblocked in place.
+  auto* profile = window.findChild<QComboBox*>(QStringLiteral("refine-choice-profile"));
+  const int monochrome = profile != nullptr ? profile->findData(QStringLiteral("monochrome")) : -1;
+  if (monochrome < 0 || !profile->isEnabled()) {
+    qCritical("profile choice missing or disabled");
+    return 8;
+  }
+  if (!wait_current(window, 30'000)) {
+    qCritical("the exposure frames did not finish");
+    return 8;
+  }
+  profile->setCurrentIndex(monochrome);
+  emit profile->activated(monochrome);
+  if (!wait_current(window, 30'000)) {
+    qCritical("no frame after choosing the black-and-white profile");
+    return 8;
+  }
+  const QImage grey = view->image().convertToFormat(QImage::Format_RGBA8888);
+  for (int y = 0; y < grey.height(); y += 37) {
+    for (int x = 0; x < grey.width(); x += 41) {
+      const QRgb pixel = grey.pixel(x, y);
+      if (std::abs(qRed(pixel) - qGreen(pixel)) > 1 || std::abs(qGreen(pixel) - qBlue(pixel)) > 1) {
+        qCritical("black-and-white profile left colour at %d,%d", x, y);
+        return 8;
+      }
+    }
+  }
+  QSlider* mix_red = nullptr;
+  QSlider* grain_amount = nullptr;
+  QSlider* grain_size = nullptr;
+  for (auto* slider : window.findChild<QWidget*>(QStringLiteral("refine-color-labels"))->findChildren<QSlider*>()) {
+    const auto label = panels::slider_label_of(slider->accessibleName().toStdString());
+    if (label == "黑白混合-红色") mix_red = slider;
+    if (label == "总滑杆") grain_amount = slider;
+    if (label == "单个颗粒度大小") grain_size = slider;
+  }
+  if (hsl_red->isEnabled() || mix_red == nullptr || !mix_red->isEnabled()) {
+    qCritical("profile change did not swap HSL for the black-and-white mix");
+    return 8;
+  }
+  // Grain amount above 0 unblocks the other grain sliders and draws grain.
+  if (grain_amount == nullptr || grain_size == nullptr || grain_size->isEnabled()) {
+    qCritical("grain sliders missing, or size enabled at amount 0");
+    return 8;
+  }
+  grain_amount->setValue(60);
+  if (!wait_current(window, 30'000) || !grain_size->isEnabled()) {
+    qCritical("grain amount did not draw or unblock its sliders");
+    return 8;
+  }
   // Development aid: PIXCAKE_SMOKE_SCREENSHOT=<file.png> saves the window as rendered offscreen.
   if (const char* shot = std::getenv("PIXCAKE_SMOKE_SCREENSHOT"); shot != nullptr && *shot != '\0') {
     window.resize(1386, 800);
     QCoreApplication::processEvents();
     window.grab().save(QString::fromLocal8Bit(shot));
   }
-  std::printf("open photo ok: %dx%d, %d sliders enabled, red %.1f -> %.1f\n", view->image().width(),
-              view->image().height(), enabled, before, after);
+  std::printf("open photo ok: %dx%d, %d sliders enabled, red %.1f -> %.1f, black-and-white and grain drawn\n",
+              view->image().width(), view->image().height(), enabled, before, after);
   return 0;
 }
 #endif

@@ -35,13 +35,14 @@ std::string format_value(double value, int decimals) {
   return buffer;
 }
 
-enum class Def { Title, Section, TopSlider, SubSlider, HslGrid, SelectiveGrid };
+enum class Def { Title, Section, TopSlider, SubSlider, HslGrid, BwGrid, SelectiveGrid, Choice };
 
 struct RowDef {
   Def def;
   std::string_view label;
   std::string_view parameter = {};
   std::string_view object_name = {};
+  std::string_view capability = kGlobalColor;
 };
 
 struct LabelBinding {
@@ -53,7 +54,7 @@ struct LabelBinding {
 // 顺序来自 PixCake 9.3.0 的 Jarvis 页面图。Section 是分组标题，后期调色面板复用它们。
 // 没有参数的滑杆还没有参数模式，只显示“范围待确认”。颜色分级的“平衡”只用滑杆读到过范围，没有登记。
 constexpr RowDef kColorPanel[] = {
-    {Def::Title, "开启 AI 色彩风格"}, {Def::Title, "配置文件"}, {Def::Title, kColorAdjust}, {Def::Title, ui::shell::kWordPreset},
+    {Def::Title, "开启 AI 色彩风格"}, {Def::Choice, "配置文件", "profile"}, {Def::Title, kColorAdjust}, {Def::Title, ui::shell::kWordPreset},
     {Def::Section, "滤镜"}, {Def::Title, "推荐"}, {Def::Title, "我的"}, {Def::Title, "AI 校准"},
     {Def::TopSlider, "程度"},
     {Def::Section, "白平衡"}, {Def::Title, "AI校准白平衡"}, {Def::Title, "白平衡选择器"},
@@ -76,6 +77,8 @@ constexpr RowDef kColorPanel[] = {
     {Def::Title, "RGB通道曲线"}, {Def::Title, "亮度通道曲线"}, {Def::Title, "红色通道曲线"},
     {Def::Title, "绿色通道曲线"}, {Def::Title, "蓝色通道曲线"},
     {Def::Section, "HSL"}, {Def::HslGrid, ""},
+    // 黑白配置文件下 HSL 换成“黑白混合”八色（2026-11-06 实测）；两组都画，可用与否由参数模式的禁用规则决定。
+    {Def::BwGrid, ""},
     {Def::Section, "色彩编辑器"},
     {Def::SubSlider, "色相偏移", "color_editor_hue_shift"},
     {Def::SubSlider, "饱和度偏移", "color_editor_saturation_shift"},
@@ -96,16 +99,23 @@ constexpr RowDef kColorPanel[] = {
     {Def::SubSlider, "高光色相", "grading_highlights_hue"},
     {Def::SubSlider, "高光饱和度", "grading_highlights_saturation"},
     {Def::SubSlider, "阴影亮度", "grading_shadows_luminance"},
-    {Def::Section, "可选颜色"}, {Def::SelectiveGrid, ""}, {Def::Title, "相对"}, {Def::Title, "绝对"},
+    {Def::Section, "可选颜色"}, {Def::SelectiveGrid, ""}, {Def::Choice, "调整方式", "selective_mode"},
     {Def::Section, "细节"},
     {Def::SubSlider, "减少杂色"}, {Def::SubSlider, "减少杂色-平滑度"}, {Def::SubSlider, "减少杂色-细节"},
     {Def::SubSlider, "噪点消除"}, {Def::SubSlider, "噪点消除-对比度"}, {Def::SubSlider, "噪点消除-细节"},
     {Def::SubSlider, "锐化"}, {Def::SubSlider, "锐化-半径"}, {Def::SubSlider, "锐化-细节"},
     {Def::SubSlider, "AI降噪-程度"},
+    // 颗粒属于 detail（契约 §4）。页面图的显示名与 2026-11-05 画面读数一一按顺序对应：颗粒效果、阴影、
+    // 中间调、高光、颗粒大小、粗糙度、颗粒色彩。
     {Def::Section, "颗粒"},
-    {Def::SubSlider, "总滑杆"}, {Def::SubSlider, "阴影颗粒度透明度"}, {Def::SubSlider, "中间调颗粒度透明度"},
-    {Def::SubSlider, "高光颗粒度透明度"}, {Def::SubSlider, "单个颗粒度大小"}, {Def::SubSlider, "颗粒边缘锐度"},
-    {Def::Title, "颗粒颜色"}, {Def::Title, "颗粒风格"},
+    {Def::SubSlider, "总滑杆", "grain_amount", {}, "detail"},
+    {Def::SubSlider, "阴影颗粒度透明度", "grain_shadows", {}, "detail"},
+    {Def::SubSlider, "中间调颗粒度透明度", "grain_midtones", {}, "detail"},
+    {Def::SubSlider, "高光颗粒度透明度", "grain_highlights", {}, "detail"},
+    {Def::SubSlider, "单个颗粒度大小", "grain_size", {}, "detail"},
+    {Def::SubSlider, "颗粒边缘锐度", "grain_roughness", {}, "detail"},
+    {Def::SubSlider, "颗粒颜色", "grain_color", {}, "detail"},
+    {Def::Title, "颗粒风格"},
     {Def::Section, "镜头调整"},
     {Def::SubSlider, "手动-中点"}, {Def::SubSlider, "手动-扭曲度"}, {Def::SubSlider, "手动-晕影"},
     {Def::SubSlider, "配置文件-扭曲度"}, {Def::SubSlider, "配置文件-晕影"},
@@ -134,6 +144,11 @@ constexpr std::array<LabelBinding, 9> kSelectiveTargets = {{{"红色", "red"},  
                                                             {"蓝色", "blue"},    {"洋红色", "magenta"},
                                                             {"白色", "white"},   {"中间色（灰色）", "neutral"},
                                                             {"黑色", "black"}}};
+constexpr std::array<LabelBinding, 1> kBwGroup = {{{"黑白混合", "mix"}}};
+// 可选值的显示名（配置文件按需求 10.3，调整方式按画面）。
+constexpr std::array<LabelBinding, 6> kChoiceLabels = {{{"标准", "standard"}, {"质感", "texture"},
+                                                        {"黑白", "monochrome"}, {"基础", "basic"},
+                                                        {"相对", "relative"}, {"绝对", "absolute"}}};
 constexpr std::array<LabelBinding, 4> kSelectiveSliders = {{{"青色", "cyan"}, {"洋红", "magenta"}, {"黄色", "yellow"}, {"黑色", "black"}}};
 
 // "<前缀显示名>-<后缀显示名>"，两段都要在表里。
@@ -173,7 +188,7 @@ void add_grid(std::vector<PanelRow>& rows, const std::array<LabelBinding, A>& fi
 std::optional<SliderBinding> find_row(Def def, std::string_view label) {
   for (const auto& row : kColorPanel) {
     if (row.def == def && row.label == label && !row.parameter.empty()) {
-      return SliderBinding{kGlobalColor, std::string(row.parameter)};
+      return SliderBinding{std::string(row.capability), std::string(row.parameter)};
     }
   }
   return std::nullopt;
@@ -191,6 +206,10 @@ std::optional<SliderBinding> refine_subgroup_binding(std::string_view label) {
   if (const auto hsl = pair_parameter(label, kHslChannels, kHslColors, "hsl_")) {
     return SliderBinding{kGlobalColor, *hsl};
   }
+  // 黑白混合：“黑白混合-红色”等。
+  if (const auto mix = pair_parameter(label, kBwGroup, kHslColors, "bw_")) {
+    return SliderBinding{kGlobalColor, *mix};
+  }
   // 可选颜色：“红色-青色”等，显示名带目标色和滑杆名。
   if (const auto selective = pair_parameter(label, kSelectiveTargets, kSelectiveSliders, "selective_")) {
     return SliderBinding{kGlobalColor, *selective};
@@ -205,6 +224,10 @@ std::vector<PanelRow> refine_color_rows() {
       add_grid(rows, kHslChannels, kHslColors);
       continue;
     }
+    if (def.def == Def::BwGrid) {
+      add_grid(rows, kBwGroup, kHslColors);
+      continue;
+    }
     if (def.def == Def::SelectiveGrid) {
       add_grid(rows, kSelectiveTargets, kSelectiveSliders);
       continue;
@@ -212,6 +235,12 @@ std::vector<PanelRow> refine_color_rows() {
     PanelRow row;
     row.label = std::string(def.label);
     row.object_name = std::string(def.object_name);
+    if (def.def == Def::Choice) {
+      row.kind = PanelRowKind::Choice;
+      row.binding = SliderBinding{std::string(def.capability), std::string(def.parameter)};
+      rows.push_back(std::move(row));
+      continue;
+    }
     if (def.def == Def::TopSlider || def.def == Def::SubSlider) {
       row.kind = PanelRowKind::Slider;
       row.binding = def.def == Def::TopSlider ? refine_color_binding(def.label) : refine_subgroup_binding(def.label);
@@ -227,6 +256,20 @@ std::vector<std::string> refine_post_color_titles() {
     if (def.def == Def::Section) titles.emplace_back(def.label);
   }
   return titles;
+}
+
+std::vector<ChoiceOption> choice_options(const SliderBinding& binding) {
+  std::vector<ChoiceOption> options;
+  const ParameterMode* mode = find_parameter_mode(binding.capability_id, binding.parameter_id);
+  if (mode == nullptr) return options;
+  for (const auto& id : mode->choices) {
+    std::string label = id;
+    for (const auto& entry : kChoiceLabels) {
+      if (entry.parameter_id == id) label = std::string(entry.label);
+    }
+    options.push_back({id, label, id == mode->default_choice});
+  }
+  return options;
 }
 
 const char* refine_color_panel_name() { return kColorAdjust; }

@@ -113,6 +113,11 @@ struct PixCakeTheme final {
       QListWidget#library-photos { background: #141414; border: 1px solid #292929; border-radius: 6px; color: #d8d8d8; }
       QListWidget#library-photos::item { border-radius: 6px; padding: 6px; }
       QListWidget#library-photos::item:selected { background: #2f2f2f; color: #ffffff; }
+      QComboBox { background: #262626; color: #e6e6e6; border: 1px solid #3a3a3a; border-radius: 4px;
+                  padding: 2px 8px; min-height: 22px; }
+      QComboBox:disabled { color: #6a6a6a; border-color: #2c2c2c; }
+      QComboBox QAbstractItemView { background: #262626; color: #e6e6e6; selection-background-color: #3a3a3a;
+                                    border: 1px solid #3a3a3a; }
       QSlider::groove:horizontal { height: 4px; background: #4a4a4a; border-radius: 2px; }
       QSlider::sub-page:horizontal { background: #d0d0d0; border-radius: 2px; }
       QSlider::handle:horizontal { width: 14px; height: 14px; margin: -5px 0; background: #d9d9d9; border-radius: 7px; }

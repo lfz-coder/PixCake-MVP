@@ -5,33 +5,40 @@
 
 #include "pixcake/ui/panels/slider_spec.hpp"
 
+#include <QComboBox>
 #include <QPointer>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSlider>
+#include <QStandardItemModel>
 #include <QTimer>
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
+#include <memory>
+#include <functional>
 
 namespace pixcake::shell {
 namespace {
 
 namespace panels = ui::panels;
 
-// 照片打开时可拖动的滑杆：色彩面板顶层（白平衡、影调）绑定全图色彩的参数，renderd 的参考绘制
-// 实现了这些通道。子分组（色阶、HSL、可选颜色、颜色分级……）和其他能力还没有像素实现，保持禁用，
-// 不让滑杆动了画面却不变。
+// 照片打开时可拖动的滑杆：renderd 的参考绘制画得出的参数（reference_drawn）。其余保持禁用，
+// 不让滑杆动了画面却不变。是否可用还要看参数模式的禁用规则，见 EnableRefresh。
 bool previewable(const PageActions* actions, const panels::SliderSpec& spec,
                  const std::optional<panels::SliderBinding>& binding) {
-  if (actions == nullptr || !actions->has_photo() || !spec.bound || !binding ||
-      binding->capability_id != "color.global") {
-    return false;
-  }
-  const auto top_level = panels::refine_color_binding(spec.label);
-  return top_level && top_level->capability_id == binding->capability_id &&
-         top_level->parameter_id == binding->parameter_id;
+  return actions != nullptr && actions->has_photo() && spec.bound && binding && reference_drawn(*binding);
 }
+
+// 禁用规则依赖其他参数（配置文件、颗粒效果），提交后就地重算各控件的可用状态，不重建页面。
+struct EnableRefresh {
+  std::vector<std::function<void()>> updates;
+  void run() const {
+    for (const auto& update : updates) update();
+  }
+};
+using Refresh = std::shared_ptr<EnableRefresh>;
 
 // 刻度 → 参数模式的显示值（按步进推出的小数位；-0 写成 0）。
 std::string display_of(const panels::SliderSpec& spec, int tick) {
@@ -50,7 +57,8 @@ int tick_of(const panels::SliderSpec& spec, const std::string& display) {
 // 范围、步进、默认值只来自内核参数模式（ui/panels 的 slider_spec）。照片打开时，绑定全图色彩的
 // 滑杆可用：拖动发预览，松手（或键盘改值）经命令入口提交。
 void addDisabledSlider(QWidget* parent, QLayout* layout, const panels::SliderSpec& spec, const QString& object_name,
-                       PageActions* actions = nullptr, const std::optional<panels::SliderBinding>& binding = {}) {
+                       PageActions* actions = nullptr, const std::optional<panels::SliderBinding>& binding = {},
+                       const Refresh& refresh = nullptr) {
   auto* row = new QWidget(parent);
   auto* row_layout = new QHBoxLayout(row);
   row_layout->setContentsMargins(0, 0, 0, 0);
@@ -77,17 +85,67 @@ void addDisabledSlider(QWidget* parent, QLayout* layout, const panels::SliderSpe
     slider->setValue(tick_of(spec, *current));
     reading->setText(qs(*current));
   }
-  name->setEnabled(true);
-  slider->setEnabled(true);
-  reading->setEnabled(true);
+  const auto apply = [actions, bound, name = QPointer<QLabel>(name), slider = QPointer<QSlider>(slider),
+                      reading = QPointer<QLabel>(reading)] {
+    if (!slider) return;
+    const auto blocked = parameter_blocked(actions, bound);
+    for (QWidget* widget : {static_cast<QWidget*>(name), static_cast<QWidget*>(slider), static_cast<QWidget*>(reading)}) {
+      if (widget != nullptr) widget->setEnabled(!blocked);
+    }
+    slider->setToolTip(blocked ? qs(*blocked) : QString());
+  };
+  apply();
+  if (refresh) refresh->updates.push_back(apply);
   QObject::connect(slider, &QSlider::valueChanged, slider, [=](int tick) {
     const std::string value = display_of(spec, tick);
     reading->setText(qs(value));
     // Dragging previews; a keyboard or click change is final at once.
-    actions->request_parameter(bound, value, !slider->isSliderDown());
+    const bool commit = !slider->isSliderDown();
+    actions->request_parameter(bound, value, commit);
+    if (commit && refresh) refresh->run();
   });
   QObject::connect(slider, &QSlider::sliderReleased, slider, [=] {
     actions->request_parameter(bound, display_of(spec, slider->value()), true);
+    if (refresh) refresh->run();
+  });
+}
+
+// 枚举参数（配置文件、可选颜色调整方式）用下拉框（Qt 组件）。参考绘制画不出的可选值不可选：配置文件的
+// 质感、基础要配置文件资源，还没有接入。
+void addChoice(QWidget* parent, QLayout* layout, const panels::PanelRow& row, PageActions* actions,
+               const Refresh& refresh) {
+  auto* line = new QWidget(parent);
+  auto* line_layout = new QHBoxLayout(line);
+  line_layout->setContentsMargins(0, 0, 0, 0);
+  line_layout->setSpacing(6);
+  auto* name = text(qs(row.label));
+  auto* box = new QComboBox(line);
+  box->setObjectName(QStringLiteral("refine-choice-") + qs(row.binding->parameter_id));
+  box->setAccessibleName(qs(row.label));
+  const auto options = panels::choice_options(*row.binding);
+  const auto current = actions != nullptr ? actions->parameter_value(*row.binding) : std::nullopt;
+  for (const auto& option : options) {
+    box->addItem(qs(option.label), qs(option.id));
+    if ((current && *current == option.id) || (!current && option.is_default)) box->setCurrentIndex(box->count() - 1);
+    const bool drawn = row.binding->parameter_id != "profile" || option.id == "standard" || option.id == "monochrome";
+    if (!drawn) {
+      if (auto* model = qobject_cast<QStandardItemModel*>(box->model())) {
+        model->item(box->count() - 1)->setEnabled(false);
+        model->item(box->count() - 1)->setToolTip(qtext("refine.profile.pending"));
+      }
+    }
+  }
+  line_layout->addWidget(name);
+  line_layout->addWidget(box, 1);
+  layout->addWidget(line);
+  const bool usable = actions != nullptr && actions->has_photo() && reference_drawn(*row.binding);
+  name->setEnabled(usable);
+  box->setEnabled(usable);
+  if (!usable) return;
+  const panels::SliderBinding bound = *row.binding;
+  QObject::connect(box, QOverload<int>::of(&QComboBox::activated), box, [=](int index) {
+    actions->request_parameter(bound, box->itemData(index).toString().toStdString(), true);
+    if (refresh) refresh->run();
   });
 }
 
@@ -131,12 +189,15 @@ void addColorPanel(QWidget* modules, QVBoxLayout* modules_layout, PageActions* a
   readings->addWidget(lab);
   readings->addStretch();
   layout->addLayout(readings);
+  const Refresh refresh = std::make_shared<EnableRefresh>();
   for (const auto& row : panels::refine_color_rows()) {
     if (row.kind == panels::PanelRowKind::Title) {
       layout->addWidget(disabledLabel(qs(row.label)));
+    } else if (row.kind == panels::PanelRowKind::Choice) {
+      addChoice(modules, layout, row, actions, refresh);
     } else {
       addDisabledSlider(modules, layout, panels::slider_spec(row.label, row.binding), qs(row.object_name), actions,
-                        row.binding);
+                        row.binding, refresh);
     }
   }
 }

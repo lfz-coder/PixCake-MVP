@@ -1,5 +1,7 @@
 #include "page_kit.hpp"
 
+#include "pixcake/capability/capability_registry.hpp"
+
 #include "pixcake_widgets.hpp"
 #include "shell_icons.hpp"
 
@@ -75,6 +77,29 @@ QFrame* workspaceTool(std::string_view list, const CopyItem& item, QWidget* pare
   name->setWordWrap(true);
   layout->addWidget(name);
   return frame;
+}
+
+bool reference_drawn(const ui::panels::SliderBinding& binding) {
+  if (binding.capability_id == "detail") return binding.parameter_id.rfind("grain_", 0) == 0;
+  if (binding.capability_id != "color.global") return false;
+  const std::string& id = binding.parameter_id;
+  if (id == "profile" || id == "selective_mode") return true;
+  for (const char* prefix : {"levels_", "hsl_", "bw_mix_", "selective_", "grading_"}) {
+    if (id.rfind(prefix, 0) == 0) return true;
+  }
+  // Top-level tone and white balance (their parameter ids are their channels).
+  for (const char* top : {"temperature", "tint", "exposure", "contrast", "brightness", "highlights", "shadows",
+                          "whites", "blacks", "texture", "clarity", "dehaze", "vibrance", "saturation"}) {
+    if (id == top) return true;
+  }
+  return false;
+}
+
+std::optional<std::string> parameter_blocked(const PageActions* actions, const ui::panels::SliderBinding& binding) {
+  return parameter_disabled_reason(binding.capability_id, binding.parameter_id,
+                                   [actions](std::string_view capability, std::string_view parameter) {
+                                     return actions->parameter_value({std::string(capability), std::string(parameter)});
+                                   });
 }
 
 void chooseAndImport(QWidget* parent, PageActions* actions) {

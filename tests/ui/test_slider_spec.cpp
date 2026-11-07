@@ -150,6 +150,33 @@ void test_c46_subgroup_labels_bind_to_kernel_modes() {
          "中间调色相，范围 0 到 359，步进待确认，默认 0");
 }
 
+// 黑白混合、颗粒的滑杆和两个枚举行（配置文件、可选颜色调整方式）。
+void test_bw_grain_and_choice_rows() {
+  const auto mix = refine_subgroup_binding("黑白混合-浅绿色");
+  EXPECT(mix && mix->capability_id == "color.global" && mix->parameter_id == "bw_mix_aqua");
+  const auto amount = refine_subgroup_binding("总滑杆");
+  EXPECT(amount && amount->capability_id == "detail" && amount->parameter_id == "grain_amount");
+  const auto colour = refine_subgroup_binding("颗粒颜色");
+  EXPECT(colour && colour->capability_id == "detail" && colour->parameter_id == "grain_color");
+  EXPECT(slider_spec("阴影颗粒度透明度", refine_subgroup_binding("阴影颗粒度透明度")).accessible_name ==
+         "阴影颗粒度透明度，范围 0 到 100，步进 1，默认 30");
+  int choices = 0;
+  for (const auto& row : pixcake::ui::panels::refine_color_rows()) {
+    if (row.kind != pixcake::ui::panels::PanelRowKind::Choice) continue;
+    ++choices;
+    EXPECT(row.binding.has_value());
+    const auto options = pixcake::ui::panels::choice_options(*row.binding);
+    if (row.label == "配置文件") {
+      EXPECT(options.size() == 4 && options[0].label == "标准" && options[0].is_default && options[2].id == "monochrome" &&
+             options[2].label == "黑白");
+    } else {
+      EXPECT(row.label == "调整方式" && options.size() == 2 && options[0].label == "相对" && options[0].is_default &&
+             options[1].id == "absolute");
+    }
+  }
+  EXPECT(choices == 2);
+}
+
 // Q-11：色彩面板的行、显示名与绑定来自同一张表；后期调色复用其分组标题。
 void test_q11_color_panel_rows_come_from_one_table() {
   const auto rows = pixcake::ui::panels::refine_color_rows();
@@ -166,8 +193,8 @@ void test_q11_color_panel_rows_come_from_one_table() {
     }
     EXPECT(pixcake::ui::panels::slider_label_of(spec.accessible_name) == row.label);
   }
-  // 顶层影调 14 + 色阶 5 + HSL 24 + 可选颜色 36 + 颜色分级 13 + 色彩编辑器偏移 3。
-  EXPECT(bound == 95);
+  // 顶层影调 14 + 色阶 5 + HSL 24 + 黑白混合 8 + 可选颜色 36 + 颜色分级 13 + 色彩编辑器偏移 3 + 颗粒 7。
+  EXPECT(bound == 110);
   EXPECT(pending > 0);
   const auto titles = pixcake::ui::panels::refine_post_color_titles();
   EXPECT(titles.size() == 17 && titles.front() == "全图调整" && titles.back() == "创意色彩");
@@ -181,6 +208,7 @@ int main() {
   test_c36_temperature_spec();
   test_c39_all_top_level_labels_match_kernel_modes();
   test_c35_unbound_label_has_no_range();
+  test_bw_grain_and_choice_rows();
   test_c35_missing_kernel_parameter_is_unbound();
   test_c35_local_feather_and_crop_angle_come_from_parameter_modes();
   test_b33_unconfirmed_step_and_default_are_labelled();

@@ -33,7 +33,7 @@ struct SliderSpec {
 std::optional<SliderBinding> refine_color_binding(std::string_view label);
 
 // 精修局部调色面板的显示名到参数的绑定（羽化 → mask/feather）；其他显示名返回 nullopt。
-// 色阶、颜色分级、HSL、可选颜色的子分组滑杆绑定；顶层影调和同名的子分组滑杆互不串。
+// 色阶、颜色分级、HSL、黑白混合、可选颜色、颗粒的子分组滑杆绑定；顶层影调和同名的子分组滑杆互不串。
 std::optional<SliderBinding> refine_subgroup_binding(std::string_view label);
 std::optional<SliderBinding> refine_local_binding(std::string_view label);
 
@@ -41,14 +41,21 @@ std::optional<SliderBinding> refine_local_binding(std::string_view label);
 SliderBinding refine_crop_angle_binding();
 
 // 精修色彩面板的行（显示顺序、显示名、绑定都来自同一张表，代码质量清单 Q-11）。
-enum class PanelRowKind { Title, Slider };
+enum class PanelRowKind { Title, Slider, Choice };
 struct PanelRow {
   PanelRowKind kind = PanelRowKind::Title;
   std::string label;
-  std::optional<SliderBinding> binding;  // 只有滑杆有；没有参数模式时为空
+  std::optional<SliderBinding> binding;  // 滑杆和选择有；没有参数模式时为空
   std::string object_name;               // 冒烟检查要找的几支滑杆
 };
 std::vector<PanelRow> refine_color_rows();
+// 枚举参数（配置文件、可选颜色调整方式）的可选值：稳定标识、显示名、是否默认。顺序与参数模式一致。
+struct ChoiceOption {
+  std::string id;
+  std::string label;
+  bool is_default = false;
+};
+std::vector<ChoiceOption> choice_options(const SliderBinding& binding);
 // 后期调色面板：两项全图/局部，加色彩面板的分组标题。
 std::vector<std::string> refine_post_color_titles();
 const char* refine_color_panel_name();

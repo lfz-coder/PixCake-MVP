@@ -61,6 +61,8 @@ class ShellController final : public PageActions {
   void watch_preview(QObject* owner, std::function<void(const PreviewView&)> show) override;
   const PreviewView& preview_view() const { return view_; }
   std::uint64_t frames_shown() const { return frames_shown_; }
+  // The canvas shows the frame for the newest request (no request still in flight).
+  bool preview_current() const { return session_ && session_->shown_sequence() == session_->latest_sequence(); }
 
  private:
   void read_frames();
