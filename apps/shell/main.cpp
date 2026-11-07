@@ -1103,6 +1103,33 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
     qCritical("grain amount did not draw or unblock its sliders");
     return 8;
   }
+  // Post colour: its exposure slider draws and commits to color.post (a step of its own in the history).
+  {
+    auto& controller = window.controller();
+    QSlider* post_exposure = nullptr;
+    for (auto* candidate : window.findChildren<QSlider*>(QStringLiteral("refine-post-exposure"))) {
+      if (candidate->isVisibleTo(&window)) post_exposure = candidate;
+    }
+    if (post_exposure == nullptr || !post_exposure->isEnabled()) {
+      qCritical("post colour exposure slider missing or disabled");
+      return 8;
+    }
+    const auto steps_before = controller.history().size();
+    const auto shown_before = controller.frames_shown();
+    const double red_before = mean_red(view->image());
+    post_exposure->setValue(std::min(post_exposure->maximum(), post_exposure->value() + 20));
+    if (!wait_frames(window, shown_before + 1, 30'000) || !wait_current(window, 30'000)) {
+      qCritical("no frame after moving post colour exposure");
+      return 8;
+    }
+    const pixcake::ui::panels::SliderBinding post_binding{"color.post", "exposure"};
+    if (controller.history().size() != steps_before + 1 || !controller.parameter_value(post_binding) ||
+        !(mean_red(view->image()) > red_before + 1)) {
+      qCritical("post colour exposure: %zu -> %zu steps, red %.1f -> %.1f", steps_before, controller.history().size(),
+                red_before, mean_red(view->image()));
+      return 8;
+    }
+  }
   // History: original, exposure, profile, grain; the list shows them; undo, redo and a click walk the document.
   {
     auto& controller = window.controller();

@@ -56,6 +56,9 @@ struct ChoiceOption {
   bool is_default = false;
 };
 std::vector<ChoiceOption> choice_options(const SliderBinding& binding);
+// 后期调色“全图调整”下的行：白平衡、影调两组标题和十四支滑杆（绑定 color.post）。滑杆来自色彩面板的同一张表，
+// 只取 color.post 已登记参数模式的那十四支；其余分组（色阶等）后期调色没有登记，不出现。
+std::vector<PanelRow> refine_post_color_rows();
 // 后期调色面板：两项全图/局部，加色彩面板的分组标题。
 std::vector<std::string> refine_post_color_titles();
 const char* refine_color_panel_name();

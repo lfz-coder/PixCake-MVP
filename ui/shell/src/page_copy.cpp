@@ -151,6 +151,7 @@ Texts build_texts() {
   // 导出列表的计费一栏（test 版导出明细：精修效果图、免费功能、实际计费）。
   // 历史（需求 §8.3）。
   t["history.step"] = "%1 %2";
+  t["history.post"] = "后期调色·%1";
   // 筛选与排序（需求 §6.2、§6.3）。
   t["filter.title"] = "筛选与排序";
   t["filter.rating"] = "星级";

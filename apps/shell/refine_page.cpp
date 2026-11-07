@@ -229,7 +229,21 @@ void addModules(QWidget* modules, QVBoxLayout* modules_layout, PageActions* acti
   addDisabledSlider(modules, local, panels::slider_spec(feather, panels::refine_local_binding(feather)), QString());
 
   auto* post = labelPanel(modules, modules_layout, "refine-post-color-labels", moduleDescription("post"));
-  for (const auto& title : panels::refine_post_color_titles()) post->addWidget(disabledLabel(qs(title)));
+  // 后期调色：全图调整是十四支白平衡、影调滑杆（照片打开时可调）；局部调整要蒙版，还没有。
+  {
+    const Refresh refresh = std::make_shared<EnableRefresh>();
+    const auto titles = panels::refine_post_color_titles();
+    post->addWidget(disabledLabel(qs(titles.front())));
+    for (const auto& row : panels::refine_post_color_rows()) {
+      if (row.kind == panels::PanelRowKind::Title) {
+        post->addWidget(disabledLabel(qs(row.label)));
+      } else {
+        addDisabledSlider(modules, post, panels::slider_spec(row.label, row.binding), qs(row.object_name), actions,
+                          row.binding, refresh);
+      }
+    }
+    post->addWidget(disabledLabel(qs(titles[1])));
+  }
 
   addLabelList(labelPanel(modules, modules_layout, "refine-clothing-labels", qtext("refine.clothing.name")),
                "refine-clothing");

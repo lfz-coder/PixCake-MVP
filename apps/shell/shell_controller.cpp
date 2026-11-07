@@ -344,10 +344,13 @@ namespace {
 QString history_text(const preview_channel::PreviewSession::HistoryEntry& entry) {
   if (!entry.label.empty()) return QString::fromStdString(entry.label);
   QString name = QString::fromStdString(entry.capability_id + "/" + entry.parameter_id);
-  for (const auto& row : ui::panels::refine_color_rows()) {
+  auto rows = ui::panels::refine_color_rows();
+  for (auto& row : ui::panels::refine_post_color_rows()) rows.push_back(std::move(row));
+  for (const auto& row : rows) {
     if (row.binding && row.binding->capability_id == entry.capability_id &&
         row.binding->parameter_id == entry.parameter_id) {
       name = QString::fromStdString(row.label);
+      if (entry.capability_id == "color.post") name = qtext("history.post").arg(name);
       break;
     }
   }

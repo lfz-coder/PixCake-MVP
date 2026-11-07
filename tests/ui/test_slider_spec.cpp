@@ -196,6 +196,23 @@ void test_q11_color_panel_rows_come_from_one_table() {
   // 顶层影调 14 + 色阶 5 + HSL 24 + 黑白混合 8 + 可选颜色 36 + 颜色分级 13 + 色彩编辑器偏移 3 + 颗粒 7。
   EXPECT(bound == 110);
   EXPECT(pending > 0);
+  // 后期调色全图调整：十四支滑杆都绑 color.post，范围和色彩面板同一支一致；两组标题。
+  int post_sliders = 0;
+  int post_titles = 0;
+  for (const auto& row : pixcake::ui::panels::refine_post_color_rows()) {
+    if (row.kind == pixcake::ui::panels::PanelRowKind::Title) {
+      ++post_titles;
+      continue;
+    }
+    ++post_sliders;
+    EXPECT(row.binding && row.binding->capability_id == "color.post");
+    const auto global = pixcake::ui::panels::refine_color_binding(row.label);
+    const auto post_spec = pixcake::ui::panels::slider_spec(row.label, row.binding);
+    const auto global_spec = pixcake::ui::panels::slider_spec(row.label, global);
+    EXPECT(post_spec.bound && post_spec.minimum == global_spec.minimum && post_spec.maximum == global_spec.maximum &&
+           post_spec.step == global_spec.step && post_spec.default_value == global_spec.default_value);
+  }
+  EXPECT(post_sliders == 14 && post_titles == 2);
   const auto titles = pixcake::ui::panels::refine_post_color_titles();
   EXPECT(titles.size() == 17 && titles.front() == "全图调整" && titles.back() == "创意色彩");
   EXPECT(std::string(pixcake::ui::panels::refine_color_panel_name()) == "色彩调节");

@@ -250,6 +250,26 @@ std::vector<PanelRow> refine_color_rows() {
   return rows;
 }
 
+std::vector<PanelRow> refine_post_color_rows() {
+  std::vector<PanelRow> rows;
+  bool top = false;  // 只取白平衡、影调（滤镜和色阶之后的分组后期调色没有登记）
+  for (const auto& def : kColorPanel) {
+    if (def.def == Def::Section) top = def.label == "白平衡" || def.label == "影调";
+    if (!top) continue;
+    PanelRow row;
+    row.label = std::string(def.label);
+    if (def.def == Def::Section) {
+      rows.push_back(std::move(row));
+    } else if (def.def == Def::TopSlider && !def.parameter.empty()) {
+      row.kind = PanelRowKind::Slider;
+      row.binding = SliderBinding{"color.post", std::string(def.parameter)};
+      row.object_name = "refine-post-" + std::string(def.parameter);
+      rows.push_back(std::move(row));
+    }
+  }
+  return rows;
+}
+
 std::vector<std::string> refine_post_color_titles() {
   std::vector<std::string> titles(std::begin(kPostColorLead), std::end(kPostColorLead));
   for (const auto& def : kColorPanel) {
