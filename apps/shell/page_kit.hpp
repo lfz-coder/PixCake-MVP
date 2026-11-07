@@ -51,6 +51,7 @@ struct PhotoEntry {
   std::string file_name;
   std::string presence;     // 原图异常时的状态（如“原文件缺失”）；正常为空
   std::string edit_status;  // “已编辑”或空
+  std::int64_t copy = 0;    // 虚拟副本的序号（从 1 递增）；原图为 0
 };
 
 // 导出弹窗要的东西（需求第 19 节）：选中的照片、项目名、第一张原图所在的文件夹、记住的默认值。
@@ -94,6 +95,8 @@ class PageActions {
   virtual void select_photos(const std::vector<std::int64_t>&, std::int64_t) {}
   // 选择变化时回调（导出按钮、“已选 N 张”跟着变）；owner 删除后不再回调。
   virtual void watch_selection(QObject*, std::function<void()>) {}
+  // 创建虚拟副本（需求 §7）：每个编号（原图或副本）各建一个，副本排在原图右边，继承当前全部调整。
+  virtual void request_virtual_copy(const std::vector<std::int64_t>&) {}
   // 在精修打开（精修底部缩略图条单击）。
   virtual void request_open_photo(std::int64_t) {}
   // 图库里看大图：切到图库单视图（图库网格双击，与像素蛋糕一致，不进精修）。

@@ -7,8 +7,10 @@
 
 #include <QFileDialog>
 #include <QListWidget>
+#include <QMenu>
 #include <QPainter>
 #include <QPointer>
+#include <QShortcut>
 
 #include <vector>
 
@@ -154,6 +156,7 @@ QListWidget* photoList(QWidget* parent, PageActions* actions, bool grid, std::fu
     QString label;
     if (grid) {
       label = qs(photo.file_name);
+      if (photo.copy > 0) label += QStringLiteral("\n") + qtext("library.copy.tag").arg(photo.copy);
       for (const auto* state : {&photo.presence, &photo.edit_status}) {
         if (!state->empty()) label += QStringLiteral("\n") + qs(*state);
       }
@@ -172,6 +175,33 @@ QListWidget* photoList(QWidget* parent, PageActions* actions, bool grid, std::fu
       const auto id = std::int64_t{item->data(Qt::UserRole).toLongLong()};
       item->setSelected(std::find(selected.begin(), selected.end(), id) != selected.end());
     }
+  }
+  // 右键“创建虚拟副本”（多选时“批量创建虚拟副本”）和 ⌘'：图库按选中的照片，缩略图条按右键点中的那张。
+  list->setContextMenuPolicy(Qt::CustomContextMenu);
+  QObject::connect(list, &QWidget::customContextMenuRequested, list, [list, actions, grid](const QPoint& at) {
+    QListWidgetItem* under = list->itemAt(at);
+    if (under == nullptr) return;
+    std::vector<std::int64_t> ids;
+    if (grid) {
+      ids = actions->selected_photos();
+      const auto hit = std::int64_t{under->data(Qt::UserRole).toLongLong()};
+      if (std::find(ids.begin(), ids.end(), hit) == ids.end()) ids = {hit};
+    } else {
+      ids = {std::int64_t{under->data(Qt::UserRole).toLongLong()}};
+    }
+    QMenu menu(list);
+    menu.setObjectName(QStringLiteral("photo-menu"));
+    QAction* create = menu.addAction(qtext(ids.size() > 1 ? "library.copy.batch" : "library.copy.create"));
+    create->setObjectName(QStringLiteral("photo-menu-copy"));
+    if (menu.exec(list->viewport()->mapToGlobal(at)) == create) actions->request_virtual_copy(ids);
+  });
+  if (grid) {
+    auto* shortcut = new QShortcut(QKeySequence(QStringLiteral("Ctrl+'")), list);
+    shortcut->setContext(Qt::WidgetWithChildrenShortcut);
+    QObject::connect(shortcut, &QShortcut::activated, list, [actions] {
+      const auto ids = actions->selected_photos();
+      if (!ids.empty()) actions->request_virtual_copy(ids);
+    });
   }
   // Grid: a click selects, a double-click (activation) calls `open`; strip: a click calls `open`.
   const auto id_of = [](QListWidgetItem* item) { return std::int64_t{item->data(Qt::UserRole).toLongLong()}; };

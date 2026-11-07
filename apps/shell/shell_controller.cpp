@@ -144,7 +144,7 @@ void ShellController::request_thumbnail(std::int64_t photo_id) {
   if (projects_->resolve_photo(photo_id, path, diagnostic) != ResultCode::Ok) return;  // missing: no thumbnail
   std::vector<std::uint8_t> document;
   if (projects_->document_bytes(photo_id, document) != ResultCode::Ok) document.clear();  // show the original
-  if (thumbnails_->request(photo_id, project_session::ProjectSession::document_id(photo_id), path,
+  if (thumbnails_->request(photo_id, projects_->image_id(photo_id), path,
                            std::move(document), kThumbnailEdge, diagnostic) != ResultCode::Ok) {
     qWarning("thumbnail request failed: %s", diagnostic.c_str());
   }
@@ -164,7 +164,10 @@ void ShellController::read_thumbnails() {
       thumbnail_requested_.clear();  // a later request starts a new one
       break;
     }
-    if (thumbnail.code != ResultCode::Ok) continue;
+    if (thumbnail.code != ResultCode::Ok) {
+      qWarning("thumbnail %lld failed: %s", static_cast<long long>(thumbnail.key), thumbnail.diagnostic.c_str());
+      continue;
+    }
     QImage image(thumbnail.rgba.data(), static_cast<int>(thumbnail.width), static_cast<int>(thumbnail.height),
                  static_cast<qsizetype>(thumbnail.stride), QImage::Format_RGBA8888_Premultiplied);
     const QImage owned = image.copy();
@@ -265,10 +268,34 @@ std::vector<PhotoEntry> ShellController::photos() const {
     for (const auto& row : rows) {
       // Only an abnormal original (missing, delete pending) is worth a line.
       out.push_back({row.id, row.file_name, row.presence == kPresenceEditable ? std::string() : row.presence,
-                     row.edit_status});
+                     row.edit_status, projects_->copy_sequence(row.id)});
     }
   }
   return out;
+}
+
+void ShellController::request_virtual_copy(const std::vector<std::int64_t>& photo_ids) {
+  if (!projects_ || !current_project_ || photo_ids.empty()) return;
+  std::vector<std::int64_t> created;
+  for (const std::int64_t id : photo_ids) {
+    std::int64_t copy = 0;
+    std::string diagnostic;
+    const ResultCode code = projects_->create_virtual_copy(id, copy, diagnostic);
+    if (code != ResultCode::Ok) {
+      qWarning("virtual copy: %s", diagnostic.c_str());
+      show_notices({}, NoticeScene::OpenDocument, code);
+      continue;
+    }
+    created.push_back(copy);
+  }
+  if (created.empty()) {
+    if (changed_) changed_();
+    return;
+  }
+  request_thumbnails();
+  // 新副本成为选中的（图库里一眼看到它们在哪）。
+  select_photos(created, created.back());
+  if (changed_) changed_();
 }
 
 void ShellController::request_open_photo(std::int64_t photo_id) {
@@ -294,7 +321,7 @@ void ShellController::open_project_photo(std::int64_t photo_id) {
   }
   auto options = preview_options_;
   options.document_directory = projects_->document_directory();
-  options.document_id = project_session::ProjectSession::document_id(photo_id);
+  options.document_id = projects_->document_name(photo_id);
   if (open_photo(path, options, diagnostic) == ResultCode::Ok) {
     session_->on_committed([this, photo_id] {
       projects_->mark_edited(photo_id);

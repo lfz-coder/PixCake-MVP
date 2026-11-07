@@ -16,6 +16,16 @@ ProjectResult BusinessCommands::create_project(ProjectLibrary& library, std::str
   return library.create_project(std::move(name), std::move(origin), cloud_marked);
 }
 
+ProjectResult BusinessCommands::create_virtual_copy(ProjectLibrary& library, std::int64_t photo_id,
+                                                    std::string document_id) {
+  if (!session_.signed_in()) {
+    ProjectResult refused;
+    refused.code = ResultCode::StateConflict;
+    return refused;
+  }
+  return library.create_virtual_copy(photo_id, std::move(document_id));
+}
+
 image_import::ImportBatchResult BusinessCommands::import_into(
     image_import::ImportCoordinator& importer, std::int64_t project_id,
     const std::vector<image_import::ImportCandidate>& candidates) {

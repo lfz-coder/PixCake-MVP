@@ -1,6 +1,8 @@
 // The shell's project flow without Qt: import into a new project (5.2 naming,
 // folders expanded, refused files explained), list, resolve originals through
 // bookmarks (S-10), mark edited, and nothing at all while signed out (S-25).
+#include "pixcake/editdoc/edit_document.hpp"
+#include "pixcake/persist/file_system.hpp"
 #include "pixcake/project_session/project_session.hpp"
 
 #include <sys/stat.h>
@@ -122,6 +124,43 @@ int main() {
   // Never edited: no document bytes; the library does not invent one.
   std::vector<std::uint8_t> document;
   assert(projects->document_bytes(imported.photo_ids[0], document) == ResultCode::Ok && document.empty());
+
+  // 虚拟副本（需求 §7）：编号是负数；排在原图右边、按序号；继承已提交的调整；原图和图片标识不变。
+  {
+    const std::int64_t a = imported.photo_ids[0];
+    const std::string a_document = projects->document_directory() + "/" + ProjectSession::document_id(a) + ".pxedit";
+    PosixFileSystem files;
+    auto edited = EditDocument::create(ProjectSession::document_id(a));
+    assert(edited->set_preview("color.global", "exposure", "1.00") == ResultCode::Ok);
+    assert(edited->commit_preview(0, "color.global", "exposure", phase_one_version_limits(), files, a_document) ==
+           ResultCode::Ok);
+    std::int64_t copy = 0;
+    assert(projects->create_virtual_copy(a, copy, diagnostic) == ResultCode::Ok && copy < 0);
+    assert(ProjectSession::is_copy(copy) && !ProjectSession::is_copy(a));
+    assert(projects->source_photo(copy) == a && projects->copy_sequence(copy) == 1 && projects->copy_sequence(a) == 0);
+    assert(projects->document_name(copy) == "photo-" + std::to_string(a) + "-copy-1");
+    assert(projects->image_id(copy) == ProjectSession::document_id(a));
+    std::vector<std::uint8_t> copied;
+    assert(projects->document_bytes(copy, copied) == ResultCode::Ok && !copied.empty());
+    assert(EditDocument::decode(copied) && EditDocument::decode(copied)->image_id() == ProjectSession::document_id(a));
+    // A copy of the copy is the next one; the list is original, copies, then the next original.
+    std::int64_t second = 0;
+    assert(projects->create_virtual_copy(copy, second, diagnostic) == ResultCode::Ok && second < copy);
+    assert(projects->copy_sequence(second) == 2 && projects->source_photo(second) == a);
+    assert(projects->list_photos(imported.project_id, photos) == ResultCode::Ok && photos.size() == 4);
+    assert(photos[0].id == a && photos[1].id == copy && photos[2].id == second && photos[3].id == imported.photo_ids[1]);
+    assert(photos[1].file_name == photos[0].file_name);
+    // Same original file; the edit state of the original is shared.
+    std::string copy_path;
+    assert(projects->resolve_photo(copy, copy_path, diagnostic) == ResultCode::Ok && copy_path == shoot + "/a.BMP");
+    assert(projects->load_photo(copy, row) == ResultCode::Ok && row && row->id == copy && row->absolute_path == copy_path);
+    assert(projects->mark_edited(copy) == ResultCode::Ok);
+    // Signed out: nothing is created.
+    session.in = false;
+    std::int64_t refused_copy = 0;
+    assert(projects->create_virtual_copy(a, refused_copy, diagnostic) == ResultCode::StateConflict);
+    session.in = true;
+  }
 
   // Where a project was left: refine by default, then whatever was remembered.
   const auto first_project = imported.project_id;

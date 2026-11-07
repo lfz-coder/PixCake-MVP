@@ -149,6 +149,10 @@ Texts build_texts() {
   // 本机账本的张数：同一张图扣过就不再扣，原图和免费效果图不扣。
   t["export.sheets"] = "本次预计扣除 %1 张，剩余 %2 张";
   // 导出列表的计费一栏（test 版导出明细：精修效果图、免费功能、实际计费）。
+  // 虚拟副本（需求 §7）。
+  t["library.copy.create"] = "创建虚拟副本";
+  t["library.copy.batch"] = "批量创建虚拟副本";
+  t["library.copy.tag"] = "副本 %1";
   t["export.charge.pending"] = "待记账";
   t["export.charge.charged"] = "扣 1 张";
   t["export.charge.repeat"] = "不扣：这张图已扣过";

@@ -588,6 +588,65 @@ int smoke_library_batch_export(pixcake::shell::ShellWindow& window, QListWidget*
   return controller.selected_photos().size() == 1 ? 0 : 11;
 }
 
+// 虚拟副本（需求 §7）：创建后副本紧跟原图、带“副本 1”、成为选中的；有自己的缩略图，和原图的效果一致。
+int smoke_virtual_copy(pixcake::shell::ShellWindow& window) {
+  auto& controller = window.controller();
+  controller.request_page(Page::Library);
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  const auto before = controller.photos();
+  if (before.empty()) return 12;
+  const auto source = before.front().id;  // the edited photo
+  controller.request_virtual_copy({source});
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  const auto after = controller.photos();
+  auto* list = library_photos(window);
+  const auto selected = controller.selected_photos();
+  if (after.size() != before.size() + 1 || after[0].id != source || after[1].id >= 0 || after[1].copy != 1 ||
+      after[1].file_name != after[0].file_name || list == nullptr || list->count() != static_cast<int>(after.size()) ||
+      !list->item(1)->text().contains(qtext_for_smoke("library.copy.tag").arg(1)) || selected.size() != 1 ||
+      selected.front() != after[1].id) {
+    qCritical("virtual copy: %zu photos (was %zu), second id %lld copy %lld", after.size(), before.size(),
+              after.size() > 1 ? static_cast<long long>(after[1].id) : 0LL,
+              after.size() > 1 ? static_cast<long long>(after[1].copy) : 0LL);
+    return 12;
+  }
+  QElapsedTimer timer;
+  timer.start();
+  while (mean_red(controller.thumbnail(after[1].id)) < 200 && timer.elapsed() < 60'000) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents | QEventLoop::WaitForMoreEvents, 50);
+  }
+  const double copy_red = mean_red(controller.thumbnail(after[1].id));
+  if (!(copy_red > 200)) {
+    qCritical("the copy's thumbnail does not carry the edit (red %.1f)", copy_red);
+    return 12;
+  }
+  // The copy opens in refine with its own document: the edit carried over.
+  controller.request_open_photo(after[1].id);
+  if (controller.current_photo() != std::optional<std::int64_t>(after[1].id) || !controller.has_photo()) {
+    qCritical("the copy does not open in refine");
+    return 12;
+  }
+  // A copy of a photo that was never edited has no document of its own yet: still a thumbnail (the original's).
+  const auto plain = before.back().id;
+  controller.request_virtual_copy({plain});
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  std::int64_t plain_copy = 0;
+  for (const auto& entry : controller.photos()) {
+    if (entry.copy > 0 && controller.selected_photos() == std::vector<std::int64_t>{entry.id}) plain_copy = entry.id;
+  }
+  timer.restart();
+  while (plain_copy != 0 && controller.thumbnail(plain_copy).isNull() && timer.elapsed() < 30'000) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents | QEventLoop::WaitForMoreEvents, 50);
+  }
+  if (plain_copy == 0 || controller.thumbnail(plain_copy).isNull() || mean_red(controller.thumbnail(plain_copy)) > 160) {
+    qCritical("the copy of an unedited photo has no (or an edited) thumbnail: %lld", static_cast<long long>(plain_copy));
+    return 12;
+  }
+  std::printf("virtual copy ok: copy %lld follows the original, thumbnail red %.1f\n",
+              static_cast<long long>(after[1].id), copy_red);
+  return 0;
+}
+
 int smoke_import_flow(pixcake::shell::ShellWindow& window, const std::vector<std::string>& paths,
                       const std::string& expected_project) {
   auto& controller = window.controller();
@@ -725,6 +784,7 @@ int smoke_import_flow(pixcake::shell::ShellWindow& window, const std::vector<std
     QTemporaryDir exported;
     if (const int code = smoke_export(window, exported.path()); code != 0) return code;
   }
+  if (const int copied = smoke_virtual_copy(window); copied != 0) return copied;
   if (const int dropped = smoke_icon_drop(window, paths); dropped != 0) return dropped;
   std::printf("import flow ok: project %s, %zu photo(s), reopened red %.1f, thumbnails edited %.1f original %.1f\n",
               expected_project.c_str(), photos.size(), red, edited_red, original_red);

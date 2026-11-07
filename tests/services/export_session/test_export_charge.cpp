@@ -233,11 +233,24 @@ int main() {
   assert(rows[0].charge == ExportCharge::Repeat && rows[1].charge == ExportCharge::Repeat &&
          rows[2].charge == ExportCharge::Charged);
 
+  // A virtual copy of p (it inherits the refined edit) is the same picture: exported, not charged.
+  {
+    std::int64_t copy = 0;
+    assert(projects->create_virtual_copy(photo["p.png"], copy, diagnostic) == ResultCode::Ok && copy < 0);
+    assert(exports->estimate({copy}).refined == 1 && exports->estimate({copy}).sheets == 0);
+    request.photo_ids = {copy};
+    assert(exports->submit(request, notices, diagnostic) == ResultCode::Ok && notices.empty());
+    rows = settle(*exports);
+    assert(rows[0].status == "成功" && rows[0].photo_id == photo["p.png"]);
+    assert(exports->remaining_sheets() == 0);
+    assert(exports->rows()[0].charge == ExportCharge::Repeat);
+  }
+
   // The mirrored picture is new: no sheet left, refused before it is queued.
   request.photo_ids = {photo["q.png"]};
   assert(exports->submit(request, notices, diagnostic) == ResultCode::StateConflict);
   assert(notices.size() == 1 && notices[0] == "q.png: 剩余张数不足");
-  assert(exports->rows().size() == 5);
+  assert(exports->rows().size() == 6);
 
   // ...but with only free tools it exports, free.
   const std::string q_document = project_session::ProjectSession::document_id(photo["q.png"]);

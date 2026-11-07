@@ -66,6 +66,7 @@ class ShellController final : public PageActions {
   void select_photos(const std::vector<std::int64_t>& photo_ids, std::int64_t primary) override;
   void watch_selection(QObject* owner, std::function<void()> changed) override;
   void request_open_photo(std::int64_t photo_id) override;
+  void request_virtual_copy(const std::vector<std::int64_t>& photo_ids) override;
   void request_view_photo(std::int64_t photo_id) override;
   void request_library_view(const std::string& view) override;
   std::optional<std::int64_t> current_project() const { return current_project_; }

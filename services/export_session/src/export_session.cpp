@@ -209,7 +209,7 @@ ResultCode ExportSession::submit(const ExportRequest& request, std::vector<std::
     std::vector<std::uint8_t> document;
     if (projects_.document_bytes(photo_id, document) != ResultCode::Ok || document.empty()) {
       // Never edited (or the document is unreadable): the original as it is.
-      document = EditDocument::create(ProjectSession::document_id(photo_id))->encode();
+      document = EditDocument::create(projects_.image_id(photo_id))->encode();
     }
     const auto decoded = EditDocument::decode(document);
     if (!decoded) {
@@ -266,7 +266,8 @@ ResultCode ExportSession::submit(const ExportRequest& request, std::vector<std::
       job.export_id = next_export_id();
       if (batch_id.empty()) batch_id = "batch-" + job.export_id.substr(4);
       job.batch_id = batch_id;
-      job.original_id = ProjectSession::document_id(photo_id);
+      // 副本沿用原图的图片标识（文档里存的就是它），导出进程核对的也是它。
+      job.original_id = decoded->image_id();
       job.document_revision = decoded->revision();
       job.document_snapshot = document;
       job.destination_path = destination;
@@ -333,7 +334,7 @@ ResultCode ExportSession::resume(std::string& diagnostic) {
 }
 
 std::string ExportSession::picture_identity(std::int64_t photo_id, const std::vector<std::string>& also) {
-  const std::string fallback = ProjectSession::document_id(photo_id);
+  const std::string fallback = projects_.image_id(photo_id);
   std::string source;
   std::string reason;
   std::string fingerprint;

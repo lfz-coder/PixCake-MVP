@@ -173,16 +173,100 @@ ResultCode ProjectSession::list_projects(std::vector<ProjectRow>& out) const {
   return code;
 }
 
+namespace {
+
+// 副本在条目列表里用原图的行，只换编号。
+PhotoRow copy_row(const PhotoRow& source, std::int64_t copy_id) {
+  PhotoRow row = source;
+  row.id = -copy_id;
+  return row;
+}
+
+}  // namespace
+
+std::int64_t ProjectSession::source_photo(std::int64_t item) const {
+  if (item >= 0) return item;
+  std::optional<VirtualCopyRow> copy;
+  if (library_->load_virtual_copy(-item, copy) != ResultCode::Ok || !copy) return 0;
+  return copy->source_photo_id;
+}
+
+std::int64_t ProjectSession::copy_sequence(std::int64_t item) const {
+  if (item >= 0) return 0;
+  std::optional<VirtualCopyRow> copy;
+  if (library_->load_virtual_copy(-item, copy) != ResultCode::Ok || !copy) return 0;
+  return copy->sequence;
+}
+
+std::string ProjectSession::document_name(std::int64_t item) const {
+  if (item >= 0) return document_id(item);
+  std::optional<VirtualCopyRow> copy;
+  if (library_->load_virtual_copy(-item, copy) != ResultCode::Ok || !copy) return "copy-" + std::to_string(-item);
+  return copy->document_id;
+}
+
+std::string ProjectSession::image_id(std::int64_t item) const { return document_id(source_photo(item)); }
+
+ResultCode ProjectSession::create_virtual_copy(std::int64_t item, std::int64_t& new_item, std::string& diagnostic) {
+  new_item = 0;
+  const std::int64_t source = source_photo(item);
+  std::vector<VirtualCopyRow> copies;
+  if (source == 0 || library_->list_virtual_copies(source, copies) != ResultCode::Ok) {
+    diagnostic = "photo is not in the project library";
+    return ResultCode::StateConflict;
+  }
+  const std::int64_t sequence = copies.empty() ? 1 : copies.back().sequence + 1;
+  const std::string name = document_id(source) + "-copy-" + std::to_string(sequence);
+  const std::string from = document_directory_ + "/" + document_name(item) + ".pxedit";
+  if (files_.exists(from)) {
+    auto copy = EditDocument::create(image_id(item));
+    const LoadResult copied = EditDocument::copy_committed(files_, from, document_directory_ + "/" + name + ".pxedit",
+                                                           phase_one_version_limits(), *copy);
+    if (!copied.code || *copied.code != ResultCode::Ok) {
+      diagnostic = "the edit document could not be copied";
+      return copied.code ? *copied.code : ResultCode::IoFailed;
+    }
+  }
+  const ProjectResult created = commands_.create_virtual_copy(*library_, source, name);
+  if (created.code != ResultCode::Ok) {
+    diagnostic = created.notice;
+    return created.code;
+  }
+  new_item = -created.id;
+  diagnostic.clear();
+  return ResultCode::Ok;
+}
+
 ResultCode ProjectSession::list_photos(std::int64_t project_id, std::vector<PhotoRow>& out) const {
-  return library_->list_photos(project_id, out);
+  std::vector<PhotoRow> photos;
+  const ResultCode code = library_->list_photos(project_id, photos);
+  out.clear();
+  for (auto& photo : photos) {
+    const PhotoRow original = photo;
+    out.push_back(std::move(photo));
+    // 副本跟在原图右边，按序号；进了回收站的不显示。
+    std::vector<VirtualCopyRow> copies;
+    if (library_->list_virtual_copies(original.id, copies) != ResultCode::Ok) continue;
+    for (const auto& copy : copies) {
+      std::optional<TrashRow> trashed;
+      if (library_->load_trash(kTrashVirtualCopy, copy.id, trashed) == ResultCode::Ok && trashed) continue;
+      out.push_back(copy_row(original, copy.id));
+    }
+  }
+  return code;
 }
 
 ResultCode ProjectSession::load_photo(std::int64_t photo_id, std::optional<PhotoRow>& out) const {
-  return library_->load_photo(photo_id, out);
+  if (photo_id >= 0) return library_->load_photo(photo_id, out);
+  const std::int64_t source = source_photo(photo_id);
+  const ResultCode code = library_->load_photo(source, out);
+  if (code == ResultCode::Ok && out) out = copy_row(*out, -photo_id);
+  return code;
 }
 
-ResultCode ProjectSession::resolve_photo(std::int64_t photo_id, std::string& absolute_path, std::string& diagnostic) {
+ResultCode ProjectSession::resolve_photo(std::int64_t item, std::string& absolute_path, std::string& diagnostic) {
   absolute_path.clear();
+  const std::int64_t photo_id = source_photo(item);
   std::optional<PhotoRow> photo;
   if (library_->load_photo(photo_id, photo) != ResultCode::Ok || !photo) {
     diagnostic = "photo is not in the project library";
@@ -204,14 +288,14 @@ ResultCode ProjectSession::resolve_photo(std::int64_t photo_id, std::string& abs
 }
 
 ResultCode ProjectSession::mark_edited(std::int64_t photo_id) {
-  return library_->mark_photo_edited(photo_id, clock_.unix_seconds()).code;
+  return library_->mark_photo_edited(source_photo(photo_id), clock_.unix_seconds()).code;
 }
 
 ResultCode ProjectSession::document_bytes(std::int64_t photo_id, std::vector<std::uint8_t>& out) {
   out.clear();
-  const std::string path = document_directory_ + "/" + document_id(photo_id) + ".pxedit";
+  const std::string path = document_directory_ + "/" + document_name(photo_id) + ".pxedit";
   if (!files_.exists(path)) return ResultCode::Ok;
-  auto document = EditDocument::create(document_id(photo_id));
+  auto document = EditDocument::create(image_id(photo_id));
   // load() falls back to the backup and reports a document recovered empty.
   const LoadResult loaded = EditDocument::load(*document, files_, path, phase_one_version_limits());
   if (loaded.code && *loaded.code != ResultCode::Ok) return *loaded.code;

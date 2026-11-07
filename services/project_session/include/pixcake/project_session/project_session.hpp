@@ -57,6 +57,19 @@ class ProjectSession {
   // Adds photos to an existing project (dropping onto the refine page).
   ImportOutcome import_into(std::int64_t project_id, const std::vector<std::string>& paths);
 
+  // 虚拟副本（需求 §7）：编号用负数，-副本号；原图是正数的照片编号。照片编号能出现的地方都能用副本编号：
+  // 列表、精修打开、缩略图、导出。副本有自己的编辑文档，原图文件和原图的图片标识不变（同一张图）。
+  static bool is_copy(std::int64_t item) { return item < 0; }
+  // 副本的原图编号；原图自己返回自己。
+  std::int64_t source_photo(std::int64_t item) const;
+  // 副本在原图里的序号（从 1 递增）；原图为 0。
+  std::int64_t copy_sequence(std::int64_t item) const;
+  // 这个条目的编辑文档文件名（不含 .pxedit）和文档里的图片标识（副本沿用原图的）。
+  std::string document_name(std::int64_t item) const;
+  std::string image_id(std::int64_t item) const;
+  // 复制原图或副本当前已提交的调整，新副本排在原图的副本最后；new_item 是新副本的编号。
+  ResultCode create_virtual_copy(std::int64_t item, std::int64_t& new_item, std::string& diagnostic);
+
   ResultCode list_projects(std::vector<ProjectRow>& out) const;
   ResultCode list_photos(std::int64_t project_id, std::vector<PhotoRow>& out) const;
   ResultCode load_photo(std::int64_t photo_id, std::optional<PhotoRow>& out) const;
