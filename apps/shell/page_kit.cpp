@@ -183,6 +183,15 @@ std::string toggledColor(PageActions* actions, const std::vector<std::int64_t>& 
   return all_same ? std::string() : color;
 }
 
+QShortcut* bindShortcut(QWidget* owner, std::string_view id, std::function<void()> run,
+                        Qt::ShortcutContext context) {
+  auto* shortcut = new QShortcut(QKeySequence(qs(ui::shell::shortcut_key(id))), owner);
+  shortcut->setObjectName(QStringLiteral("shortcut-") + QString::fromUtf8(id.data(), static_cast<int>(id.size())));
+  shortcut->setContext(context);
+  QObject::connect(shortcut, &QShortcut::activated, owner, std::move(run));
+  return shortcut;
+}
+
 QListWidget* photoList(QWidget* parent, PageActions* actions, bool grid, std::function<void(std::int64_t)> open) {
   const int side = grid ? 140 : 56;
   auto* list = new QListWidget(parent);
@@ -271,35 +280,30 @@ QListWidget* photoList(QWidget* parent, PageActions* actions, bool grid, std::fu
     if (chosen == create) actions->request_virtual_copy(ids);
     if (chosen == remove && confirmDeletePhotos(list->window(), ids.size())) actions->request_delete_photos(ids);
   });
-  if (grid) {
-    auto* shortcut = new QShortcut(QKeySequence(QStringLiteral("Ctrl+'")), list);
-    shortcut->setContext(Qt::WidgetWithChildrenShortcut);
-    QObject::connect(shortcut, &QShortcut::activated, list, [actions] {
-      const auto ids = actions->selected_photos();
-      if (!ids.empty()) actions->request_virtual_copy(ids);
-    });
-  }
-  // 键盘标记（需求 §6.1）：0–5 星级，P 选取、X 排除、U 移除，6–9 红黄绿蓝（再按取消；紫色只能用鼠标）。
+  // 创建副本 ⌘'（图库按选中的；缩略图条按当前这张）和键盘标记（需求 §6.1）：0–5 星级，P 选取、X 排除、U 移除，
+  // 6–9 红黄绿蓝（再按取消；紫色只能用鼠标）。键都来自快捷键表。
   {
-    const auto bind = [list, actions, grid](const QString& key, std::function<void(const std::vector<std::int64_t>&)> run) {
-      auto* shortcut = new QShortcut(QKeySequence(key), list);
-      shortcut->setContext(Qt::WidgetWithChildrenShortcut);
-      QObject::connect(shortcut, &QShortcut::activated, list, [actions, grid, run] {
-        const auto ids = markTargets(actions, grid);
-        if (!ids.empty()) run(ids);
-      });
+    const auto bind = [list, actions, grid](std::string_view id,
+                                            std::function<void(const std::vector<std::int64_t>&)> run) {
+      bindShortcut(list, id,
+                   [actions, grid, run] {
+                     const auto ids = markTargets(actions, grid);
+                     if (!ids.empty()) run(ids);
+                   },
+                   Qt::WidgetWithChildrenShortcut);
     };
+    bind("virtual-copy", [actions](const auto& ids) { actions->request_virtual_copy(ids); });
     for (int stars = 0; stars <= kRatingMax; ++stars) {
-      bind(QString::number(stars), [actions, stars](const auto& ids) { actions->request_rating(ids, stars); });
+      bind("rating-" + std::to_string(stars), [actions, stars](const auto& ids) { actions->request_rating(ids, stars); });
     }
-    bind(QStringLiteral("P"), [actions](const auto& ids) { actions->request_flag(ids, kFlagPick); });
-    bind(QStringLiteral("X"), [actions](const auto& ids) { actions->request_flag(ids, kFlagExclude); });
-    bind(QStringLiteral("U"), [actions](const auto& ids) { actions->request_flag(ids, std::string()); });
-    const char* keyed[] = {kColorRed, kColorYellow, kColorGreen, kColorBlue};
-    for (int index = 0; index < 4; ++index) {
-      const std::string color = keyed[index];
-      bind(QString::number(6 + index),
-           [actions, color](const auto& ids) { actions->request_color(ids, toggledColor(actions, ids, color)); });
+    bind("flag-pick", [actions](const auto& ids) { actions->request_flag(ids, kFlagPick); });
+    bind("flag-exclude", [actions](const auto& ids) { actions->request_flag(ids, kFlagExclude); });
+    bind("flag-clear", [actions](const auto& ids) { actions->request_flag(ids, std::string()); });
+    const std::pair<const char*, const char*> keyed[] = {
+        {"color-red", kColorRed}, {"color-yellow", kColorYellow}, {"color-green", kColorGreen}, {"color-blue", kColorBlue}};
+    for (const auto& [id, color] : keyed) {
+      const std::string name = color;
+      bind(id, [actions, name](const auto& ids) { actions->request_color(ids, toggledColor(actions, ids, name)); });
     }
   }
   // Grid: a click selects, a double-click (activation) calls `open`; strip: a click calls `open`.

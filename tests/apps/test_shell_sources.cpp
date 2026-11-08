@@ -121,6 +121,19 @@ void test_q11_page_copy_single_source() {
   }
 }
 
+// 快捷键只有一个来源：ui/shell 的快捷键表。apps/shell 里不写按键字面量（Ctrl+、Shift+、Alt+、Meta+ 开头的字符串）。
+void test_shortcuts_come_from_the_table() {
+  for (const auto& path : sources({"apps/shell"})) {
+    for (const auto& literal : string_literals(read(path))) {
+      for (const char* prefix : {"Ctrl+", "Shift+", "Alt+", "Meta+", "Cmd+"}) {
+        if (literal.rfind(prefix, 0) == 0) {
+          fail(repo_path(path) + " writes the key \"" + literal + "\"; take it from the shortcut table");
+        }
+      }
+    }
+  }
+}
+
 void test_q12_pages_only_draw() {
   const std::vector<std::string> forbidden = {".navigate(", ".open_project(", ".signed_in(", ".signed_out(",
                                               ".post_notice(", "CommandGate", "BusinessCommands", "ShellDisplay&"};
@@ -148,6 +161,7 @@ void test_q12_pages_only_draw() {
 int main() {
   test_q11_shell_lines_within_160();
   test_q11_page_copy_single_source();
+  test_shortcuts_come_from_the_table();
   test_q12_pages_only_draw();
   if (g_failures != 0) {
     std::fprintf(stderr, "%d failure(s)\n", g_failures);

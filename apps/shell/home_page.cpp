@@ -68,6 +68,14 @@ QFrame* projectList(QWidget* parent, PageActions* actions) {
       actions->request_delete_project(under->data(Qt::UserRole).toLongLong());
     }
   });
+  bindShortcut(list, "home-delete",
+               [list, actions] {
+                 QListWidgetItem* item = list->currentItem();
+                 if (item != nullptr && confirmDeleteProject(list->window(), item->text())) {
+                   actions->request_delete_project(item->data(Qt::UserRole).toLongLong());
+                 }
+               },
+               Qt::WidgetShortcut);
   QObject::connect(list, &QListWidget::itemActivated, list, [actions](QListWidgetItem* item) {
     actions->request_open_project(item->data(Qt::UserRole).toLongLong());
   });
@@ -159,6 +167,7 @@ QWidget* buildHomePage(const PageContext& context) {
   if (actions->can_import()) {
     // 照片导入可选图片或文件夹，也接受拖入（需求 5.2）。
     import->onClicked([import, actions] { chooseAndImport(import, actions); });
+    bindShortcut(page, "create-project", [import, actions] { chooseAndImport(import, actions); });
     import->onDropped([actions](const std::vector<std::string>& paths) { actions->request_import(paths); });
     auto* folder = action(qtext("home.import.folder"), import, true);
     folder->setObjectName(QStringLiteral("home-import-folder"));

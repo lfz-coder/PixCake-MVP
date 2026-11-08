@@ -77,13 +77,20 @@ QWidget* buildLibraryPage(const PageContext& context) {
   outer->addWidget(controls);
 
   // 图库里：⌘C 复制选中的那张的效果，⌘V 粘贴到选中的全部，⇧⌘S 同步到选中图片（需求 §18）。
-  auto* copy_effect = new QShortcut(QKeySequence(QStringLiteral("Ctrl+C")), page);
-  QObject::connect(copy_effect, &QShortcut::activated, page, [actions] { actions->request_copy_effect(); });
-  auto* paste_effect = new QShortcut(QKeySequence(QStringLiteral("Ctrl+V")), page);
-  QObject::connect(paste_effect, &QShortcut::activated, page, [actions] { actions->request_paste_effect(); });
-  auto* sync_effect = new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+S")), page);
-  QObject::connect(sync_effect, &QShortcut::activated, page, [page, actions] {
+  bindShortcut(page, "copy-effect", [actions] { actions->request_copy_effect(); });
+  bindShortcut(page, "paste-effect", [actions] { actions->request_paste_effect(); });
+  bindShortcut(page, "sync-effect", [page, actions] {
     if (actions->has_photo() || !actions->selected_photos().empty()) openSyncDialog(page, actions);
+  });
+  bindProjectShortcuts(page, actions);
+  bindShortcut(page, "grid-view", [actions] { actions->request_library_view("grid"); });
+  bindShortcut(page, "single-view", [actions] { actions->request_library_view("single"); });
+  bindShortcut(page, "enter-refine", [actions] {
+    if (const auto photo = actions->current_photo()) actions->request_open_photo(*photo);
+  });
+  bindShortcut(page, "library-delete", [page, actions] {
+    const auto ids = actions->selected_photos();
+    if (!ids.empty() && confirmDeletePhotos(page->window(), ids.size())) actions->request_delete_photos(ids);
   });
 
   auto* content = new QHBoxLayout;
@@ -114,6 +121,8 @@ QWidget* buildLibraryPage(const PageContext& context) {
   } else {
     // 当前项目的照片：单击选中，双击看大图。缩略图由 renderd 生成，到了就补上。
     auto* list = photoList(grid, actions, true, view);
+    bindShortcut(page, "select-all", [list] { list->selectAll(); });
+    bindShortcut(page, "deselect", [list] { list->clearSelection(); });
     grid_layout->addWidget(text(qtext("library.open.hint"), true));
     grid_layout->addWidget(list, 1);
   }

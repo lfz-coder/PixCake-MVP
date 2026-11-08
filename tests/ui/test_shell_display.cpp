@@ -1,6 +1,7 @@
 #include "pixcake/ui/shell/page_copy.hpp"
 #include "pixcake/ui/shell/shell_display.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -308,6 +309,39 @@ void test_b71_icon_drop_follows_the_page() {
   EXPECT(icon_drop_action(home, false) == IconDropAction::NewProject);
 }
 
+// 快捷键表（需求 §23.1）：编号不重复；同一作用范围里不能有两个功能用同一个键（Cmd+N 按页面分流，不算冲突）；
+// 键写法 Qt 认得（修饰键在前）；标记键 0–5、6–9、P/X/U 都在。
+bool scopes_overlap(const std::string& a, const std::string& b) {
+  if (a == b || a == "global" || b == "global") return true;
+  const auto in_project = [](const std::string& scope) { return scope == "library" || scope == "refine"; };
+  return (a == "project" && (in_project(b) || b == "project")) || (b == "project" && in_project(a));
+}
+
+void test_shortcut_table_has_no_conflicts() {
+  const auto& table = pixcake::ui::shell::shortcut_table();
+  EXPECT(table.size() > 30);
+  for (std::size_t i = 0; i < table.size(); ++i) {
+    EXPECT(!table[i].id.empty() && !table[i].key.empty() && !table[i].name.empty() && !table[i].scope.empty());
+    EXPECT(pixcake::ui::shell::shortcut_key(table[i].id) == table[i].key);
+    for (std::size_t j = i + 1; j < table.size(); ++j) {
+      EXPECT(table[i].id != table[j].id);
+      if (table[i].key == table[j].key && scopes_overlap(table[i].scope, table[j].scope)) {
+        std::fprintf(stderr, "shortcut conflict: %s and %s share %s\n", table[i].id.c_str(), table[j].id.c_str(),
+                     table[i].key.c_str());
+        EXPECT(false);
+      }
+    }
+  }
+  for (const char* id : {"rating-0", "rating-5", "color-red", "color-blue", "flag-pick", "flag-exclude", "flag-clear",
+                         "undo", "redo", "copy-effect", "paste-effect", "sync-effect", "virtual-copy"}) {
+    EXPECT(!pixcake::ui::shell::shortcut_key(id).empty());
+  }
+  EXPECT(pixcake::ui::shell::shortcut_key("color-red") == "6" && pixcake::ui::shell::shortcut_key("sync-effect") == "Ctrl+Shift+S");
+  EXPECT(pixcake::ui::shell::shortcut_key("no-such-shortcut").empty());
+  const auto missing = pixcake::ui::shell::missing_page_copy();
+  EXPECT(std::find(missing.begin(), missing.end(), "shortcut:no-such-shortcut") != missing.end());
+}
+
 int main() {
   test_project_click_lands_in_the_library();
   test_b71_icon_drop_follows_the_page();
@@ -321,5 +355,6 @@ int main() {
   EXPECT(std::string(pixcake::ui::shell::page_label(pixcake::ui::shell::Page::Refine)) == "精修");
   EXPECT(std::string(pixcake::ui::shell::page_label(pixcake::ui::shell::Page::Creative)) == "创意");
   test_contract();
+  test_shortcut_table_has_no_conflicts();  // last: it looks up a missing id on purpose
   return failures == 0 ? 0 : 1;
 }

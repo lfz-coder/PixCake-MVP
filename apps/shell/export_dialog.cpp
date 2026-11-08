@@ -863,6 +863,16 @@ void openExportList(QWidget* parent, PageActions* actions) {
   list->show();
 }
 
+void bindProjectShortcuts(QWidget* page, PageActions* actions) {
+  bindShortcut(page, "go-home", [actions] { actions->request_page(Page::Home); });
+  bindShortcut(page, "go-library", [actions] { actions->request_page(Page::Library); });
+  bindShortcut(page, "go-refine", [actions] { actions->request_page(Page::Refine); });
+  bindShortcut(page, "export-settings", [page, actions] {
+    if (actions->export_target()) openExportDialog(page, actions);
+  });
+  bindShortcut(page, "export-list", [page, actions] { openExportList(page, actions); });
+}
+
 QPushButton* toolbarAction(std::string_view list, const CopyItem& item, QWidget* parent, PageActions* actions) {
   if (item.id == "export") {
     auto* button = itemAction(list, item, parent, actions->export_target().has_value());

@@ -313,19 +313,15 @@ QWidget* buildRefinePage(const PageContext& context) {
   PageActions* actions = &context.actions;
   QObject::connect(back, &QPushButton::clicked, back, [actions] { actions->request_page(Page::Home); });
   // 单图撤销 Cmd+Z、重做 Shift+Cmd+Z（需求 §8、§23.1；Qt 的 Ctrl 在 macOS 上就是 Cmd）。
-  auto* undo = new QShortcut(QKeySequence(QStringLiteral("Ctrl+Z")), page);
-  undo->setObjectName(QStringLiteral("refine-undo"));
-  QObject::connect(undo, &QShortcut::activated, page, [actions] { actions->request_undo(); });
-  auto* redo = new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+Z")), page);
-  redo->setObjectName(QStringLiteral("refine-redo"));
-  QObject::connect(redo, &QShortcut::activated, page, [actions] { actions->request_redo(); });
+  bindShortcut(page, "undo", [actions] { actions->request_undo(); });
+  bindShortcut(page, "redo", [actions] { actions->request_redo(); });
+  bindProjectShortcuts(page, actions);
+  bindShortcut(page, "virtual-copy", [actions] {
+    if (const auto photo = actions->current_photo()) actions->request_virtual_copy({*photo});
+  });
   // 复制效果 Cmd+C、粘贴效果 Cmd+V：直接搬运当前效果，不打开勾选框；这两个键不可自定义（需求 §18）。
-  auto* copy_effect = new QShortcut(QKeySequence(QStringLiteral("Ctrl+C")), page);
-  copy_effect->setObjectName(QStringLiteral("refine-copy-effect"));
-  QObject::connect(copy_effect, &QShortcut::activated, page, [actions] { actions->request_copy_effect(); });
-  auto* paste_effect = new QShortcut(QKeySequence(QStringLiteral("Ctrl+V")), page);
-  paste_effect->setObjectName(QStringLiteral("refine-paste-effect"));
-  QObject::connect(paste_effect, &QShortcut::activated, page, [actions] { actions->request_paste_effect(); });
+  bindShortcut(page, "copy-effect", [actions] { actions->request_copy_effect(); });
+  bindShortcut(page, "paste-effect", [actions] { actions->request_paste_effect(); });
   top_layout->addWidget(back);
   top_layout->addWidget(itemAction("refine-top", copyItem("refine-top", "search"), top));
   top_layout->addWidget(itemAction("refine-top", copyItem("refine-top", "assistant"), top));
@@ -410,11 +406,25 @@ QWidget* buildRefinePage(const PageContext& context) {
   side_bottom->addWidget(sync);
   side_column->addLayout(side_bottom);
   center->addLayout(side_column);
-  auto* sync_shortcut = new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+S")), page);
-  sync_shortcut->setObjectName(QStringLiteral("refine-sync-shortcut"));
-  QObject::connect(sync_shortcut, &QShortcut::activated, page, [sync, actions] {
+  bindShortcut(page, "sync-effect", [sync, actions] {
     if (actions->has_photo()) openSyncDialog(sync, actions);
   });
+  // 模块快捷键（需求 §8.1）：把功能区滚到那个模块；还没有的模块（AI 色彩风格）不绑。
+  const std::pair<const char*, const char*> modules_keys[] = {
+      {"module-color", "refine-color-labels"},         {"module-local", "refine-local-labels"},
+      {"module-portrait", "refine-portrait-labels"},   {"module-image", "refine-image-labels"},
+      {"module-clothing", "refine-clothing-labels"},   {"module-post", "refine-post-color-labels"},
+      {"module-crop", "refine-crop-labels"},           {"module-history", "refine-history-labels"},
+      {"preset-list", "refine-preset-labels"}};
+  for (const auto& [id, panel_name] : modules_keys) {
+    const QString name = QString::fromLatin1(panel_name);
+    bindShortcut(page, id, [side_scroll = QPointer<QScrollArea>(side_scroll), name] {
+      if (!side_scroll) return;
+      if (auto* panel = side_scroll->widget()->findChild<QWidget*>(name)) {
+        side_scroll->verticalScrollBar()->setValue(panel->mapTo(side_scroll->widget(), QPoint(0, 0)).y() - 8);
+      }
+    });
+  }
   if (histogram != nullptr && context.actions.has_photo()) {
     // With a photo open, start at the colour panel (histogram and sliders).
     QPointer<QScrollArea> scroll(side_scroll);

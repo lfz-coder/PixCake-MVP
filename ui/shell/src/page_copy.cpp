@@ -966,6 +966,64 @@ const CopyItem& page_item(std::string_view list, std::string_view id) {
   return empty;
 }
 
+const std::vector<ShortcutEntry>& shortcut_table() {
+  // 需求 §23.1 里本程序已有功能对应的键；还没有的功能（放大缩小、抓手、查看对比、蒙版、手动工具、曲线…）不在表里。
+  // 官方“上一张/下一张”的 ↑/↓ 会和滑杆的方向键调值冲突，没有做。
+  static const std::vector<ShortcutEntry> table = {
+      {"go-home", "Ctrl+Shift+0", "转到首页", "global"},
+      {"go-library", "Ctrl+Shift+1", "转到图库", "global"},
+      {"go-refine", "Ctrl+Shift+2", "转到精修", "global"},
+      {"create-project", "Ctrl+N", "创建项目", "home"},
+      {"home-delete", "Delete", "删除项目", "home"},
+      {"export-settings", "Shift+E", "导出设置", "project"},
+      {"export-list", "Ctrl+S", "导出列表", "project"},
+      {"select-all", "Ctrl+A", "图片全选", "library"},
+      {"deselect", "Ctrl+D", "取消多选", "library"},
+      {"library-delete", "Delete", "删除图片", "library"},
+      {"grid-view", "Ctrl+G", "网格视图", "library"},
+      {"single-view", "Ctrl+T", "单视图", "library"},
+      {"enter-refine", "D", "进入精修页", "library"},
+      {"copy-effect", "Ctrl+C", "复制效果", "project"},
+      {"paste-effect", "Ctrl+V", "粘贴效果", "project"},
+      {"sync-effect", "Ctrl+Shift+S", "同步到选中图片", "project"},
+      {"virtual-copy", "Ctrl+'", "创建副本", "project"},
+      {"undo", "Ctrl+Z", "单图撤销", "refine"},
+      {"redo", "Ctrl+Shift+Z", "单图重做", "refine"},
+      {"preset-list", "Shift+S", "预设列表", "refine"},
+      {"module-color", "E", "色彩", "refine"},
+      {"module-local", "Ctrl+W", "局部调色", "refine"},
+      {"module-portrait", "R", "人像", "refine"},
+      {"module-image", "T", "图像", "refine"},
+      {"module-clothing", "Y", "衣物", "refine"},
+      {"module-post", "Ctrl+Shift+E", "后期调色", "refine"},
+      {"module-crop", "C", "裁剪", "refine"},
+      {"module-history", "Shift+V", "历史", "refine"},
+      {"rating-0", "0", "星级取消", "project"},
+      {"rating-1", "1", "星级 1", "project"},
+      {"rating-2", "2", "星级 2", "project"},
+      {"rating-3", "3", "星级 3", "project"},
+      {"rating-4", "4", "星级 4", "project"},
+      {"rating-5", "5", "星级 5", "project"},
+      {"color-red", "6", "色标红", "project"},
+      {"color-yellow", "7", "色标黄", "project"},
+      {"color-green", "8", "色标绿", "project"},
+      {"color-blue", "9", "色标蓝", "project"},
+      {"flag-pick", "P", "旗标选取", "project"},
+      {"flag-exclude", "X", "旗标排除", "project"},
+      {"flag-clear", "U", "旗标取消", "project"},
+  };
+  return table;
+}
+
+const std::string& shortcut_key(std::string_view id) {
+  static const std::string empty;
+  for (const auto& entry : shortcut_table()) {
+    if (entry.id == id) return entry.key;
+  }
+  missing().insert("shortcut:" + std::string(id));
+  return empty;
+}
+
 std::vector<std::string> missing_page_copy() { return {missing().begin(), missing().end()}; }
 
 }  // namespace pixcake::ui::shell

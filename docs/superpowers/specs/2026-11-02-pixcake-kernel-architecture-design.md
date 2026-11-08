@@ -671,7 +671,7 @@ AI 点修不是能力。它是壳层的一种选区会话：选区写入 `mask`�
 
 个人中心、登录页、传输列表和设置是壳层页面。它们调用账号服务和项目库，不调用能力的编译函数。
 
-页面文字与壳层结构（2026-11-06，代码质量清单 Q-11、Q-12）：页面文字只有一个来源——`ui/shell` 的文案表（`page_copy`，按 ASCII 键取用），显示模型 `ShellDisplay` 的区域名和条目也从这里取；精修面板滑杆的显示名、顺序与参数绑定在 `ui/panels` 的同一张面板表里；两边共用的词在 `ui/shell/shared_words.hpp`；缩略图标识字样沿用 `kernel/workspace` 的手册文案。`apps/shell` 不写中文文案。壳层每页一个文件（`login_page.cpp` 等），页面只画控件；页签等请求经 `ShellController` 改显示模型后重画，页面不直接改显示模型、不调命令入口。源码门禁 `test_shell_sources` 检查：`apps/shell` 与 `ui` 没有超过 160 字符的行、`apps/shell` 没有中文文案、`ui` 与 `kernel/workspace` 里同一段文案只在一个文件、页面文件不改状态。原 `kernel/workspace` 的第二份显示模型已删除。快捷键表还没有实现；实现时同样放进文案表一处。
+页面文字与壳层结构（2026-11-06，代码质量清单 Q-11、Q-12）：页面文字只有一个来源——`ui/shell` 的文案表（`page_copy`，按 ASCII 键取用），显示模型 `ShellDisplay` 的区域名和条目也从这里取；精修面板滑杆的显示名、顺序与参数绑定在 `ui/panels` 的同一张面板表里；两边共用的词在 `ui/shell/shared_words.hpp`；缩略图标识字样沿用 `kernel/workspace` 的手册文案。`apps/shell` 不写中文文案。壳层每页一个文件（`login_page.cpp` 等），页面只画控件；页签等请求经 `ShellController` 改显示模型后重画，页面不直接改显示模型、不调命令入口。源码门禁 `test_shell_sources` 检查：`apps/shell` 与 `ui` 没有超过 160 字符的行、`apps/shell` 没有中文文案、`ui` 与 `kernel/workspace` 里同一段文案只在一个文件、页面文件不改状态。原 `kernel/workspace` 的第二份显示模型已删除。快捷键表（2026-11-07 实现）：`ui/shell` 的 `shortcut_table()` 是唯一来源，每项有编号、Qt 写法的键、功能名和作用范围（global、home、project、library、refine）；`apps/shell` 经 `bindShortcut(编号)` 取键，源码门禁禁止在 `apps/shell` 里写 `Ctrl+`、`Shift+` 之类的按键字面量；`test_shell_display` 检查编号不重复、同一作用范围内没有两个功能共用一个键。自定义快捷键没有做。
 
 ## 14. 依赖禁令
 

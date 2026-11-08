@@ -17,6 +17,7 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QPushButton>
+#include <QShortcut>
 #include <QString>
 #include <QWidget>
 
@@ -213,6 +214,11 @@ QLabel* text(const QString& value, bool muted = false);
 QPushButton* action(const QString& label, QWidget* parent, bool enabled = false);
 QPushButton* iconAction(const QString& label, const QString& icon, QWidget* parent, bool enabled = false, int size = 18);
 // 文案表里一组中的一项，图标按同一组查。
+// 按快捷键表（ui/shell 的 shortcut_table）里的编号绑一个快捷键；objectName 是 shortcut-<编号>。
+QShortcut* bindShortcut(QWidget* owner, std::string_view id, std::function<void()> run,
+                        Qt::ShortcutContext context = Qt::WindowShortcut);
+// 图库和精修都有的键：转到首页、图库、精修（⇧⌘0/1/2），导出设置 ⇧E，导出列表 ⌘S。
+void bindProjectShortcuts(QWidget* page, PageActions* actions);
 QPushButton* itemAction(std::string_view list, const CopyItem& item, QWidget* parent, bool enabled = false,
                         int size = 18);
 // 图库、精修、创意三个页签。点击只发请求。

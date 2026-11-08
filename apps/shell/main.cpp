@@ -17,6 +17,7 @@
 #include <QApplication>
 #include <QDialog>
 #include <QScrollArea>
+#include <QShortcut>
 #include <QSpinBox>
 #include <QToolButton>
 #include <QGroupBox>
@@ -703,6 +704,42 @@ int smoke_virtual_copy(pixcake::shell::ShellWindow& window) {
     dialog->close();
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     controller.request_rating({all[0].id}, 0);
+  }
+  // Shortcuts from the table: select all and deselect in the library grid, single view and back to the grid.
+  {
+    controller.request_page(Page::Library);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    const auto fire = [&window](const char* id) {
+      QShortcut* found = nullptr;
+      for (auto* candidate : window.findChildren<QShortcut*>(QStringLiteral("shortcut-") + QString::fromLatin1(id))) {
+        const auto* owner = qobject_cast<QWidget*>(candidate->parent());
+        if (owner != nullptr && owner->isVisibleTo(&window)) found = candidate;
+      }
+      if (found == nullptr) return false;
+      emit found->activated();
+      return true;
+    };
+    auto* grid_list = library_photos(window);
+    if (grid_list == nullptr || !fire("select-all") || static_cast<std::size_t>(controller.selected_photos().size()) !=
+                                                           controller.photos().size()) {
+      qCritical("select-all shortcut: %zu of %zu selected", controller.selected_photos().size(), controller.photos().size());
+      return 12;
+    }
+    if (!fire("deselect") || !controller.selected_photos().empty()) {
+      qCritical("deselect shortcut left %zu selected", controller.selected_photos().size());
+      return 12;
+    }
+    controller.select_photos({controller.photos().front().id}, controller.photos().front().id);
+    if (!fire("single-view") || controller.display().library_view() != "single") {
+      qCritical("single-view shortcut did not switch the view");
+      return 12;
+    }
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    if (!fire("grid-view") || controller.display().library_view() != "grid") {
+      qCritical("grid-view shortcut did not switch back");
+      return 12;
+    }
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
   }
   // Effects: copy one photo's effect, paste it on another (library); then sync through the dialog.
   {
