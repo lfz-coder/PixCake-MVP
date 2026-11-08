@@ -1,4 +1,5 @@
 #include "pixcake/capability/capability_registry.hpp"
+#include "pixcake/mask/semantic_parts.hpp"
 
 #include <unordered_set>
 #include <cerrno>
@@ -90,6 +91,13 @@ std::vector<ParameterMode> make_parameter_modes() {
   add_color("color.global", "pixcake.color.global", 20);
   add_color("color.local", "pixcake.color.local", 21);
   add_color("color.post", "pixcake.color.post", 70);
+  // 局部调色作用在哪个语义部位（需求 §10.4）：整个画面，或语义部位表里的一个。编译时变成绘制步骤的蒙版
+  // "semantic:<部位>"，不是绘制通道。一次只能选一个部位；多块蒙版的列表、手绘选区、渐变、颜色范围还没有。
+  ParameterMode& region = add("color.local", "region", 0.0, 0.0, 1.0, 0.0, "color", "pixcake.color.local",
+                              "region", 21);
+  region.choices.push_back("all");
+  for (const auto& part : mask::semantic_parts()) region.choices.push_back(part.id);
+  region.default_choice = "all";
   // 配置文件（需求第 10.3 节）：标准、质感、黑白、基础，默认标准。
   ParameterMode& profile = add("color.global", "profile", 0.0, 0.0, 1.0, 0.0, "color", "pixcake.color.global",
                                "profile", 20);

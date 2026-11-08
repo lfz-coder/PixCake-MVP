@@ -1,4 +1,5 @@
 #include "pixcake/capability/capability_module.hpp"
+#include "pixcake/mask/semantic_parts.hpp"
 
 #include "pixcake/capability/fragment_codec.hpp"
 
@@ -168,6 +169,7 @@ ModuleCompile ParameterBackedModule::compile_modes(const ParameterReader& reader
   }
   DrawStep step;
   bool created = false;
+  std::string region_mask;  // 局部调色的作用部位
   std::set<std::string> channels;
   for (const auto* mode : modes) {
     if (!only.empty() && mode->parameter_id != only) continue;
@@ -192,6 +194,10 @@ ModuleCompile ParameterBackedModule::compile_modes(const ParameterReader& reader
       return result;
     }
     if (!draws_parameter(reader, *mode)) continue;
+    if (descriptor_.id == "color.local" && mode->parameter_id == "region") {
+      if (*value != "all") region_mask = mask::semantic_mask_id(*value);
+      continue;
+    }
     if (!created) {
       step = make_step(*mode);
       created = true;
@@ -203,6 +209,7 @@ ModuleCompile ParameterBackedModule::compile_modes(const ParameterReader& reader
     if (step.values.empty()) {
       result.diagnostics.push_back({descriptor_.id, "片段没有可编译的参数值", false});
     } else {
+      if (!region_mask.empty()) step.mask_ids.push_back(region_mask);
       result.steps.push_back(std::move(step));
     }
   }

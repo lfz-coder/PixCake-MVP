@@ -1,6 +1,7 @@
 #include "pixcake/ui/panels/slider_spec.hpp"
 
 #include "pixcake/capability/capability_registry.hpp"
+#include "pixcake/mask/semantic_parts.hpp"
 #include "pixcake/ui/shell/shared_words.hpp"
 
 #include <array>
@@ -15,6 +16,8 @@ namespace {
 constexpr char kGlobalColor[] = "color.global";
 constexpr char kColorAdjust[] = "色彩调节";
 constexpr char kLocalFeather[] = "羽化";
+constexpr char kLocalRegion[] = "作用部位";
+constexpr char kRegionAll[] = "整个画面";
 constexpr char kPendingSuffix[] = "，范围待确认";
 constexpr char kNameSeparator[] = "，";
 
@@ -270,6 +273,24 @@ std::vector<PanelRow> refine_post_color_rows() {
   return rows;
 }
 
+std::vector<PanelRow> refine_local_rows() {
+  std::vector<PanelRow> rows;
+  PanelRow region;
+  region.kind = PanelRowKind::Choice;
+  region.label = kLocalRegion;
+  region.binding = SliderBinding{"color.local", "region"};
+  region.object_name = "refine-local-region";
+  rows.push_back(std::move(region));
+  for (auto row : refine_post_color_rows()) {
+    if (row.binding) {
+      row.binding->capability_id = "color.local";
+      row.object_name = "refine-local-" + row.binding->parameter_id;
+    }
+    rows.push_back(std::move(row));
+  }
+  return rows;
+}
+
 std::vector<std::string> refine_post_color_titles() {
   std::vector<std::string> titles(std::begin(kPostColorLead), std::end(kPostColorLead));
   for (const auto& def : kColorPanel) {
@@ -286,6 +307,12 @@ std::vector<ChoiceOption> choice_options(const SliderBinding& binding) {
     std::string label = id;
     for (const auto& entry : kChoiceLabels) {
       if (entry.parameter_id == id) label = std::string(entry.label);
+    }
+    if (binding.capability_id == "color.local" && binding.parameter_id == "region") {
+      if (id == "all") label = kRegionAll;
+      for (const auto& part : mask::semantic_parts()) {
+        if (id == part.id) label = part.label;
+      }
     }
     options.push_back({id, label, id == mode->default_choice});
   }

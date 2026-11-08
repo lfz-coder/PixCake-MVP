@@ -106,6 +106,27 @@ void test_capability_order_is_stable_across_parameters() {
   }
 }
 
+// 局部调色的作用部位变成绘制步骤的语义蒙版；“整个画面”没有蒙版；部位不在表里的值被拒绝。
+void test_local_region_becomes_a_semantic_mask() {
+  auto document = *pixcake::EditDocument::create("img-region");
+  EXPECT(document.set_preview("color.local", "exposure", "0.5") == pixcake::ResultCode::Ok);
+  auto result = pixcake::render::compile(document);
+  EXPECT(result.description.operations.size() == 1 && result.description.operations[0].mask_ids.empty());
+  EXPECT(document.set_preview("color.local", "region", "person.face_skin") == pixcake::ResultCode::Ok);
+  result = pixcake::render::compile(document);
+  EXPECT(result.description.operations.size() == 1);
+  if (result.description.operations.size() == 1) {
+    const auto& operation = result.description.operations[0];
+    EXPECT(operation.mask_ids == std::vector<std::string>{"semantic:person.face_skin"});
+    for (const auto& value : operation.values) EXPECT(value.channel != "region");  // not a draw channel
+  }
+  EXPECT(!pixcake::validate_parameter_display_value("color.local", "region", "person.unknown"));
+  EXPECT(pixcake::validate_parameter_display_value("color.local", "region", "person.hair"));
+  EXPECT(document.set_preview("color.local", "region", "all") == pixcake::ResultCode::Ok);
+  result = pixcake::render::compile(document);
+  EXPECT(result.description.operations.size() == 1 && result.description.operations[0].mask_ids.empty());
+}
+
 void test_too_new_fragment_is_skipped_and_preserved() {
   auto document = *pixcake::EditDocument::create("img-2");
   document.store_fragment("color.global", 2, {9, 9});
@@ -253,6 +274,7 @@ int main() {
   test_preview_without_committed_fragment_is_renderable();
   test_c05_profile_choice_is_rendered_as_choice_index();
   test_capability_order_is_stable_across_parameters();
+  test_local_region_becomes_a_semantic_mask();
   test_too_new_fragment_is_skipped_and_preserved();
   test_layer_and_mask_inputs_are_descriptive();
   return g_failures == 0 ? 0 : 1;

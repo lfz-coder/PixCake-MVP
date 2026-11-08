@@ -1316,6 +1316,54 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
       return 8;
     }
   }
+  // Local colour: with the whole picture as the region its exposure slider draws like the global one; choosing a part
+  // writes the region (the mask itself comes from segmentation, which the default build does not carry).
+  {
+    auto& controller = window.controller();
+    QSlider* local_exposure = nullptr;
+    for (auto* candidate : window.findChildren<QSlider*>(QStringLiteral("refine-local-exposure"))) {
+      if (candidate->isVisibleTo(&window)) local_exposure = candidate;
+    }
+    QComboBox* region = nullptr;
+    for (auto* candidate : window.findChildren<QComboBox*>(QStringLiteral("refine-choice-region"))) {
+      if (candidate->isVisibleTo(&window)) region = candidate;
+    }
+    if (local_exposure == nullptr || region == nullptr || !local_exposure->isEnabled() || !region->isEnabled() ||
+        region->count() < 2) {
+      qCritical("local colour controls missing or disabled with a photo open");
+      return 8;
+    }
+    const auto steps_before = controller.history().size();
+    const auto shown_before = controller.frames_shown();
+    const double red_before = mean_red(view->image());
+    local_exposure->setValue(std::min(local_exposure->maximum(), local_exposure->value() + 20));
+    if (!wait_frames(window, shown_before + 1, 30'000) || !wait_current(window, 30'000) ||
+        controller.history().size() != steps_before + 1 || !(mean_red(view->image()) > red_before + 1)) {
+      qCritical("local colour exposure: %zu -> %zu steps, red %.1f -> %.1f", steps_before, controller.history().size(),
+                red_before, mean_red(view->image()));
+      return 8;
+    }
+    const int hair = region->findData(QStringLiteral("person.hair"));
+    region->setCurrentIndex(hair);
+    emit region->activated(hair);
+    const auto written = controller.parameter_value({"color.local", "region"});
+    if (hair < 0 || !written || *written != "person.hair") {
+      qCritical("local colour region was not written");
+      return 8;
+    }
+    const int everything = region->findData(QStringLiteral("all"));
+    region->setCurrentIndex(everything);
+    emit region->activated(everything);
+    wait_current(window, 30'000);
+    // Local colour is a charged feature: put the exposure back so the later export estimate sees a free picture.
+    local_exposure->setValue(local_exposure->value() - 20);
+    wait_current(window, 30'000);
+    const auto restored = controller.parameter_value({"color.local", "region"});
+    if (!restored || *restored != "all") {
+      qCritical("local colour region not restored: %s", restored ? restored->c_str() : "(none)");
+      return 8;
+    }
+  }
   // Presets: save the photo's colour as a preset through the dialog, apply it (a history step), see it listed.
   // (Needs a project: the development page that opens a bare photo has none.)
   if (window.controller().current_project()) {

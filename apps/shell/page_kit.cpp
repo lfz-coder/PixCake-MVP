@@ -100,6 +100,8 @@ bool reference_drawn(const ui::panels::SliderBinding& binding) {
     }
     return false;
   }
+  // 局部调色：十四支通道加作用部位（蒙版）；羽化等其余参数不在 color.local 里。
+  if (binding.capability_id == "color.local") return true;
   if (binding.capability_id != "color.global") return false;
   const std::string& id = binding.parameter_id;
   if (id == "profile" || id == "selective_mode") return true;

@@ -306,6 +306,20 @@ void addModules(QWidget* modules, QVBoxLayout* modules_layout, PageActions* acti
 
   auto* local = labelPanel(modules, modules_layout, "refine-local-labels", moduleDescription("local"));
   addLabelList(local, "refine-local");
+  // 局部调色：作用部位加十四支滑杆（照片打开时可调）；部位由语义分割给出蒙版，其余选区方式还没有。
+  {
+    const Refresh refresh = std::make_shared<EnableRefresh>();
+    for (const auto& row : panels::refine_local_rows()) {
+      if (row.kind == panels::PanelRowKind::Choice) {
+        addChoice(modules, local, row, actions, refresh);
+      } else if (row.kind == panels::PanelRowKind::Title) {
+        local->addWidget(disabledLabel(qs(row.label)));
+      } else {
+        addDisabledSlider(modules, local, panels::slider_spec(row.label, row.binding), qs(row.object_name), actions,
+                          row.binding, refresh);
+      }
+    }
+  }
   const char* feather = panels::refine_local_feather_label();
   addDisabledSlider(modules, local, panels::slider_spec(feather, panels::refine_local_binding(feather)), QString());
 
