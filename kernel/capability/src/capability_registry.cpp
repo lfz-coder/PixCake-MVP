@@ -104,7 +104,8 @@ std::vector<ParameterMode> make_parameter_modes() {
   for (const auto& spec : {std::make_tuple("gradient_x", 0.0, 100.0, 50.0), std::make_tuple("gradient_y", 0.0, 100.0, 50.0),
                            std::make_tuple("gradient_angle", -180.0, 180.0, 0.0),
                            std::make_tuple("gradient_size", 0.0, 100.0, 50.0),
-                           std::make_tuple("gradient_feather", 0.0, 100.0, 50.0)}) {
+                           std::make_tuple("gradient_feather", 0.0, 100.0, 50.0),
+                           std::make_tuple("gradient_ratio", 5.0, 400.0, 100.0)}) {
     ParameterMode& gradient = add("color.local", std::get<0>(spec), std::get<1>(spec), std::get<2>(spec), 1.0,
                                   std::get<3>(spec), "color", "pixcake.color.local", std::get<0>(spec), 21);
     gradient.default_confirmed = false;

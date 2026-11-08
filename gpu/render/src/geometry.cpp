@@ -212,7 +212,7 @@ RenderMask gradient_mask(const std::string& id, const pixcake::mask::GradientMas
   const double dx = std::cos(radians);
   const double dy = std::sin(radians);
   const double band = std::max(0.5, g.size / 100.0 * diagonal / 2.0);
-  const double radius = std::max(0.5, g.size / 100.0 * diagonal / 2.0);
+  const double radius = std::max(0.5, g.size / 100.0 * diagonal / 2.0);  // 横向半径；纵向半径 = 横向 × ratio
   for (std::uint32_t y = 0; y < height; ++y) {
     for (std::uint32_t x = 0; x < width; ++x) {
       const double px = x + 0.5 - cx;
@@ -222,7 +222,8 @@ RenderMask gradient_mask(const std::string& id, const pixcake::mask::GradientMas
         const double linear = std::clamp(0.5 - (px * dx + py * dy) / (2.0 * band), 0.0, 1.0);
         alpha = linear + (smooth(linear) - linear) * soft;
       } else {
-        const double distance = std::sqrt(px * px + py * py);
+        // 椭圆：把纵向按比例拉回圆，再按半径衡量；内椭圆（满强度）是外椭圆的 (1 - 羽化)。
+        const double distance = std::sqrt(px * px + (py / (g.ratio / 100.0)) * (py / (g.ratio / 100.0)));
         const double inner = radius * (1.0 - soft);
         alpha = distance <= inner ? 1.0 : distance >= radius ? 0.0 : 1.0 - smooth((distance - inner) / (radius - inner));
       }

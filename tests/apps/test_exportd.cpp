@@ -294,7 +294,7 @@ int main() {
     ExportService service;  // no mask source on purpose
     auto job = work("gradient-1", source, dir.path() + "/unused.jpg", dir.path());
     pixcake::render::RenderOperation local = operation("color.local", "pixcake.color.local", {value("exposure", 1.0)});
-    local.mask_ids = {"gradient:linear:50:50:0:10:0"};  // bright on the left, falling to nothing across 10% of the diagonal
+    local.mask_ids = {"gradient:linear:50:50:0:10:0:100"};  // bright on the left, falling to nothing across 10% of the diagonal
     job.description.operations.push_back(local);
     std::string why;
     assert(service.submit(std::move(job), why) == ResultCode::Ok);

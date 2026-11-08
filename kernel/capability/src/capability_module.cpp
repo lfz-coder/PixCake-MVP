@@ -213,6 +213,7 @@ ModuleCompile ParameterBackedModule::compile_modes(const ParameterReader& reader
       if (mode->parameter_id == "gradient_angle") gradient.angle = whole;
       if (mode->parameter_id == "gradient_size") gradient.size = whole;
       if (mode->parameter_id == "gradient_feather") gradient.feather = whole;
+      if (mode->parameter_id == "gradient_ratio") gradient.ratio = whole;
       continue;  // 位置参数不是绘制通道
     }
     if (!created) {

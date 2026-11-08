@@ -285,7 +285,8 @@ std::vector<PanelRow> refine_local_rows() {
                                          {"gradient_y", "中心纵向"},
                                          {"gradient_angle", "渐变角度"},
                                          {"gradient_size", "渐变范围"},
-                                         {"gradient_feather", "渐变柔和"}}) {
+                                         {"gradient_feather", "渐变柔和"},
+                                         {"gradient_ratio", "椭圆高宽比"}}) {
     PanelRow row;
     row.kind = PanelRowKind::Slider;
     row.label = label;

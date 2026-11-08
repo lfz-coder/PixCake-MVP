@@ -130,7 +130,7 @@ void test_local_region_becomes_a_semantic_mask() {
   EXPECT(result.description.operations.size() == 1);
   if (result.description.operations.size() == 1) {
     const auto& operation = result.description.operations[0];
-    EXPECT(operation.mask_ids == std::vector<std::string>{"gradient:radial:30:50:0:20:50"});
+    EXPECT(operation.mask_ids == std::vector<std::string>{"gradient:radial:30:50:0:20:50:100"});
     for (const auto& value : operation.values) EXPECT(value.channel.rfind("gradient_", 0) != 0 && value.channel != "region");
   }
   EXPECT(document.set_preview("color.local", "region", "all") == pixcake::ResultCode::Ok);
