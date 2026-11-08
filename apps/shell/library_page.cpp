@@ -4,11 +4,13 @@
 #include "pixcake_widgets.hpp"
 #include "filter_dialog.hpp"
 #include "shell_icons.hpp"
+#include "sync_dialog.hpp"
 #include "trash_dialog.hpp"
 
 #include <QGroupBox>
 #include <QListWidget>
 #include <QPointer>
+#include <QShortcut>
 #include <QSlider>
 
 namespace pixcake::shell {
@@ -73,6 +75,16 @@ QWidget* buildLibraryPage(const PageContext& context) {
   });
   controls_layout->addWidget(remove);
   outer->addWidget(controls);
+
+  // 图库里：⌘C 复制选中的那张的效果，⌘V 粘贴到选中的全部，⇧⌘S 同步到选中图片（需求 §18）。
+  auto* copy_effect = new QShortcut(QKeySequence(QStringLiteral("Ctrl+C")), page);
+  QObject::connect(copy_effect, &QShortcut::activated, page, [actions] { actions->request_copy_effect(); });
+  auto* paste_effect = new QShortcut(QKeySequence(QStringLiteral("Ctrl+V")), page);
+  QObject::connect(paste_effect, &QShortcut::activated, page, [actions] { actions->request_paste_effect(); });
+  auto* sync_effect = new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+S")), page);
+  QObject::connect(sync_effect, &QShortcut::activated, page, [page, actions] {
+    if (actions->has_photo() || !actions->selected_photos().empty()) openSyncDialog(page, actions);
+  });
 
   auto* content = new QHBoxLayout;
   content->setSpacing(4);

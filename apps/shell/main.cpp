@@ -9,6 +9,7 @@
 #include "filter_dialog.hpp"
 #include "pixcake_theme.hpp"
 #include "pixcake_widgets.hpp"
+#include "sync_dialog.hpp"
 #include "trash_dialog.hpp"
 #include "shell_window.hpp"
 
@@ -40,6 +41,7 @@
 #include <QStringList>
 #include <QTabBar>
 #include <QTableWidget>
+#include <QTreeWidget>
 #include <QMenu>
 #include <QMessageBox>
 #include <QThread>
@@ -700,6 +702,70 @@ int smoke_virtual_copy(pixcake::shell::ShellWindow& window) {
     dialog->close();
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     controller.request_rating({all[0].id}, 0);
+  }
+  // Effects: copy one photo's effect, paste it on another (library); then sync through the dialog.
+  {
+    controller.request_page(Page::Library);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    const auto all = controller.photos();
+    std::int64_t from = 0;
+    std::int64_t to = 0;
+    for (const auto& entry : all) {
+      if (entry.copy != 0) continue;
+      if (from == 0) from = entry.id;
+      else if (to == 0) to = entry.id;
+    }
+    if (from == 0 || to == 0) {
+      qCritical("effects: need two original photos");
+      return 12;
+    }
+    controller.select_photos({from}, from);
+    controller.request_copy_effect();
+    if (!controller.can_paste_effect()) {
+      qCritical("effects: nothing was copied");
+      return 12;
+    }
+    controller.select_photos({to}, to);
+    controller.request_paste_effect();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    const auto after_paste = controller.photos();
+    const auto edited = [&after_paste](std::int64_t id) {
+      for (const auto& entry : after_paste) {
+        if (entry.id == id) return !entry.edit_status.empty();
+      }
+      return false;
+    };
+    if (!edited(to)) {
+      qCritical("effects: the pasted photo is not marked edited");
+      return 12;
+    }
+    // Sync dialog: the tree lists the sync items, blocked ones disabled; save runs it for the other selected photo.
+    controller.select_photos({from, to}, from);
+    pixcake::shell::openSyncDialog(&window, &controller);
+    auto* dialog = window.findChild<QDialog*>(QStringLiteral("sync-dialog"));
+    auto* tree = dialog != nullptr ? dialog->findChild<QTreeWidget*>(QStringLiteral("sync-tree")) : nullptr;
+    auto* targets = dialog != nullptr ? dialog->findChild<QLabel*>(QStringLiteral("sync-targets")) : nullptr;
+    auto* save = dialog != nullptr ? dialog->findChild<QPushButton*>(QStringLiteral("sync-save")) : nullptr;
+    if (tree == nullptr || targets == nullptr || save == nullptr || tree->topLevelItemCount() == 0 ||
+        targets->text() != qtext_for_smoke("sync.targets").arg(1) || !save->isEnabled()) {
+      qCritical("sync dialog missing or wrong");
+      return 12;
+    }
+    bool blocked_listed = false;
+    for (QTreeWidgetItemIterator it(tree); *it; ++it) {
+      if ((*it)->parent() != nullptr && !((*it)->flags() & Qt::ItemIsEnabled)) blocked_listed = true;
+    }
+    if (!blocked_listed) {
+      qCritical("sync dialog does not list blocked items disabled");
+      return 12;
+    }
+    save->click();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    if (window.findChild<QDialog*>(QStringLiteral("sync-dialog")) != nullptr) {
+      qCritical("sync dialog stayed open after a successful sync");
+      return 12;
+    }
+    controller.select_photos({from}, from);
   }
   // Delete and trash: the bulk delete asks first; a copy goes alone; the original takes its copies; restore.
   {

@@ -94,6 +94,9 @@ class PreviewSession {
   std::size_t history_current() const;
   // 回到第 index 步，写盘并重新显示。撤销和重做是它的两个特例；没有前一步或后一步时返回状态冲突。
   ResultCode select_history(std::size_t index, std::string& diagnostic);
+  // 粘贴效果（需求 §18）：把剪贴板里的效果搬到这张图，经命令入口提交，历史多一步“粘贴效果”。
+  static constexpr char kPasteStep[] = "paste";
+  ResultCode paste(const EffectClipboard& clipboard, std::string& diagnostic);
   ResultCode undo(std::string& diagnostic);
   ResultCode redo(std::string& diagnostic);
   // Called after each successful commit (e.g. to mark the photo edited).
@@ -103,6 +106,9 @@ class PreviewSession {
   PreviewSession(std::string photo_path, EditDocument document, std::string document_path,
                  const PreviewSessionOptions& options);
   ResultCode send_source(std::string& diagnostic);
+  // 文档整体变了（历史、粘贴）：重发文档，请 renderd 按文档现在的样子重画。优先用 prefer 里第一个有参数模式的
+  // 参数当请求的锚点，都没有就用曝光。
+  ResultCode redraw(const std::vector<std::pair<std::string, std::string>>& prefer, std::string& diagnostic);
   ResultCode send_request(const std::string& capability_id, const std::string& parameter_id,
                           const std::string& display_value, std::string& diagnostic);
 

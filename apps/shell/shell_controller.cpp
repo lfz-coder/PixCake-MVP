@@ -343,6 +343,7 @@ namespace {
 // 历史步骤的名字：第一步用内核的名字，其余是“滑杆名 值”；找不到滑杆名就写能力和参数编号。
 QString history_text(const preview_channel::PreviewSession::HistoryEntry& entry) {
   if (!entry.label.empty()) return QString::fromStdString(entry.label);
+  if (entry.capability_id == preview_channel::PreviewSession::kPasteStep) return qtext("history.paste");
   QString name = QString::fromStdString(entry.capability_id + "/" + entry.parameter_id);
   auto rows = ui::panels::refine_color_rows();
   for (auto& row : ui::panels::refine_post_color_rows()) rows.push_back(std::move(row));
@@ -406,6 +407,91 @@ void ShellController::request_redo() {
   if (session_->redo(diagnostic) != ResultCode::Ok) return;
   view_.status = qtext("refine.preview.loading");
   if (changed_) changed_();
+}
+
+namespace {
+bool contains(const std::vector<std::int64_t>& items, std::int64_t id) {
+  return std::find(items.begin(), items.end(), id) != items.end();
+}
+}  // namespace
+
+void ShellController::refresh_after_effect(const std::vector<std::int64_t>& items) {
+  for (const std::int64_t id : items) request_thumbnail(id);
+  if (changed_) changed_();
+}
+
+void ShellController::request_copy_effect() {
+  if (!projects_ || !current_project_) return;
+  const auto source = display_.page() == Page::Library ? selected_photo_ : current_photo_;
+  if (!source) return;
+  EffectClipboard clipboard;
+  if (projects_->copy_effect(*source, clipboard) != ResultCode::Ok) {
+    show_notices({}, NoticeScene::OpenDocument, ResultCode::StateConflict);
+    if (changed_) changed_();
+    return;
+  }
+  clipboard_ = std::move(clipboard);
+}
+
+void ShellController::request_paste_effect() {
+  if (!projects_ || !current_project_ || !clipboard_) return;
+  const std::vector<std::int64_t> targets =
+      display_.page() == Page::Library ? selected_photos()
+                                       : (current_photo_ ? std::vector<std::int64_t>{*current_photo_}
+                                                         : std::vector<std::int64_t>{});
+  if (targets.empty()) return;
+  std::vector<std::int64_t> others;
+  ResultCode failure = ResultCode::Ok;
+  for (const std::int64_t id : targets) {
+    if (session_ && current_photo_ == id && display_.page() == Page::Refine) {
+      std::string diagnostic;
+      const ResultCode code = session_->paste(*clipboard_, diagnostic);  // a step of its own in the history
+      if (code != ResultCode::Ok) failure = code;
+      view_.status = qtext("refine.preview.loading");
+    } else {
+      others.push_back(id);
+    }
+  }
+  std::vector<project_session::ProjectSession::EffectOutcome> outcomes;
+  const bool reopen = session_ && current_photo_ && contains(others, *current_photo_);
+  const auto reopened = current_photo_;
+  if (reopen) close_photo();
+  if (!others.empty() && projects_->paste_effect(*clipboard_, others, outcomes) != ResultCode::Ok) {
+    failure = ResultCode::StateConflict;
+  }
+  if (failure != ResultCode::Ok) show_notices({}, NoticeScene::OpenDocument, failure);
+  if (reopen && reopened) open_project_photo(*reopened);
+  refresh_after_effect(others);
+}
+
+std::size_t ShellController::sync_target_count() const {
+  const auto source = display_.page() == Page::Library ? selected_photo_ : current_photo_;
+  if (!source) return 0;
+  std::size_t count = 0;
+  for (const std::int64_t id : selection_) count += id != *source && projects_ != nullptr && projects_->source_photo(id) != 0;
+  return count;
+}
+
+std::size_t ShellController::request_sync(const std::vector<std::string>& checked_ids) {
+  if (!projects_ || !current_project_) return 0;
+  const auto source = display_.page() == Page::Library ? selected_photo_ : current_photo_;
+  if (!source) return 0;
+  std::vector<std::int64_t> targets;
+  for (const std::int64_t id : selection_) {
+    if (id != *source) targets.push_back(id);
+  }
+  if (targets.empty()) return 0;
+  const bool reopen = session_ && current_photo_ && contains(targets, *current_photo_);
+  const auto reopened = current_photo_;
+  if (reopen) close_photo();
+  std::vector<project_session::ProjectSession::EffectOutcome> outcomes;
+  projects_->sync_effect(*source, checked_ids, targets, outcomes);
+  std::size_t failed = 0;
+  for (const auto& outcome : outcomes) failed += outcome.code != ResultCode::Ok;
+  if (failed != 0) show_notices({}, NoticeScene::OpenDocument, ResultCode::StateConflict);
+  if (reopen && reopened) open_project_photo(*reopened);
+  refresh_after_effect(targets);
+  return failed;
 }
 
 void ShellController::request_rating(const std::vector<std::int64_t>& photo_ids, int rating) {

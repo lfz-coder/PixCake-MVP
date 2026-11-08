@@ -277,19 +277,38 @@ ResultCode PreviewSession::select_history(std::size_t index, std::string& diagno
     diagnostic = std::string("history refused: ") + result_code_label(result.code);
     return result.code;
   }
-  // renderd redraws the document as it is now: any step's parameter works as the request's anchor,
-  // with the value the document holds for it.
-  std::string capability = steps[index].capability_id;
-  std::string parameter = steps[index].parameter_id;
-  if (capability.empty()) {
-    capability = steps[from].capability_id.empty() ? last_capability_ : steps[from].capability_id;
-    parameter = steps[from].capability_id.empty() ? last_parameter_ : steps[from].parameter_id;
-  }
   if (committed_) committed_();
+  return redraw({{steps[index].capability_id, steps[index].parameter_id},
+                 {steps[from].capability_id, steps[from].parameter_id},
+                 {last_capability_, last_parameter_}},
+                diagnostic);
+}
+
+ResultCode PreviewSession::redraw(const std::vector<std::pair<std::string, std::string>>& prefer,
+                                  std::string& diagnostic) {
   if (const ResultCode code = send_source(diagnostic); code != ResultCode::Ok) return code;
-  if (capability.empty()) return ResultCode::Ok;  // nothing was ever edited: the frame on screen is the original
+  std::string capability = "color.global";
+  std::string parameter = "exposure";
+  for (const auto& [candidate, name] : prefer) {
+    if (!candidate.empty() && find_parameter_mode(candidate, name) != nullptr) {
+      capability = candidate;
+      parameter = name;
+      break;
+    }
+  }
   const auto value = document_.effective_parameter(capability, parameter);
   return send_request(capability, parameter, value ? *value : default_display(capability, parameter), diagnostic);
+}
+
+ResultCode PreviewSession::paste(const EffectClipboard& clipboard, std::string& diagnostic) {
+  const CommandResult result = gate_->paste(clipboard, document_.revision());
+  if (result.code != ResultCode::Ok) {
+    diagnostic = std::string("paste refused: ") + result_code_label(result.code);
+    return result.code;
+  }
+  history_.record_committed(document_.image_id(), document_, kPasteStep, "", "", false);
+  if (committed_) committed_();
+  return redraw({{last_capability_, last_parameter_}}, diagnostic);
 }
 
 ResultCode PreviewSession::undo(std::string& diagnostic) {

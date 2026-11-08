@@ -18,6 +18,8 @@ class BusinessCommands {
  public:
   explicit BusinessCommands(const SessionState& session);
 
+  bool signed_in() const { return session_.signed_in(); }
+
   ProjectResult create_project(ProjectLibrary& library, std::string name, std::string origin, bool cloud_marked);
   ProjectResult set_photo_ratings(ProjectLibrary& library, std::vector<std::int64_t> photo_ids, int rating);
   ProjectResult set_photo_flags(ProjectLibrary& library, std::vector<std::int64_t> photo_ids, std::string flag);

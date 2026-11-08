@@ -149,6 +149,19 @@ Texts build_texts() {
   // 本机账本的张数：同一张图扣过就不再扣，原图和免费效果图不扣。
   t["export.sheets"] = "本次预计扣除 %1 张，剩余 %2 张";
   // 导出列表的计费一栏（test 版导出明细：精修效果图、免费功能、实际计费）。
+  // 复制、粘贴效果和批量同步（需求 §18）。
+  t["sync.title"] = "同步到选中图片";
+  t["sync.hint"] = "把当前图片的效果同步到选中的其他图片。可以只勾选二级功能；不能同步的项目已禁用。";
+  t["sync.blocked"] = "%1（%2）";
+  t["sync.targets"] = "已选 %1 张";
+  t["sync.all"] = "全选";
+  t["sync.none"] = "全部取消";
+  t["sync.save"] = "保存设置";
+  t["sync.none.checked"] = "还没有勾选要同步的功能";
+  t["sync.failed"] = "有 %1 张没有同步成功";
+  t["effect.copy"] = "复制效果";
+  t["effect.paste"] = "粘贴效果";
+  t["history.paste"] = "粘贴效果";
   // 历史（需求 §8.3）。
   t["history.step"] = "%1 %2";
   t["history.post"] = "后期调色·%1";

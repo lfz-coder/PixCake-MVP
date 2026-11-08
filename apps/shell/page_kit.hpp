@@ -4,6 +4,7 @@
 // ShellController。文字来自 ui/shell 的文案表，图标按“组/条目编号”查。
 #include "pixcake/export_session/export_session.hpp"
 #include "pixcake/project/records.hpp"
+#include "pixcake/sync/sync_batch.hpp"
 #include "pixcake/ui/panels/histogram.hpp"
 #include "pixcake/ui/panels/slider_spec.hpp"
 #include "pixcake/ui/shell/page_copy.hpp"
@@ -121,6 +122,15 @@ class PageActions {
   virtual void select_photos(const std::vector<std::int64_t>&, std::int64_t) {}
   // 选择变化时回调（导出按钮、“已选 N 张”跟着变）；owner 删除后不再回调。
   virtual void watch_selection(QObject*, std::function<void()>) {}
+  // 复制、粘贴效果（需求 §18，⌘C、⌘V）和批量同步（⇧⌘S）。精修里作用于当前照片，图库里复制选中的那张、
+  // 粘贴到选中的全部。同步以当前照片为来源，目标是选中的其他照片。
+  virtual void request_copy_effect() {}
+  virtual void request_paste_effect() {}
+  virtual bool can_paste_effect() const { return false; }
+  virtual std::vector<SyncItem> sync_items() const { return {}; }
+  virtual std::size_t sync_target_count() const { return 0; }
+  // 每个目标的结果；全部成功时 failed 为空。
+  virtual std::size_t request_sync(const std::vector<std::string>&) { return 0; }
   // 历史（需求 §8.3）：撤销、重做、点某一步回到那一步。步骤变了（提交、撤销）时回调 watch_history 登记的函数。
   virtual std::vector<HistoryRow> history() const { return {}; }
   virtual void request_history_step(std::size_t) {}

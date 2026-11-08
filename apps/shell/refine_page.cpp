@@ -3,6 +3,7 @@
 #include "pixcake_theme.hpp"
 #include "pixcake_widgets.hpp"
 #include "shell_icons.hpp"
+#include "sync_dialog.hpp"
 
 #include "pixcake/ui/panels/slider_spec.hpp"
 
@@ -316,6 +317,13 @@ QWidget* buildRefinePage(const PageContext& context) {
   auto* redo = new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+Z")), page);
   redo->setObjectName(QStringLiteral("refine-redo"));
   QObject::connect(redo, &QShortcut::activated, page, [actions] { actions->request_redo(); });
+  // 复制效果 Cmd+C、粘贴效果 Cmd+V：直接搬运当前效果，不打开勾选框；这两个键不可自定义（需求 §18）。
+  auto* copy_effect = new QShortcut(QKeySequence(QStringLiteral("Ctrl+C")), page);
+  copy_effect->setObjectName(QStringLiteral("refine-copy-effect"));
+  QObject::connect(copy_effect, &QShortcut::activated, page, [actions] { actions->request_copy_effect(); });
+  auto* paste_effect = new QShortcut(QKeySequence(QStringLiteral("Ctrl+V")), page);
+  paste_effect->setObjectName(QStringLiteral("refine-paste-effect"));
+  QObject::connect(paste_effect, &QShortcut::activated, page, [actions] { actions->request_paste_effect(); });
   top_layout->addWidget(back);
   top_layout->addWidget(itemAction("refine-top", copyItem("refine-top", "search"), top));
   top_layout->addWidget(itemAction("refine-top", copyItem("refine-top", "assistant"), top));
@@ -384,7 +392,23 @@ QWidget* buildRefinePage(const PageContext& context) {
   side_scroll->setWidgetResizable(true);
   side_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
   side_scroll->setMinimumWidth(PixCakeTheme::kWorkspaceSideWidth + side_scroll->verticalScrollBar()->sizeHint().width());
-  center->addWidget(side_scroll);
+  // 功能区底部：保存新预设（预设还没接）和同步到选中图片（⇧⌘S，需求 §18）。
+  auto* side_column = new QVBoxLayout;
+  side_column->setSpacing(4);
+  side_column->addWidget(side_scroll, 1);
+  auto* side_bottom = new QHBoxLayout;
+  auto* sync = action(qtext("sync.title"), page, actions->has_photo());
+  sync->setObjectName(QStringLiteral("refine-sync"));
+  QObject::connect(sync, &QPushButton::clicked, sync, [sync, actions] { openSyncDialog(sync, actions); });
+  side_bottom->addStretch();
+  side_bottom->addWidget(sync);
+  side_column->addLayout(side_bottom);
+  center->addLayout(side_column);
+  auto* sync_shortcut = new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+S")), page);
+  sync_shortcut->setObjectName(QStringLiteral("refine-sync-shortcut"));
+  QObject::connect(sync_shortcut, &QShortcut::activated, page, [sync, actions] {
+    if (actions->has_photo()) openSyncDialog(sync, actions);
+  });
   if (histogram != nullptr && context.actions.has_photo()) {
     // With a photo open, start at the colour panel (histogram and sliders).
     QPointer<QScrollArea> scroll(side_scroll);

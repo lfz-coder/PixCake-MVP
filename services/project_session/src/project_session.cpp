@@ -277,6 +277,98 @@ std::vector<std::int64_t> sources_of(const ProjectSession& session, const std::v
 }
 }  // namespace
 
+namespace {
+
+// 目标的已提交文档（没编辑过就是空文档）和它的路径。
+bool load_committed(ProjectSession& session, FileSystem& files, const std::string& directory, std::int64_t item,
+                    std::optional<EditDocument>& document, std::string& path) {
+  path = directory + "/" + session.document_name(item) + ".pxedit";
+  document = EditDocument::create(session.image_id(item));
+  if (!document) return false;
+  if (!files.exists(path)) return true;
+  const LoadResult loaded = EditDocument::load(*document, files, path, phase_one_version_limits());
+  return loaded.code && *loaded.code == ResultCode::Ok && !loaded.recovered_empty;
+}
+
+}  // namespace
+
+ResultCode ProjectSession::copy_effect(std::int64_t item, EffectClipboard& out) {
+  out = {};
+  if (!commands_.signed_in()) return ResultCode::StateConflict;
+  std::optional<EditDocument> document;
+  std::string path;
+  if (!load_committed(*this, files_, document_directory_, item, document, path)) return ResultCode::DocumentCorrupt;
+  out = copy_committed(*document);
+  return ResultCode::Ok;
+}
+
+ResultCode ProjectSession::paste_effect(const EffectClipboard& clipboard, const std::vector<std::int64_t>& targets,
+                                        std::vector<EffectOutcome>& outcomes) {
+  outcomes.clear();
+  if (!commands_.signed_in()) return ResultCode::StateConflict;
+  ResultCode first = ResultCode::Ok;
+  for (const std::int64_t item : targets) {
+    EffectOutcome outcome;
+    outcome.item = item;
+    std::optional<EditDocument> document;
+    std::string path;
+    if (!load_committed(*this, files_, document_directory_, item, document, path)) {
+      outcome.code = ResultCode::DocumentCorrupt;
+    } else {
+      outcome.code = paste_committed(*document, clipboard, document->revision(), files_, path);
+      if (outcome.code == ResultCode::Ok) mark_edited(item);
+    }
+    if (outcome.code != ResultCode::Ok && first == ResultCode::Ok) first = outcome.code;
+    outcomes.push_back(outcome);
+  }
+  return first;
+}
+
+ResultCode ProjectSession::sync_effect(std::int64_t source, const std::vector<std::string>& checked_ids,
+                                       const std::vector<std::int64_t>& targets,
+                                       std::vector<EffectOutcome>& outcomes) {
+  outcomes.clear();
+  if (!commands_.signed_in()) return ResultCode::StateConflict;
+  std::optional<EditDocument> from;
+  std::string from_path;
+  if (!load_committed(*this, files_, document_directory_, source, from, from_path)) return ResultCode::DocumentCorrupt;
+  std::vector<std::optional<EditDocument>> documents(targets.size());
+  std::vector<SyncTarget> sync_targets;
+  std::vector<std::int64_t> items;
+  for (std::size_t i = 0; i < targets.size(); ++i) {
+    if (targets[i] == source) continue;
+    std::string path;
+    EffectOutcome failed;
+    failed.item = targets[i];
+    if (!load_committed(*this, files_, document_directory_, targets[i], documents[i], path)) {
+      failed.code = ResultCode::DocumentCorrupt;
+      outcomes.push_back(failed);
+      continue;
+    }
+    SyncTarget target;
+    target.id = std::to_string(targets[i]);
+    target.document = &*documents[i];
+    target.expected_revision = documents[i]->revision();
+    target.files = &files_;
+    target.path = path;
+    sync_targets.push_back(target);
+    items.push_back(targets[i]);
+  }
+  const auto results = apply_checked(*from, from_path, checked_ids, sync_targets);
+  ResultCode first = ResultCode::Ok;
+  for (std::size_t i = 0; i < results.size() && i < items.size(); ++i) {
+    outcomes.push_back({items[i], results[i].code});
+    if (results[i].code == ResultCode::Ok) mark_edited(items[i]);
+  }
+  for (const auto& outcome : outcomes) {
+    if (outcome.code != ResultCode::Ok) {
+      first = outcome.code;
+      break;
+    }
+  }
+  return first;
+}
+
 ResultCode ProjectSession::set_rating(const std::vector<std::int64_t>& items, int rating) {
   const auto sources = sources_of(*this, items);
   return sources.empty() ? ResultCode::StateConflict : commands_.set_photo_ratings(*library_, sources, rating).code;

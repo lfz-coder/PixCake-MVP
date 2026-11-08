@@ -145,6 +145,38 @@ int main() {
     std::remove(photo2.c_str());
   }
 
+  // Paste effect: another photo's committed effect goes through the command gate, is one history step, and undoes.
+  {
+    const std::string source_photo = base + "-s.bmp";
+    const std::string target_photo = base + "-t.bmp";
+    write_grey_bmp(source_photo, 40, 20, 90);
+    write_grey_bmp(target_photo, 40, 20, 90);
+    EffectClipboard clipboard;
+    {
+      std::unique_ptr<PreviewSession> source;
+      assert(PreviewSession::open(source_photo, options, source, diagnostic) == ResultCode::Ok);
+      assert(source->commit("color.global", "contrast", "40", diagnostic) == ResultCode::Ok);
+      clipboard = copy_committed(source->document());
+    }
+    assert(!clipboard.fragments.empty());
+    std::unique_ptr<PreviewSession> target;
+    assert(PreviewSession::open(target_photo, options, target, diagnostic) == ResultCode::Ok);
+    int pastes = 0;
+    target->on_committed([&pastes] { ++pastes; });
+    assert(target->paste(clipboard, diagnostic) == ResultCode::Ok && pastes == 1);
+    assert(target->document().effective_parameter("color.global", "contrast") == std::optional<std::string>("40"));
+    assert(target->history().size() == 2 && target->history()[1].capability_id == PreviewSession::kPasteStep);
+    assert(target->wait_latest_frame(frame, 15'000, diagnostic) == ResultCode::Ok);
+    assert(frame.result.code == ResultCode::Ok);
+    assert(target->undo(diagnostic) == ResultCode::Ok && !target->document().effective_parameter("color.global", "contrast"));
+    assert(target->wait_latest_frame(frame, 15'000, diagnostic) == ResultCode::Ok && frame.result.code == ResultCode::Ok);
+    assert(target->redo(diagnostic) == ResultCode::Ok &&
+           target->document().effective_parameter("color.global", "contrast") == std::optional<std::string>("40"));
+    target.reset();
+    std::remove(source_photo.c_str());
+    std::remove(target_photo.c_str());
+  }
+
   // Failures before any process is left behind.
   std::unique_ptr<PreviewSession> none;
   assert(PreviewSession::open(base + "-missing.bmp", options, none, diagnostic) == ResultCode::SourceMissing);

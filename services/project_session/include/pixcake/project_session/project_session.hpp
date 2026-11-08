@@ -1,6 +1,7 @@
 #pragma once
 
 #include "pixcake/command/business_commands.hpp"
+#include "pixcake/sync/sync_batch.hpp"
 #include "pixcake/image_import/import_coordinator.hpp"
 #include "pixcake/persist/file_system.hpp"
 #include "pixcake/project/project_library.hpp"
@@ -69,6 +70,19 @@ class ProjectSession {
   std::string image_id(std::int64_t item) const;
   // 复制原图或副本当前已提交的调整，新副本排在原图的副本最后；new_item 是新副本的编号。
   ResultCode create_virtual_copy(std::int64_t item, std::int64_t& new_item, std::string& diagnostic);
+
+  // 复制、粘贴效果和批量同步（需求 §18）：读写的是已提交的编辑文档（不是正在精修的内存预览）。
+  // 每个目标一条结果；成功的目标记成已编辑。未登录返回状态冲突。
+  struct EffectOutcome {
+    std::int64_t item = 0;
+    ResultCode code = ResultCode::Ok;
+  };
+  ResultCode copy_effect(std::int64_t item, EffectClipboard& out);
+  ResultCode paste_effect(const EffectClipboard& clipboard, const std::vector<std::int64_t>& targets,
+                          std::vector<EffectOutcome>& outcomes);
+  // 把 source 里勾选的一级、二级功能（sync_tree 的编号）同步到各目标；来源不能出现在目标里。
+  ResultCode sync_effect(std::int64_t source, const std::vector<std::string>& checked_ids,
+                         const std::vector<std::int64_t>& targets, std::vector<EffectOutcome>& outcomes);
 
   // 标记（需求 §6.1）：星级 0–5、旗标（选取/排除/空）、色标（红黄绿蓝紫/空）。条目编号，副本记在原图上；
   // 同一张原图只写一次。

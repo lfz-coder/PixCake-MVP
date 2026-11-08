@@ -165,6 +165,32 @@ int main() {
     assert(projects->set_rating({copy}, 6) == ResultCode::StateConflict);
     assert(projects->set_flag({a}, "") == ResultCode::Ok && projects->set_color({a}, "") == ResultCode::Ok);
     assert(projects->load_photo(a, row) == ResultCode::Ok && row->flag.empty() && row->color_label.empty());
+    // 复制、粘贴效果和批量同步：读写已提交的文档；没编辑过的目标得到新文档，来源不进目标。
+    const std::int64_t b = imported.photo_ids[1];
+    EffectClipboard clipboard;
+    assert(projects->copy_effect(a, clipboard) == ResultCode::Ok && !clipboard.fragments.empty());
+    std::vector<ProjectSession::EffectOutcome> outcomes;
+    assert(projects->document_bytes(b, copied) == ResultCode::Ok && copied.empty());
+    assert(projects->paste_effect(clipboard, {b}, outcomes) == ResultCode::Ok && outcomes.size() == 1 &&
+           outcomes[0].item == b && outcomes[0].code == ResultCode::Ok);
+    assert(projects->document_bytes(b, copied) == ResultCode::Ok && !copied.empty());
+    assert(EditDocument::decode(copied)->effective_parameter("color.global", "exposure") ==
+           std::optional<std::string>("1.00"));
+    assert(projects->load_photo(b, row) == ResultCode::Ok && row->edit_status == kEditStatusEdited);
+    std::vector<std::string> checked;
+    for (const auto& entry : sync_tree()) {
+      if (entry.enabled) checked.push_back(entry.id);
+    }
+    assert(!checked.empty());
+    assert(projects->sync_effect(a, checked, {a, copy, b}, outcomes) == ResultCode::Ok);
+    assert(outcomes.size() == 2 && outcomes[0].item == copy && outcomes[1].item == b);  // the source is skipped
+    assert(projects->sync_effect(a, {"no-such-item"}, {b}, outcomes) != ResultCode::Ok);
+    session.in = false;
+    assert(projects->copy_effect(a, clipboard) == ResultCode::StateConflict);
+    assert(projects->paste_effect(clipboard, {b}, outcomes) == ResultCode::StateConflict);
+    assert(projects->sync_effect(a, checked, {b}, outcomes) == ResultCode::StateConflict);
+    session.in = true;
+
     // 筛选与排序：原图被筛掉，它的副本也不出现；排序只排原图，副本跟在后面。
     assert(projects->set_rating({a}, 2) == ResultCode::Ok);
     PhotoQuery query;
@@ -172,9 +198,10 @@ int main() {
     assert(projects->list_photos(imported.project_id, photos, &query) == ResultCode::Ok && photos.size() == 3);
     assert(photos[0].id == a && photos[1].id == copy && photos[2].id == second);
     query = {};
-    query.edit_statuses = {""};  // 未编辑
-    assert(projects->list_photos(imported.project_id, photos, &query) == ResultCode::Ok && photos.size() == 1);
-    assert(photos[0].id == imported.photo_ids[1]);
+    query.edit_statuses = {""};  // 未编辑：b 已经被粘贴效果编辑过，没有了
+    assert(projects->list_photos(imported.project_id, photos, &query) == ResultCode::Ok && photos.empty());
+    query.edit_statuses = {kEditStatusEdited};
+    assert(projects->list_photos(imported.project_id, photos, &query) == ResultCode::Ok && photos.size() == 4);
     query = {};
     query.sort = PhotoSortKey::FileName;
     query.descending = true;

@@ -71,6 +71,12 @@ class ShellController final : public PageActions {
   void request_photo_filter(const PhotoQuery& query) override;
   bool photo_filtered() const override;
   std::size_t photo_total() const override;
+  void request_copy_effect() override;
+  void request_paste_effect() override;
+  bool can_paste_effect() const override { return clipboard_.has_value(); }
+  std::vector<SyncItem> sync_items() const override { return sync_tree(); }
+  std::size_t sync_target_count() const override;
+  std::size_t request_sync(const std::vector<std::string>& checked_ids) override;
   std::vector<HistoryRow> history() const override;
   void request_history_step(std::size_t index) override;
   void request_undo() override;
@@ -137,6 +143,9 @@ class ShellController final : public PageActions {
   std::vector<std::int64_t> selection_;
   std::vector<std::pair<QPointer<QObject>, std::function<void()>>> history_watchers_;
   void history_changed();
+  std::optional<EffectClipboard> clipboard_;
+  // 效果搬到别的照片后：缩略图跟着变；打开着的那张先关再开，免得内存里的文档和磁盘不一致。
+  void refresh_after_effect(const std::vector<std::int64_t>& items);
   PhotoQuery filter_;  // 当前项目的筛选与排序；换项目时清空
   std::vector<std::pair<QPointer<QObject>, std::function<void()>>> selection_watchers_;
   void selection_changed();
