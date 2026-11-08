@@ -77,6 +77,13 @@ class ShellController final : public PageActions {
   std::vector<SyncItem> sync_items() const override { return sync_tree(); }
   std::size_t sync_target_count() const override;
   std::size_t request_sync(const std::vector<std::string>& checked_ids) override;
+  std::vector<project_session::ProjectSession::PresetRow> presets() const override;
+  std::vector<PresetCapability> adjusted_preset_capabilities() const override;
+  bool request_save_preset(const project_session::ProjectSession::PresetDraft& draft, std::string& problem) override;
+  void request_rename_preset(const std::string& id, const std::string& name) override;
+  void request_delete_preset(const std::string& id) override;
+  bool preset_overwrites_color(const std::string& id) const override;
+  void request_apply_preset(const std::string& id) override;
   std::vector<HistoryRow> history() const override;
   void request_history_step(std::size_t index) override;
   void request_undo() override;

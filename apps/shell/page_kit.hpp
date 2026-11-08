@@ -4,6 +4,7 @@
 // ShellController。文字来自 ui/shell 的文案表，图标按“组/条目编号”查。
 #include "pixcake/export_session/export_session.hpp"
 #include "pixcake/project/records.hpp"
+#include "pixcake/project_session/project_session.hpp"
 #include "pixcake/sync/sync_batch.hpp"
 #include "pixcake/ui/panels/histogram.hpp"
 #include "pixcake/ui/panels/slider_spec.hpp"
@@ -131,6 +132,20 @@ class PageActions {
   virtual std::size_t sync_target_count() const { return 0; }
   // 每个目标的结果；全部成功时 failed 为空。
   virtual std::size_t request_sync(const std::vector<std::string>&) { return 0; }
+  // 预设（需求 §9）：本机“我的”预设。保存从当前照片已调整的能力里勾选；套用在精修里走命令入口（历史多一步），
+  // 在图库里套用到选中的全部。套用会替换已有色彩时，界面先问。
+  struct PresetCapability {
+    std::string id;
+    std::string module;
+    std::string label;
+  };
+  virtual std::vector<project_session::ProjectSession::PresetRow> presets() const { return {}; }
+  virtual std::vector<PresetCapability> adjusted_preset_capabilities() const { return {}; }
+  virtual bool request_save_preset(const project_session::ProjectSession::PresetDraft&, std::string& problem) { problem.clear(); return false; }
+  virtual void request_rename_preset(const std::string&, const std::string&) {}
+  virtual void request_delete_preset(const std::string&) {}
+  virtual bool preset_overwrites_color(const std::string&) const { return false; }
+  virtual void request_apply_preset(const std::string&) {}
   // 历史（需求 §8.3）：撤销、重做、点某一步回到那一步。步骤变了（提交、撤销）时回调 watch_history 登记的函数。
   virtual std::vector<HistoryRow> history() const { return {}; }
   virtual void request_history_step(std::size_t) {}

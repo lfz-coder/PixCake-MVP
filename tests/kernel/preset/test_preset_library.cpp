@@ -1,4 +1,5 @@
 
+#include "pixcake/preset/preset_codec.hpp"
 #include "pixcake/preset/preset_library.hpp"
 #include "pixcake/capability/fragment_codec.hpp"
 #include "support/fake_file_system.hpp"
@@ -209,7 +210,48 @@ void test_c31_preset_apply_validates_through_capability_modules() {
   EXPECT(document.fragment("color.local") && document.fragment("color.local")->version == 2);
 }
 
+// 管理和存盘：重命名守 20 字、删除、按已用能力推断类型、字节格式来回一致、坏字节被拒。
+void test_manage_infer_and_codec() {
+  pixcake::PresetLibrary library;
+  pixcake::Preset first = portrait_named("a", "first");
+  pixcake::Preset second = portrait_named("b", "second");
+  first.category = "wedding";
+  first.fragments.push_back({"portrait.skin", 1, marked(1)});
+  EXPECT(library.save(first, false) == pixcake::ResultCode::Ok);
+  EXPECT(library.save(second, false) == pixcake::ResultCode::Ok);
+  EXPECT(library.rename("a", "renamed") == pixcake::ResultCode::Ok && library.find("a")->name == "renamed");
+  EXPECT(library.rename("a", han(21)) == pixcake::ResultCode::StateConflict && library.find("a")->name == "renamed");
+  EXPECT(library.rename("zz", "x") == pixcake::ResultCode::StateConflict);
+  const auto bytes = pixcake::encode_presets(library.presets());
+  const auto decoded = pixcake::decode_presets(bytes);
+  EXPECT(decoded && decoded->size() == 2 && (*decoded)[0].id == "a" && (*decoded)[0].name == "renamed" &&
+         (*decoded)[0].category == "wedding" && (*decoded)[0].fragments.size() == 1 &&
+         (*decoded)[0].fragments[0].capability_id == "portrait.skin" && (*decoded)[0].fragments[0].inner == marked(1));
+  auto cut = bytes;
+  cut.pop_back();
+  auto padded = bytes;
+  padded.push_back(0);
+  auto wrong = bytes;
+  wrong[0] = 'X';
+  EXPECT(!pixcake::decode_presets(cut) && !pixcake::decode_presets(padded) && !pixcake::decode_presets(wrong));
+  EXPECT(!pixcake::decode_presets({}) && pixcake::decode_presets(pixcake::encode_presets({}))->empty());
+  pixcake::PresetLibrary other;
+  EXPECT(other.load(*decoded) == pixcake::ResultCode::Ok && other.presets().size() == 2);
+  auto bad = *decoded;
+  bad[1].id = bad[0].id;  // duplicate ids
+  EXPECT(other.load(bad) == pixcake::ResultCode::StateConflict && other.presets().size() == 2);
+  EXPECT(library.remove("a") == pixcake::ResultCode::Ok && library.find("a") == nullptr &&
+         library.remove("a") == pixcake::ResultCode::StateConflict && library.presets().size() == 1);
+  std::vector<std::string> modules;
+  EXPECT(pixcake::PresetLibrary::infer_type({"color.global", "detail"}, modules) == pixcake::kPresetColor &&
+         modules.empty());
+  EXPECT(pixcake::PresetLibrary::infer_type({"color.global", "portrait.skin"}, modules) == pixcake::kPresetCombo &&
+         modules.size() == 2);
+  EXPECT(pixcake::PresetLibrary::infer_type({}, modules).empty() && modules.empty());
+}
+
 int main() {
+  test_manage_infer_and_codec();
   test_c31_preset_apply_validates_through_capability_modules();
   test_c44_b04_b20_b21_name_counts_characters_not_bytes();
   test_c43_type_and_module_must_match();

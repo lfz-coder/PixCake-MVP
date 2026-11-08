@@ -8,6 +8,7 @@
 #include "pixcake/ui/shell/shell_display.hpp"
 #include "filter_dialog.hpp"
 #include "pixcake_theme.hpp"
+#include "preset_dialog.hpp"
 #include "pixcake_widgets.hpp"
 #include "sync_dialog.hpp"
 #include "trash_dialog.hpp"
@@ -1075,6 +1076,7 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
     return 8;
   }
   const double before = mean_red(view->image());
+  const QSize frame_size = view->image().size();  // the page is rebuilt by later steps: keep what the report needs
   // Enabled exactly when renderd draws the parameter and no parameter-mode rule blocks it.
   QSlider* exposure = nullptr;
   QSlider* hsl_red = nullptr;
@@ -1196,6 +1198,59 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
       return 8;
     }
   }
+  // Presets: save the photo's colour as a preset through the dialog, apply it (a history step), see it listed.
+  // (Needs a project: the development page that opens a bare photo has none.)
+  if (window.controller().current_project()) {
+    auto& controller = window.controller();
+    pixcake::shell::openSavePresetDialog(&window, &controller);
+    auto* dialog = window.findChild<QDialog*>(QStringLiteral("preset-save-dialog"));
+    auto* name = dialog != nullptr ? dialog->findChild<QLineEdit*>(QStringLiteral("preset-name")) : nullptr;
+    auto* tree = dialog != nullptr ? dialog->findChild<QTreeWidget*>(QStringLiteral("preset-tree")) : nullptr;
+    auto* save = dialog != nullptr ? dialog->findChild<QPushButton*>(QStringLiteral("preset-save")) : nullptr;
+    if (name == nullptr || tree == nullptr || save == nullptr || !save->isEnabled() || tree->topLevelItemCount() == 0) {
+      qCritical("preset save dialog missing, or nothing offered to save");
+      return 8;
+    }
+    // A name longer than 20 characters is refused and the dialog stays open with the reason.
+    name->setText(QString(21, QLatin1Char('x')));
+    save->click();
+    auto* problem = dialog->findChild<QLabel*>(QStringLiteral("preset-problem"));
+    if (!controller.presets().empty() || problem == nullptr || problem->text().isEmpty()) {
+      qCritical("a 21-character preset name was accepted");
+      return 8;
+    }
+    name->setText(QStringLiteral("smoke warm"));
+    save->click();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    const auto presets = controller.presets();
+    if (presets.size() != 1 || presets[0].name != "smoke warm" || presets[0].type != pixcake::kPresetColor ||
+        window.findChild<QDialog*>(QStringLiteral("preset-save-dialog")) != nullptr) {
+      qCritical("preset not saved: %zu presets", presets.size());
+      return 8;
+    }
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    QListWidget* list = nullptr;
+    for (auto* candidate : window.findChildren<QListWidget*>(QStringLiteral("refine-preset-list"))) {
+      if (candidate->isVisibleTo(&window)) list = candidate;
+    }
+    if (list == nullptr || list->count() != 1 || list->item(0)->text() != QStringLiteral("smoke warm")) {
+      qCritical("the preset list does not show the saved preset");
+      return 8;
+    }
+    const auto steps_before = controller.history().size();
+    controller.request_apply_preset(presets[0].id);
+    const auto steps = controller.history();
+    if (steps.size() != steps_before + 1 || !steps.back().current ||
+        steps.back().text != qtext_for_smoke("history.preset").arg(QStringLiteral("smoke warm")) ||
+        !controller.preset_overwrites_color(presets[0].id)) {
+      qCritical("applying the preset: %zu -> %zu steps", steps_before, steps.size());
+      return 8;
+    }
+    if (!wait_current(window, 30'000)) {
+      qCritical("no frame after applying the preset");
+      return 8;
+    }
+  }
   // History: original, exposure, profile, grain; the list shows them; undo, redo and a click walk the document.
   {
     auto& controller = window.controller();
@@ -1204,7 +1259,8 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
     for (auto* candidate : window.findChildren<QListWidget*>(QStringLiteral("refine-history-list"))) {
       if (candidate->isVisibleTo(&window)) steps = candidate;
     }
-    const auto exposure_binding = panels::refine_color_binding(panels::slider_label_of(exposure->accessibleName().toStdString()));
+    // (The page was rebuilt by the preset steps above: the old slider pointers are gone.)
+    const auto exposure_binding = std::optional<panels::SliderBinding>(panels::SliderBinding{"color.global", "exposure"});
     if (rows.size() < 4 || !rows.back().current || steps == nullptr || steps->count() != static_cast<int>(rows.size()) ||
         !exposure_binding) {
       qCritical("history: %zu rows (last current %d), list %s with %d items", rows.size(), rows.back().current,
@@ -1247,7 +1303,7 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
     window.grab().save(QString::fromLocal8Bit(shot));
   }
   std::printf("open photo ok: %dx%d, %d sliders enabled, red %.1f -> %.1f, black-and-white and grain drawn\n",
-              view->image().width(), view->image().height(), enabled, before, after);
+              frame_size.width(), frame_size.height(), enabled, before, after);
   return 0;
 }
 #endif

@@ -300,6 +300,17 @@ ResultCode PreviewSession::redraw(const std::vector<std::pair<std::string, std::
   return send_request(capability, parameter, value ? *value : default_display(capability, parameter), diagnostic);
 }
 
+ResultCode PreviewSession::apply_preset(PresetLibrary& library, const Preset& preset, std::string& diagnostic) {
+  const CommandResult result = gate_->apply_preset(library, preset, document_.revision());
+  if (result.code != ResultCode::Ok) {
+    diagnostic = std::string("preset refused: ") + result_code_label(result.code);
+    return result.code;
+  }
+  history_.record_committed(document_.image_id(), document_, kPresetStep, "", preset.name, false);
+  if (committed_) committed_();
+  return redraw({{last_capability_, last_parameter_}}, diagnostic);
+}
+
 ResultCode PreviewSession::paste(const EffectClipboard& clipboard, std::string& diagnostic) {
   const CommandResult result = gate_->paste(clipboard, document_.revision());
   if (result.code != ResultCode::Ok) {

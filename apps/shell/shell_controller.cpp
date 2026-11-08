@@ -344,6 +344,9 @@ namespace {
 QString history_text(const preview_channel::PreviewSession::HistoryEntry& entry) {
   if (!entry.label.empty()) return QString::fromStdString(entry.label);
   if (entry.capability_id == preview_channel::PreviewSession::kPasteStep) return qtext("history.paste");
+  if (entry.capability_id == preview_channel::PreviewSession::kPresetStep) {
+    return qtext("history.preset").arg(QString::fromStdString(entry.display_value));
+  }
   QString name = QString::fromStdString(entry.capability_id + "/" + entry.parameter_id);
   auto rows = ui::panels::refine_color_rows();
   for (auto& row : ui::panels::refine_post_color_rows()) rows.push_back(std::move(row));
@@ -459,6 +462,82 @@ void ShellController::request_paste_effect() {
   if (!others.empty() && projects_->paste_effect(*clipboard_, others, outcomes) != ResultCode::Ok) {
     failure = ResultCode::StateConflict;
   }
+  if (failure != ResultCode::Ok) show_notices({}, NoticeScene::OpenDocument, failure);
+  if (reopen && reopened) open_project_photo(*reopened);
+  refresh_after_effect(others);
+}
+
+std::vector<project_session::ProjectSession::PresetRow> ShellController::presets() const {
+  return projects_ ? projects_->list_presets() : std::vector<project_session::ProjectSession::PresetRow>{};
+}
+
+std::vector<PageActions::PresetCapability> ShellController::adjusted_preset_capabilities() const {
+  std::vector<PresetCapability> out;
+  const auto source = display_.page() == Page::Library ? selected_photo_ : current_photo_;
+  if (!projects_ || !source) return out;
+  static const auto registry = CapabilityRegistry::phase_one();
+  for (const auto& id : projects_->adjusted_capabilities(*source)) {
+    const auto* descriptor = registry.find(id);
+    if (descriptor != nullptr) out.push_back({id, descriptor->module_label, descriptor->label});
+  }
+  return out;
+}
+
+bool ShellController::request_save_preset(const project_session::ProjectSession::PresetDraft& draft,
+                                          std::string& problem) {
+  problem.clear();
+  const auto source = display_.page() == Page::Library ? selected_photo_ : current_photo_;
+  if (!projects_ || !source) return false;
+  const ResultCode code = projects_->save_preset(*source, draft, problem);
+  if (code == ResultCode::Ok && changed_) changed_();
+  return code == ResultCode::Ok;
+}
+
+void ShellController::request_rename_preset(const std::string& id, const std::string& name) {
+  if (!projects_) return;
+  const ResultCode code = projects_->rename_preset(id, name);
+  if (code != ResultCode::Ok) show_notices({}, NoticeScene::OpenDocument, code);
+  if (changed_) changed_();
+}
+
+void ShellController::request_delete_preset(const std::string& id) {
+  if (!projects_) return;
+  const ResultCode code = projects_->delete_preset(id);
+  if (code != ResultCode::Ok) show_notices({}, NoticeScene::OpenDocument, code);
+  if (changed_) changed_();
+}
+
+bool ShellController::preset_overwrites_color(const std::string& id) const {
+  const auto source = display_.page() == Page::Library ? selected_photo_ : current_photo_;
+  return projects_ && source && projects_->preset_overwrites_color(*source, id);
+}
+
+void ShellController::request_apply_preset(const std::string& id) {
+  if (!projects_ || !current_project_) return;
+  const Preset* preset = projects_->preset_library().find(id);
+  if (preset == nullptr) return;
+  const std::vector<std::int64_t> targets =
+      display_.page() == Page::Library ? selected_photos()
+                                       : (current_photo_ ? std::vector<std::int64_t>{*current_photo_}
+                                                         : std::vector<std::int64_t>{});
+  if (targets.empty()) return;
+  std::vector<std::int64_t> others;
+  ResultCode failure = ResultCode::Ok;
+  for (const std::int64_t target : targets) {
+    if (session_ && current_photo_ == target && display_.page() == Page::Refine) {
+      std::string diagnostic;
+      const ResultCode code = session_->apply_preset(projects_->preset_library(), *preset, diagnostic);
+      if (code != ResultCode::Ok) failure = code;
+      view_.status = qtext("refine.preview.loading");
+    } else {
+      others.push_back(target);
+    }
+  }
+  std::vector<project_session::ProjectSession::EffectOutcome> outcomes;
+  const bool reopen = session_ && current_photo_ && contains(others, *current_photo_);
+  const auto reopened = current_photo_;
+  if (reopen) close_photo();
+  if (!others.empty() && projects_->apply_preset(id, others, outcomes) != ResultCode::Ok) failure = ResultCode::StateConflict;
   if (failure != ResultCode::Ok) show_notices({}, NoticeScene::OpenDocument, failure);
   if (reopen && reopened) open_project_photo(*reopened);
   refresh_after_effect(others);

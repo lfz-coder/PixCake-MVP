@@ -97,6 +97,9 @@ class PreviewSession {
   // 粘贴效果（需求 §18）：把剪贴板里的效果搬到这张图，经命令入口提交，历史多一步“粘贴效果”。
   static constexpr char kPasteStep[] = "paste";
   ResultCode paste(const EffectClipboard& clipboard, std::string& diagnostic);
+  // 套用预设（需求 §9）：同类型替换，经命令入口提交，历史多一步，步骤的显示值是预设名。
+  static constexpr char kPresetStep[] = "preset";
+  ResultCode apply_preset(PresetLibrary& library, const Preset& preset, std::string& diagnostic);
   ResultCode undo(std::string& diagnostic);
   ResultCode redo(std::string& diagnostic);
   // Called after each successful commit (e.g. to mark the photo edited).

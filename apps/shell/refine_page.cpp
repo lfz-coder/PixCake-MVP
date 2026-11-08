@@ -2,6 +2,7 @@
 #include "pages.hpp"
 #include "pixcake_theme.hpp"
 #include "pixcake_widgets.hpp"
+#include "preset_dialog.hpp"
 #include "shell_icons.hpp"
 #include "sync_dialog.hpp"
 
@@ -222,6 +223,7 @@ void addModules(QWidget* modules, QVBoxLayout* modules_layout, PageActions* acti
     if (!description.isEmpty()) button->setAccessibleDescription(description);
     modules_layout->addWidget(button);
   }
+  if (actions->has_photo()) modules_layout->addWidget(buildPresetList(modules, actions));
   addColorPanel(modules, modules_layout, actions, histogram);
 
   auto* local = labelPanel(modules, modules_layout, "refine-local-labels", moduleDescription("local"));
@@ -400,7 +402,11 @@ QWidget* buildRefinePage(const PageContext& context) {
   auto* sync = action(qtext("sync.title"), page, actions->has_photo());
   sync->setObjectName(QStringLiteral("refine-sync"));
   QObject::connect(sync, &QPushButton::clicked, sync, [sync, actions] { openSyncDialog(sync, actions); });
+  auto* save_preset = action(qtext("preset.save"), page, actions->has_photo());
+  save_preset->setObjectName(QStringLiteral("refine-save-preset"));
+  QObject::connect(save_preset, &QPushButton::clicked, save_preset, [save_preset, actions] { openSavePresetDialog(save_preset, actions); });
   side_bottom->addStretch();
+  side_bottom->addWidget(save_preset);
   side_bottom->addWidget(sync);
   side_column->addLayout(side_bottom);
   center->addLayout(side_column);

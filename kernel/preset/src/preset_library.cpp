@@ -271,6 +271,70 @@ ResultCode PresetLibrary::apply(EditDocument& document, const Preset& preset,
   return document.commit_fragment_replacement(expected_revision, removals, replacements, files, path);
 }
 
+ResultCode PresetLibrary::rename(const std::string& id, const std::string& name) {
+  for (auto& existing : presets_) {
+    if (existing.id != id) continue;
+    Preset renamed = existing;
+    renamed.name = name;
+    if (const ResultCode code = validate(renamed); code != ResultCode::Ok) return code;
+    existing.name = name;
+    return ResultCode::Ok;
+  }
+  return ResultCode::StateConflict;
+}
+
+ResultCode PresetLibrary::remove(const std::string& id) {
+  const auto found = std::find_if(presets_.begin(), presets_.end(), [&id](const Preset& p) { return p.id == id; });
+  if (found == presets_.end()) return ResultCode::StateConflict;
+  presets_.erase(found);
+  return ResultCode::Ok;
+}
+
+const Preset* PresetLibrary::find(const std::string& id) const {
+  for (const auto& existing : presets_) {
+    if (existing.id == id) return &existing;
+  }
+  return nullptr;
+}
+
+ResultCode PresetLibrary::load(std::vector<Preset> presets) {
+  for (std::size_t i = 0; i < presets.size(); ++i) {
+    if (const ResultCode code = validate(presets[i]); code != ResultCode::Ok) return code;
+    for (std::size_t j = i + 1; j < presets.size(); ++j) {
+      if (presets[i].id == presets[j].id) return ResultCode::StateConflict;
+    }
+  }
+  presets_ = std::move(presets);
+  return ResultCode::Ok;
+}
+
 const std::vector<Preset>& PresetLibrary::presets() const { return presets_; }
+
+std::string PresetLibrary::module_of_capability(const std::string& capability_id) {
+  static const auto registry = CapabilityRegistry::phase_one();
+  const auto* descriptor = registry.find(capability_id);
+  if (descriptor != nullptr && !descriptor->can_use_in_preset) return {};
+  const char* module = module_of(capability_id);
+  return module == nullptr ? std::string() : std::string(module);
+}
+
+std::string PresetLibrary::infer_type(const std::vector<std::string>& capability_ids,
+                                      std::vector<std::string>& modules) {
+  modules.clear();
+  for (const auto& id : capability_ids) {
+    const std::string module = module_of_capability(id);
+    if (module.empty()) continue;
+    if (std::find(modules.begin(), modules.end(), module) == modules.end()) modules.push_back(module);
+  }
+  if (modules.empty()) return {};
+  if (modules.size() == 1 &&
+      (modules[0] == kPresetColor || modules[0] == kPresetAiColor || modules[0] == kPresetPortrait)) {
+    const std::string type = modules[0];
+    modules.clear();
+    return type;
+  }
+  if (modules.size() < 2) return {};  // 一个模块但不是单类型能装的（图像、衣物…）：组合要两个以上
+  return kPresetCombo;
+}
 
 }  // namespace pixcake

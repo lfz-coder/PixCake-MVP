@@ -1,6 +1,7 @@
 #pragma once
 
 #include "pixcake/command/business_commands.hpp"
+#include "pixcake/preset/preset_library.hpp"
 #include "pixcake/sync/sync_batch.hpp"
 #include "pixcake/image_import/import_coordinator.hpp"
 #include "pixcake/persist/file_system.hpp"
@@ -84,6 +85,33 @@ class ProjectSession {
   ResultCode sync_effect(std::int64_t source, const std::vector<std::string>& checked_ids,
                          const std::vector<std::int64_t>& targets, std::vector<EffectOutcome>& outcomes);
 
+  // 预设（需求 §9）：本机“我的”预设，存在 <data>/presets.pxpresets。官方的推荐预设没有素材，不做。
+  // 套用走和同步一样的文件写入；正在精修的那张由壳层走它的命令入口（PreviewSession::apply_preset）。
+  struct PresetRow {
+    std::string id;
+    std::string name;
+    std::string category;
+    std::string type;
+  };
+  struct PresetDraft {
+    std::string name;
+    std::string category;
+    std::string type;                         // 空：按已用能力自动判断；也可手改（校验不通过会被拒）
+    std::vector<std::string> capability_ids;  // 要存的能力
+    std::string overwrite_id;                 // 非空：覆盖这条旧预设（名称、分类可变）
+  };
+  std::vector<PresetRow> list_presets() const;
+  // 这张图已调整、能进预设的能力（编号）。
+  std::vector<std::string> adjusted_capabilities(std::int64_t item);
+  ResultCode save_preset(std::int64_t item, const PresetDraft& draft, std::string& diagnostic);
+  ResultCode rename_preset(const std::string& id, const std::string& name);
+  ResultCode delete_preset(const std::string& id);
+  // 套用前的提示：这条预设会替换这张图已有的色彩吗。
+  bool preset_overwrites_color(std::int64_t item, const std::string& id);
+  ResultCode apply_preset(const std::string& id, const std::vector<std::int64_t>& targets,
+                          std::vector<EffectOutcome>& outcomes);
+  PresetLibrary& preset_library() { return presets_; }
+
   // 标记（需求 §6.1）：星级 0–5、旗标（选取/排除/空）、色标（红黄绿蓝紫/空）。条目编号，副本记在原图上；
   // 同一张原图只写一次。
   ResultCode set_rating(const std::vector<std::int64_t>& items, int rating);
@@ -143,6 +171,8 @@ class ProjectSession {
   std::unique_ptr<ProjectLibrary> library_;
   std::unique_ptr<image_import::ImportCoordinator> importer_;
   BusinessCommands commands_;
+  PresetLibrary presets_;
+  std::string preset_path_;
   std::string document_directory_;
   std::string workspace_directory_;
 };

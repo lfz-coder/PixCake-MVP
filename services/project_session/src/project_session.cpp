@@ -1,5 +1,8 @@
 #include "pixcake/project_session/project_session.hpp"
 
+#include "pixcake/capability/capability_registry.hpp"
+#include "pixcake/persist/atomic_file.hpp"
+#include "pixcake/preset/preset_codec.hpp"
 #include "pixcake/editdoc/edit_document.hpp"
 #include "pixcake/storage/sqlite_project_store.hpp"
 
@@ -8,6 +11,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 
 namespace pixcake::project_session {
 namespace {
@@ -107,6 +111,13 @@ ResultCode ProjectSession::open(const std::string& data_directory, const Session
   made->importer_ = std::make_unique<image_import::ImportCoordinator>(*made->library_, made->files_);
   made->document_directory_ = data_directory + "/documents";
   ::mkdir(made->document_directory_.c_str(), 0700);
+  made->preset_path_ = data_directory + "/presets.pxpresets";
+  if (made->files_.exists(made->preset_path_)) {
+    std::vector<std::uint8_t> bytes;
+    if (made->files_.read_file(made->preset_path_, bytes).code == ResultCode::Ok) {
+      if (auto stored = decode_presets(bytes)) made->presets_.load(std::move(*stored));  // 坏文件当作没有
+    }
+  }
   made->workspace_directory_ = data_directory + "/workspace";
   ::mkdir(made->workspace_directory_.c_str(), 0700);
   out = std::move(made);
@@ -365,6 +376,115 @@ ResultCode ProjectSession::sync_effect(std::int64_t source, const std::vector<st
       first = outcome.code;
       break;
     }
+  }
+  return first;
+}
+
+std::vector<ProjectSession::PresetRow> ProjectSession::list_presets() const {
+  std::vector<PresetRow> out;
+  for (const auto& preset : presets_.presets()) out.push_back({preset.id, preset.name, preset.category, preset.type});
+  return out;
+}
+
+std::vector<std::string> ProjectSession::adjusted_capabilities(std::int64_t item) {
+  std::vector<std::string> out;
+  std::optional<EditDocument> document;
+  std::string path;
+  if (!load_committed(*this, files_, document_directory_, item, document, path)) return out;
+  static const auto registry = CapabilityRegistry::phase_one();
+  for (const auto& descriptor : registry.descriptors()) {
+    if (descriptor.can_use_in_preset && document->fragment(descriptor.id).has_value()) out.push_back(descriptor.id);
+  }
+  return out;
+}
+
+ResultCode ProjectSession::save_preset(std::int64_t item, const PresetDraft& draft, std::string& diagnostic) {
+  diagnostic.clear();
+  if (!commands_.signed_in()) return ResultCode::StateConflict;
+  std::optional<EditDocument> document;
+  std::string path;
+  if (!load_committed(*this, files_, document_directory_, item, document, path)) return ResultCode::DocumentCorrupt;
+  Preset preset;
+  preset.name = draft.name;
+  preset.category = draft.category;
+  for (const auto& id : draft.capability_ids) {
+    const auto fragment = document->fragment(id);
+    if (!fragment) continue;  // 勾了但这张图没调：不存
+    preset.fragments.push_back({id, fragment->version, fragment->inner});
+  }
+  std::vector<std::string> ids;
+  for (const auto& fragment : preset.fragments) ids.push_back(fragment.capability_id);
+  std::vector<std::string> modules;
+  const std::string inferred = PresetLibrary::infer_type(ids, modules);
+  preset.type = draft.type.empty() ? inferred : draft.type;
+  if (preset.type == kPresetCombo) {
+    preset.modules = modules;
+  }
+  if (preset.type.empty() || preset.fragments.empty()) {
+    diagnostic = "nothing adjustable is checked";
+    return ResultCode::StateConflict;
+  }
+  const bool overwrite = !draft.overwrite_id.empty();
+  if (overwrite) {
+    preset.id = draft.overwrite_id;
+  } else {
+    long next = 1;
+    for (const auto& existing : presets_.presets()) {
+      if (existing.id.rfind("preset-", 0) == 0) next = std::max(next, std::atol(existing.id.c_str() + 7) + 1);
+    }
+    preset.id = "preset-" + std::to_string(next);
+  }
+  const ResultCode saved = presets_.save(std::move(preset), overwrite);
+  if (saved != ResultCode::Ok) {
+    diagnostic = "the preset is not valid (name, type or the checked functions)";
+    return saved;
+  }
+  return atomic_replace(files_, preset_path_, encode_presets(presets_.presets()));
+}
+
+ResultCode ProjectSession::rename_preset(const std::string& id, const std::string& name) {
+  if (!commands_.signed_in()) return ResultCode::StateConflict;
+  const ResultCode code = presets_.rename(id, name);
+  return code != ResultCode::Ok ? code : atomic_replace(files_, preset_path_, encode_presets(presets_.presets()));
+}
+
+ResultCode ProjectSession::delete_preset(const std::string& id) {
+  if (!commands_.signed_in()) return ResultCode::StateConflict;
+  const ResultCode code = presets_.remove(id);
+  return code != ResultCode::Ok ? code : atomic_replace(files_, preset_path_, encode_presets(presets_.presets()));
+}
+
+bool ProjectSession::preset_overwrites_color(std::int64_t item, const std::string& id) {
+  const Preset* preset = presets_.find(id);
+  std::optional<EditDocument> document;
+  std::string path;
+  if (preset == nullptr || !load_committed(*this, files_, document_directory_, item, document, path)) return false;
+  return presets_.check_apply(*document, *preset).overwrite_color;
+}
+
+ResultCode ProjectSession::apply_preset(const std::string& id, const std::vector<std::int64_t>& targets,
+                                        std::vector<EffectOutcome>& outcomes) {
+  outcomes.clear();
+  if (!commands_.signed_in()) return ResultCode::StateConflict;
+  const Preset* preset = presets_.find(id);
+  if (preset == nullptr) return ResultCode::StateConflict;
+  struct NoLatch final : FastExportLatch {
+    bool enabled() const override { return false; }
+  } latch;
+  ResultCode first = ResultCode::Ok;
+  for (const std::int64_t item : targets) {
+    EffectOutcome outcome;
+    outcome.item = item;
+    std::optional<EditDocument> document;
+    std::string path;
+    if (!load_committed(*this, files_, document_directory_, item, document, path)) {
+      outcome.code = ResultCode::DocumentCorrupt;
+    } else {
+      outcome.code = presets_.apply(*document, *preset, document->revision(), files_, path, latch);
+      if (outcome.code == ResultCode::Ok) mark_edited(item);
+    }
+    if (outcome.code != ResultCode::Ok && first == ResultCode::Ok) first = outcome.code;
+    outcomes.push_back(outcome);
   }
   return first;
 }

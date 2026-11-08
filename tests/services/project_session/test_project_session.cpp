@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cassert>
 #include <cstdio>
 #include <fstream>
@@ -191,6 +192,42 @@ int main() {
     assert(projects->sync_effect(a, checked, {b}, outcomes) == ResultCode::StateConflict);
     session.in = true;
 
+    // 预设：从已调整的图存下来（类型按已用能力推断），重命名、覆盖、套用到别的图；坏名字被拒。
+    const auto adjustable = projects->adjusted_capabilities(a);
+    assert(std::find(adjustable.begin(), adjustable.end(), "color.global") != adjustable.end());
+    assert(projects->adjusted_capabilities(second).size() == adjustable.size());  // a copy shares the effect
+    ProjectSession::PresetDraft draft;
+    draft.name = "warm";
+    draft.category = "wedding";
+    draft.capability_ids = {"color.global", "portrait.skin"};  // the photo has no skin edit: not stored
+    assert(projects->save_preset(a, draft, diagnostic) == ResultCode::Ok);
+    auto listed = projects->list_presets();
+    assert(listed.size() == 1 && listed[0].id == "preset-1" && listed[0].name == "warm" &&
+           listed[0].type == kPresetColor && listed[0].category == "wedding");
+    ProjectSession::PresetDraft nothing = draft;
+    nothing.capability_ids = {"portrait.skin"};
+    assert(projects->save_preset(a, nothing, diagnostic) == ResultCode::StateConflict);
+    ProjectSession::PresetDraft too_long = draft;
+    too_long.name = std::string(21, 'x');
+    assert(projects->save_preset(a, too_long, diagnostic) == ResultCode::StateConflict && projects->list_presets().size() == 1);
+    ProjectSession::PresetDraft again = draft;
+    assert(projects->save_preset(a, again, diagnostic) == ResultCode::Ok && projects->list_presets().size() == 2);
+    again.overwrite_id = "preset-1";
+    again.name = "warm 2";
+    assert(projects->save_preset(a, again, diagnostic) == ResultCode::Ok && projects->list_presets().size() == 2 &&
+           projects->list_presets()[0].name == "warm 2");
+    assert(projects->delete_preset("preset-2") == ResultCode::Ok && projects->list_presets().size() == 1);
+    assert(projects->rename_preset("preset-1", "warm") == ResultCode::Ok);
+    assert(projects->rename_preset("preset-1", std::string(21, 'x')) == ResultCode::StateConflict);
+    assert(projects->preset_overwrites_color(b, "preset-1") && !projects->preset_overwrites_color(b, "nope"));
+    assert(projects->apply_preset("preset-1", {copy, b}, outcomes) == ResultCode::Ok && outcomes.size() == 2);
+    assert(projects->apply_preset("nope", {b}, outcomes) == ResultCode::StateConflict);
+    session.in = false;
+    assert(projects->save_preset(a, draft, diagnostic) == ResultCode::StateConflict);
+    assert(projects->delete_preset("preset-1") == ResultCode::StateConflict);
+    assert(projects->apply_preset("preset-1", {b}, outcomes) == ResultCode::StateConflict);
+    session.in = true;
+
     // 筛选与排序：原图被筛掉，它的副本也不出现；排序只排原图，副本跟在后面。
     assert(projects->set_rating({a}, 2) == ResultCode::Ok);
     PhotoQuery query;
@@ -280,6 +317,8 @@ int main() {
   projects.reset();
   assert(ProjectSession::open(root + "/data", session, access, path_bookmark, projects, diagnostic) == ResultCode::Ok);
   assert(projects->list_projects(list) == ResultCode::Ok && list.size() == 2);
+  // 预设跟着库一起存盘。
+  assert(projects->list_presets().size() == 1 && projects->list_presets()[0].name == "warm");
   const ProjectPlace place = projects->last_place(first_project);
   assert(place.workspace == Workspace::Library && place.photo_id == first_photo);
   std::printf("project session ok\n");

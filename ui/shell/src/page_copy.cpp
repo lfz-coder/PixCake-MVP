@@ -149,6 +149,32 @@ Texts build_texts() {
   // 本机账本的张数：同一张图扣过就不再扣，原图和免费效果图不扣。
   t["export.sheets"] = "本次预计扣除 %1 张，剩余 %2 张";
   // 导出列表的计费一栏（test 版导出明细：精修效果图、免费功能、实际计费）。
+  // 预设（需求 §9）：本机“我的”预设；官方的“推荐”预设没有素材，不做。
+  t["preset.title"] = "我的预设";
+  t["preset.empty"] = "还没有预设：调好一张图，点“保存新预设”";
+  t["preset.save"] = "保存新预设";
+  t["preset.apply"] = "套用";
+  t["preset.rename"] = "重命名";
+  t["preset.delete"] = "删除";
+  t["preset.rename.title"] = "重命名预设";
+  t["preset.rename.label"] = "名称（不超过 20 字）";
+  t["preset.tooltip"] = "分类：%1　类型：%2";
+  t["preset.overwrite.confirm"] = "预设“%1”会替换这张图已有的色彩调整，确认套用？";
+  t["preset.delete.confirm"] = "确认删除预设“%1”？";
+  t["preset.save.title"] = "保存新预设";
+  t["preset.save.name"] = "名称（不超过 20 字）";
+  t["preset.save.category"] = "分类";
+  t["preset.save.category.default"] = "默认";
+  t["preset.save.type"] = "类型";
+  t["preset.save.type.auto"] = "自动判断";
+  t["preset.save.overwrite"] = "覆盖旧预设";
+  t["preset.save.overwrite.none"] = "不覆盖";
+  t["preset.save.adjusted"] = "已调整";
+  t["preset.save.all"] = "全选";
+  t["preset.save.cleared"] = "全部取消";
+  t["preset.save.nothing"] = "这张图还没有可以存进预设的调整";
+  t["preset.save.failed"] = "没有保存：%1";
+  t["history.preset"] = "预设：%1";
   // 复制、粘贴效果和批量同步（需求 §18）。
   t["sync.title"] = "同步到选中图片";
   t["sync.hint"] = "把当前图片的效果同步到选中的其他图片。可以只勾选二级功能；不能同步的项目已禁用。";
