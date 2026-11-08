@@ -26,4 +26,9 @@ Geometry geometry_of(const pixcake::render::RenderDescription& description);
 // 变换图像和蒙版（蒙版和图像同大小）。恒等变换不动。返回 false 表示参数不合法，图像不变。
 bool apply_geometry(const Geometry& geometry, RgbaImage& image, std::vector<RenderMask>& masks);
 
+// 把描述里用到的渐变蒙版（"gradient:…"）按画幅（几何变换之后）生成并追加到 masks。已有同编号的不重复生成；
+// 编号不合法的忽略（对应的绘制步骤会因蒙版缺失被跳过）。
+void add_gradient_masks(const pixcake::render::RenderDescription& description, std::uint32_t width,
+                        std::uint32_t height, std::vector<RenderMask>& masks);
+
 }  // namespace pixcake::gpu

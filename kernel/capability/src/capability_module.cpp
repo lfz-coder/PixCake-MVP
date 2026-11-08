@@ -1,4 +1,5 @@
 #include "pixcake/capability/capability_module.hpp"
+#include "pixcake/mask/gradient_mask.hpp"
 #include "pixcake/mask/semantic_parts.hpp"
 
 #include "pixcake/capability/fragment_codec.hpp"
@@ -170,6 +171,8 @@ ModuleCompile ParameterBackedModule::compile_modes(const ParameterReader& reader
   DrawStep step;
   bool created = false;
   std::string region_mask;  // 局部调色的作用部位
+  mask::GradientMask gradient;
+  bool gradient_region = false;
   std::set<std::string> channels;
   for (const auto* mode : modes) {
     if (!only.empty() && mode->parameter_id != only) continue;
@@ -195,8 +198,22 @@ ModuleCompile ParameterBackedModule::compile_modes(const ParameterReader& reader
     }
     if (!draws_parameter(reader, *mode)) continue;
     if (descriptor_.id == "color.local" && mode->parameter_id == "region") {
-      if (*value != "all") region_mask = mask::semantic_mask_id(*value);
+      if (*value == "linear" || *value == "radial") {
+        gradient.radial = *value == "radial";
+        gradient_region = true;
+      } else if (*value != "all") {
+        region_mask = mask::semantic_mask_id(*value);
+      }
       continue;
+    }
+    if (descriptor_.id == "color.local" && mode->parameter_id.rfind("gradient_", 0) == 0) {
+      const int whole = static_cast<int>(std::lround(numeric));
+      if (mode->parameter_id == "gradient_x") gradient.x = whole;
+      if (mode->parameter_id == "gradient_y") gradient.y = whole;
+      if (mode->parameter_id == "gradient_angle") gradient.angle = whole;
+      if (mode->parameter_id == "gradient_size") gradient.size = whole;
+      if (mode->parameter_id == "gradient_feather") gradient.feather = whole;
+      continue;  // 位置参数不是绘制通道
     }
     if (!created) {
       step = make_step(*mode);
@@ -210,6 +227,7 @@ ModuleCompile ParameterBackedModule::compile_modes(const ParameterReader& reader
       result.diagnostics.push_back({descriptor_.id, "片段没有可编译的参数值", false});
     } else {
       if (!region_mask.empty()) step.mask_ids.push_back(region_mask);
+      if (gradient_region) step.mask_ids.push_back(mask::gradient_mask_id(gradient));
       result.steps.push_back(std::move(step));
     }
   }

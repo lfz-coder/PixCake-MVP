@@ -281,6 +281,18 @@ std::vector<PanelRow> refine_local_rows() {
   region.binding = SliderBinding{"color.local", "region"};
   region.object_name = "refine-local-region";
   rows.push_back(std::move(region));
+  for (const auto& [parameter, label] : {std::pair<const char*, const char*>{"gradient_x", "中心横向"},
+                                         {"gradient_y", "中心纵向"},
+                                         {"gradient_angle", "渐变角度"},
+                                         {"gradient_size", "渐变范围"},
+                                         {"gradient_feather", "渐变柔和"}}) {
+    PanelRow row;
+    row.kind = PanelRowKind::Slider;
+    row.label = label;
+    row.binding = SliderBinding{"color.local", parameter};
+    row.object_name = std::string("refine-local-") + parameter;
+    rows.push_back(std::move(row));
+  }
   for (auto row : refine_post_color_rows()) {
     if (row.binding) {
       row.binding->capability_id = "color.local";
@@ -310,6 +322,8 @@ std::vector<ChoiceOption> choice_options(const SliderBinding& binding) {
     }
     if (binding.capability_id == "color.local" && binding.parameter_id == "region") {
       if (id == "all") label = kRegionAll;
+      if (id == "linear") label = ui::shell::kWordLinearGradient;
+      if (id == "radial") label = ui::shell::kWordRadialGradient;
       for (const auto& part : mask::semantic_parts()) {
         if (id == part.id) label = part.label;
       }

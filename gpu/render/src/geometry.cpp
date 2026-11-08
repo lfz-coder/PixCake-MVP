@@ -1,4 +1,5 @@
 #include <pixcake/gpu/geometry.hpp>
+#include <pixcake/mask/gradient_mask.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -186,6 +187,65 @@ bool apply_geometry(const Geometry& geometry, RgbaImage& image, std::vector<Rend
     mask.alpha = std::move(moved.data);
   }
   return true;
+}
+
+namespace {
+
+double smooth(double t) { return t * t * (3.0 - 2.0 * t); }
+
+// 线性：沿方向 (cos, sin) 的有符号距离 d，d 从 -b 到 +b 由 1 降到 0（b 是过渡带半宽）；柔和度把线性过渡
+// 混向平滑曲线。径向：半径内为 1，边缘柔和带里降到 0。
+RenderMask gradient_mask(const std::string& id, const pixcake::mask::GradientMask& g, std::uint32_t width,
+                         std::uint32_t height) {
+  RenderMask mask;
+  mask.id = id;
+  mask.width = width;
+  mask.height = height;
+  mask.alpha.assign(static_cast<std::size_t>(width) * height, 0);
+  const double w = width;
+  const double h = height;
+  const double diagonal = std::sqrt(w * w + h * h);
+  const double cx = g.x / 100.0 * w;
+  const double cy = g.y / 100.0 * h;
+  const double soft = g.feather / 100.0;
+  const double radians = g.angle * kPi / 180.0;
+  const double dx = std::cos(radians);
+  const double dy = std::sin(radians);
+  const double band = std::max(0.5, g.size / 100.0 * diagonal / 2.0);
+  const double radius = std::max(0.5, g.size / 100.0 * diagonal / 2.0);
+  for (std::uint32_t y = 0; y < height; ++y) {
+    for (std::uint32_t x = 0; x < width; ++x) {
+      const double px = x + 0.5 - cx;
+      const double py = y + 0.5 - cy;
+      double alpha = 0.0;
+      if (!g.radial) {
+        const double linear = std::clamp(0.5 - (px * dx + py * dy) / (2.0 * band), 0.0, 1.0);
+        alpha = linear + (smooth(linear) - linear) * soft;
+      } else {
+        const double distance = std::sqrt(px * px + py * py);
+        const double inner = radius * (1.0 - soft);
+        alpha = distance <= inner ? 1.0 : distance >= radius ? 0.0 : 1.0 - smooth((distance - inner) / (radius - inner));
+      }
+      mask.alpha[static_cast<std::size_t>(y) * width + x] = static_cast<std::uint8_t>(std::lround(alpha * 255.0));
+    }
+  }
+  return mask;
+}
+
+}  // namespace
+
+void add_gradient_masks(const pixcake::render::RenderDescription& description, std::uint32_t width,
+                        std::uint32_t height, std::vector<RenderMask>& masks) {
+  if (width == 0 || height == 0) return;
+  for (const auto& operation : description.operations) {
+    if (!operation.enabled) continue;
+    for (const auto& id : operation.mask_ids) {
+      pixcake::mask::GradientMask gradient;
+      if (!pixcake::mask::parse_gradient_mask_id(id, gradient)) continue;
+      const bool present = std::any_of(masks.begin(), masks.end(), [&id](const RenderMask& m) { return m.id == id; });
+      if (!present) masks.push_back(gradient_mask(id, gradient, width, height));
+    }
+  }
 }
 
 }  // namespace pixcake::gpu

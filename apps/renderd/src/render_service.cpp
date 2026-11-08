@@ -177,6 +177,7 @@ PreviewResult RenderService::render_operations(std::uint64_t sequence, const std
 
   // 几何（翻转、旋转、拉直、比例裁剪）在颜色绘制之前整张图做完，蒙版同步；缩略图和预览走这里，导出走同一个函数。
   gpu::apply_geometry(gpu::geometry_of(description), image, inputs.masks);
+  gpu::add_gradient_masks(description, image.width, image.height, inputs.masks);  // 按几何变换后的画幅生成
 
   gpu::RenderResult rendered;
   bool ok = false;

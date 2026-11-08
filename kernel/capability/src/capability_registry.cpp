@@ -1,6 +1,7 @@
 #include "pixcake/capability/capability_registry.hpp"
 #include "pixcake/mask/semantic_parts.hpp"
 
+#include <tuple>
 #include <unordered_set>
 #include <cerrno>
 #include <cmath>
@@ -96,7 +97,18 @@ std::vector<ParameterMode> make_parameter_modes() {
   ParameterMode& region = add("color.local", "region", 0.0, 0.0, 1.0, 0.0, "color", "pixcake.color.local",
                               "region", 21);
   region.choices.push_back("all");
+  region.choices.push_back("linear");  // 线性渐变、径向渐变：蒙版由下面的位置参数在画幅上算出，不需要分割模型
+  region.choices.push_back("radial");
   for (const auto& part : mask::semantic_parts()) region.choices.push_back(part.id);
+  // 渐变的位置和形状（百分比，和分辨率无关）。官方没有逐项实测，范围按画面百分比取，默认值未确认。
+  for (const auto& spec : {std::make_tuple("gradient_x", 0.0, 100.0, 50.0), std::make_tuple("gradient_y", 0.0, 100.0, 50.0),
+                           std::make_tuple("gradient_angle", -180.0, 180.0, 0.0),
+                           std::make_tuple("gradient_size", 0.0, 100.0, 50.0),
+                           std::make_tuple("gradient_feather", 0.0, 100.0, 50.0)}) {
+    ParameterMode& gradient = add("color.local", std::get<0>(spec), std::get<1>(spec), std::get<2>(spec), 1.0,
+                                  std::get<3>(spec), "color", "pixcake.color.local", std::get<0>(spec), 21);
+    gradient.default_confirmed = false;
+  }
   region.default_choice = "all";
   // 配置文件（需求第 10.3 节）：标准、质感、黑白、基础，默认标准。
   ParameterMode& profile = add("color.global", "profile", 0.0, 0.0, 1.0, 0.0, "color", "pixcake.color.global",

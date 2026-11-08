@@ -392,7 +392,7 @@ Lists build_lists() {
         "身体皮肤", "眉毛", "眼白", "眼瞳", "嘴唇", "牙齿", "口腔", "耳朵", "头发", "全部衣服", "上衣", "内搭",
         "连体衣（裙）", "下装", "头纱/帽子", "手套", "鞋子", "背包", "首饰", "其他物品", "所有宠物", "全部背景",
         "天空", "草地", "地面", "礁石", "水面", "沙滩", "山", "建筑物", "智能选区", "自由选区", "快速选区",
-        "画笔", "线性渐变", "径向渐变", "颜色范围", "亮度范围"}) {
+        "画笔", kWordLinearGradient, kWordRadialGradient, "颜色范围", "亮度范围"}) {
     lists["refine-local"].push_back(item("local-" + std::to_string(lists["refine-local"].size() + 1), label));
   }
   const std::string clothing_prefix = "衣物美化-衣服调整-";

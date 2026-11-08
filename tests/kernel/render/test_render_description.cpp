@@ -122,6 +122,17 @@ void test_local_region_becomes_a_semantic_mask() {
   }
   EXPECT(!pixcake::validate_parameter_display_value("color.local", "region", "person.unknown"));
   EXPECT(pixcake::validate_parameter_display_value("color.local", "region", "person.hair"));
+  // Gradients: the position parameters become part of the mask id, not draw channels.
+  EXPECT(document.set_preview("color.local", "region", "radial") == pixcake::ResultCode::Ok);
+  EXPECT(document.set_preview("color.local", "gradient_x", "30") == pixcake::ResultCode::Ok);
+  EXPECT(document.set_preview("color.local", "gradient_size", "20") == pixcake::ResultCode::Ok);
+  result = pixcake::render::compile(document);
+  EXPECT(result.description.operations.size() == 1);
+  if (result.description.operations.size() == 1) {
+    const auto& operation = result.description.operations[0];
+    EXPECT(operation.mask_ids == std::vector<std::string>{"gradient:radial:30:50:0:20:50"});
+    for (const auto& value : operation.values) EXPECT(value.channel.rfind("gradient_", 0) != 0 && value.channel != "region");
+  }
   EXPECT(document.set_preview("color.local", "region", "all") == pixcake::ResultCode::Ok);
   result = pixcake::render::compile(document);
   EXPECT(result.description.operations.size() == 1 && result.description.operations[0].mask_ids.empty());

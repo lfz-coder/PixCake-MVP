@@ -1,5 +1,6 @@
 // 几何变换（需求 §12.6）：翻转、旋转 90°、拉直和比例裁剪，图像和蒙版同步；描述里的 crop 参数读成几何。
 #include <pixcake/gpu/geometry.hpp>
+#include <pixcake/mask/gradient_mask.hpp>
 
 #include <cmath>
 #include <cstdio>
@@ -157,9 +158,42 @@ void test_description_values_become_a_geometry() {
   EXPECT(gpu::geometry_of(render::RenderDescription{}).identity());
 }
 
+// 渐变蒙版：编号往返；线性从一侧到另一侧单调下降、中心约一半；径向中心满、边缘空；位置按画幅百分比。
+void test_gradient_masks() {
+  mask::GradientMask g{false, 50, 50, 0, 50, 0};
+  mask::GradientMask parsed;
+  EXPECT(mask::parse_gradient_mask_id(mask::gradient_mask_id(g), parsed) && !parsed.radial && parsed.size == 50);
+  EXPECT(!mask::parse_gradient_mask_id("gradient:sideways:1:2:3:4:5", parsed));
+  EXPECT(!mask::parse_gradient_mask_id("gradient:linear:101:0:0:0:0", parsed));
+  EXPECT(!mask::parse_gradient_mask_id("gradient:linear:1:2:3", parsed));
+  EXPECT(!mask::parse_gradient_mask_id("semantic:person.hair", parsed));
+
+  render::RenderDescription description;
+  render::RenderOperation operation;
+  operation.capability_id = "color.local";
+  operation.mask_ids = {mask::gradient_mask_id(g), mask::gradient_mask_id({true, 25, 50, 0, 40, 0}), "gradient:bad", "semantic:x"};
+  description.operations = {operation};
+  std::vector<gpu::RenderMask> masks;
+  gpu::add_gradient_masks(description, 200, 100, masks);
+  EXPECT(masks.size() == 2);
+  gpu::add_gradient_masks(description, 200, 100, masks);
+  EXPECT(masks.size() == 2);  // generated once
+  if (masks.size() == 2) {
+    const auto at = [](const gpu::RenderMask& m, std::uint32_t x, std::uint32_t y) { return m.alpha[y * m.width + x]; };
+    const auto& linear = masks[0];
+    EXPECT(linear.width == 200 && linear.height == 100);
+    EXPECT(at(linear, 0, 50) == 255 && at(linear, 199, 50) == 0);
+    EXPECT(std::abs(static_cast<int>(at(linear, 100, 50)) - 128) <= 2);
+    for (std::uint32_t x = 1; x < 200; ++x) EXPECT(at(linear, x, 50) <= at(linear, x - 1, 50));
+    const auto& radial = masks[1];  // centre at 25% across, hard edge, radius 20% of the diagonal
+    EXPECT(at(radial, 50, 50) == 255 && at(radial, 150, 50) == 0 && at(radial, 50, 0) == 0);
+  }
+}
+
 }  // namespace
 
 int main() {
+  test_gradient_masks();
   test_flips_and_turns_move_image_and_mask_together();
   test_straighten_crops_to_the_inscribed_rectangle();
   test_ratio_crops_the_centre();

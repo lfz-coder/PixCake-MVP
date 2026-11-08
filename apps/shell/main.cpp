@@ -1343,6 +1343,23 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
                 red_before, mean_red(view->image()));
       return 8;
     }
+    // A linear gradient needs no segmentation: only part of the picture keeps the brightening.
+    {
+      const double whole_red = mean_red(view->image());
+      const auto frames = controller.frames_shown();
+      const int linear = region->findData(QStringLiteral("linear"));
+      region->setCurrentIndex(linear);
+      emit region->activated(linear);
+      if (linear < 0 || !wait_frames(window, frames + 1, 30'000) || !wait_current(window, 30'000)) {
+        qCritical("no frame after choosing the linear gradient");
+        return 8;
+      }
+      const double part_red = mean_red(view->image());
+      if (!(part_red < whole_red - 1) || !(part_red > red_before + 1)) {
+        qCritical("linear gradient red %.1f: whole %.1f, before %.1f", part_red, whole_red, red_before);
+        return 8;
+      }
+    }
     const int hair = region->findData(QStringLiteral("person.hair"));
     region->setCurrentIndex(hair);
     emit region->activated(hair);

@@ -1,5 +1,6 @@
 #include "pixcake/exportd/export_service.hpp"
 #include "pixcake/gpu/geometry.hpp"
+#include "pixcake/mask/semantic_parts.hpp"
 
 #include "pixcake/exportd/watermark.hpp"
 
@@ -75,7 +76,7 @@ ExportResult ExportService::produce(const ExportWork& work) {
   }
   bool masked = false;
   for (const auto& operation : work.description.operations) {
-    masked = masked || (operation.enabled && !operation.mask_ids.empty());
+    for (const auto& id : operation.mask_ids) masked = masked || (operation.enabled && mask::is_semantic_mask_id(id));
   }
   if (masked && !masks_) return refuse(ResultCode::UnsupportedFormat, "导出蒙版没有接入，带局部调整的照片还不能导出");
 
@@ -119,6 +120,7 @@ ExportResult ExportService::produce(const ExportWork& work) {
     inputs.masks = std::move(masks.masks);
   }
   gpu::apply_geometry(gpu::geometry_of(work.description), image, inputs.masks);
+  gpu::add_gradient_masks(work.description, image.width, image.height, inputs.masks);
   gpu::RenderResult rendered;
   bool ok = false;
   bool drawn = false;

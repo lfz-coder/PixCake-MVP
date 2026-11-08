@@ -289,6 +289,31 @@ int main() {
     std::printf("export geometry: turn 200x320, 1:1 200x200, straighten %ux%u, flip ok\n", straight.width, straight.height);
   }
 
+  // A linear gradient region (needs no mask source): +1 EV only on the left part of the frame.
+  {
+    ExportService service;  // no mask source on purpose
+    auto job = work("gradient-1", source, dir.path() + "/unused.jpg", dir.path());
+    pixcake::render::RenderOperation local = operation("color.local", "pixcake.color.local", {value("exposure", 1.0)});
+    local.mask_ids = {"gradient:linear:50:50:0:10:0"};  // bright on the left, falling to nothing across 10% of the diagonal
+    job.description.operations.push_back(local);
+    std::string why;
+    assert(service.submit(std::move(job), why) == ResultCode::Ok);
+    const auto result = service.process_next();
+    assert(result.code == ResultCode::Ok && result.width == 320 && result.height == 200);
+    pixcake::PosixFileSystem files;
+    const std::string written = dir.path() + "/gradient.jpg";
+    assert(files.write_new(written, result.product).ok);
+    const auto before = decode(source);
+    const auto after = decode(written);
+    const auto red_at = [](const pixcake::platform::MacDecodedImage& image, std::uint32_t x) {
+      return static_cast<int>(image.rgba[(static_cast<std::size_t>(100) * image.width + x) * 4]);
+    };
+    assert(red_at(after, 20) > red_at(before, 20) * 3 / 2);               // brightened on the masked side
+    assert(std::abs(red_at(after, 300) - red_at(before, 300)) <= 3);      // untouched on the other side
+    std::printf("export gradient: left %d -> %d, right %d -> %d\n", red_at(before, 20), red_at(after, 20),
+                red_at(before, 300), red_at(after, 300));
+  }
+
   // Through the queue: the product is published at the destination, the task
   // leaves the pending list and the queue records success.
   {
