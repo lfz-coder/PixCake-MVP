@@ -90,6 +90,8 @@ QFrame* workspaceTool(std::string_view list, const CopyItem& item, QWidget* pare
 
 bool reference_drawn(const ui::panels::SliderBinding& binding) {
   if (binding.capability_id == "detail") return binding.parameter_id.rfind("grain_", 0) == 0;
+  // 裁剪旋转：几何参数由渲染前的几何变换画出（gpu::apply_geometry），预览、缩略图和导出一致。
+  if (binding.capability_id == "crop") return true;
   // 后期调色：只有十四支白平衡、影调通道（也是 color.post 登记的全部参数）。
   if (binding.capability_id == "color.post") {
     for (const char* tone : {"temperature", "tint", "exposure", "contrast", "brightness", "highlights", "shadows",

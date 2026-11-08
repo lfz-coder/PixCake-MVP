@@ -215,6 +215,84 @@ void addLabelList(QVBoxLayout* layout, std::string_view list, bool accessible_is
   }
 }
 
+// 裁剪旋转（需求 §12.6）：固定比例（居中裁）、原始尺寸、逆时针、顺时针、水平翻转、垂直翻转、角度滑杆是真的，
+// 参数写进 crop 能力，预览、缩略图和导出都按它画；其余条目（原照设置、证件照尺寸、AI 智能裁剪、网格等）还是灰的标签。
+void addCropPanel(QWidget* modules, QVBoxLayout* layout, PageActions* actions) {
+  const bool live = actions != nullptr && actions->has_photo();
+  const panels::SliderBinding rotate{"crop", "rotate"};
+  const panels::SliderBinding flip_h{"crop", "flip_horizontal"};
+  const panels::SliderBinding flip_v{"crop", "flip_vertical"};
+  const panels::SliderBinding ratio{"crop", "ratio"};
+  const Refresh refresh = std::make_shared<EnableRefresh>();
+  const auto button_row = [&](const QString& label, const char* object_name) {
+    auto* button = action(label, modules, live);
+    button->setObjectName(QString::fromLatin1(object_name));
+    layout->addWidget(button);
+    return button;
+  };
+  for (const auto& entry : ui::shell::page_list("refine-crop")) {
+    const QString label = qs(entry.text);
+    if (entry.id == "angle") {
+      addDisabledSlider(modules, layout, panels::slider_spec(entry.text, panels::refine_crop_angle_binding()),
+                        QStringLiteral("refine-crop-angle"), actions, panels::refine_crop_angle_binding(), refresh);
+    } else if (entry.id == "crop-2") {  // 原始尺寸
+      auto* button = button_row(label, "refine-crop-original");
+      if (live) QObject::connect(button, &QPushButton::clicked, button, [actions, ratio] {
+        actions->request_parameter(ratio, "original", true);
+      });
+    } else if (entry.id == "crop-4") {  // 固定比例
+      auto* line = new QWidget(modules);
+      auto* line_layout = new QHBoxLayout(line);
+      line_layout->setContentsMargins(0, 0, 0, 0);
+      auto* name = text(label);
+      auto* box = new QComboBox(line);
+      box->setObjectName(QStringLiteral("refine-crop-ratio"));
+      box->setAccessibleName(label);
+      const auto current = live ? actions->parameter_value(ratio) : std::nullopt;
+      for (const auto& option : panels::choice_options(ratio)) {
+        if (option.id == "original") continue;  // “原始尺寸”是上面的按钮
+        box->addItem(qs(option.label), qs(option.id));
+      }
+      box->insertItem(0, QString(), QString());  // 空白：没有选固定比例
+      box->setCurrentIndex(0);
+      if (current) {
+        const int found = box->findData(qs(*current));
+        if (found >= 0) box->setCurrentIndex(found);
+      }
+      box->setEnabled(live);
+      name->setEnabled(live);
+      line_layout->addWidget(name);
+      line_layout->addWidget(box, 1);
+      layout->addWidget(line);
+      if (live) QObject::connect(box, QOverload<int>::of(&QComboBox::activated), box, [actions, ratio, box](int index) {
+        const QString id = box->itemData(index).toString();
+        actions->request_parameter(ratio, id.isEmpty() ? std::string("original") : id.toStdString(), true);
+      });
+    } else if (entry.id == "crop-14" || entry.id == "crop-15") {  // 逆时针、顺时针
+      const int step = entry.id == "crop-14" ? 3 : 1;             // 顺时针转几个 90°，逆时针 = 加 3
+      auto* button = button_row(label, step == 3 ? "refine-crop-counterclockwise" : "refine-crop-clockwise");
+      if (live) QObject::connect(button, &QPushButton::clicked, button, [actions, rotate, step] {
+        const auto current = actions->parameter_value(rotate);
+        const int turns = current ? std::atoi(current->c_str()) : 0;
+        actions->request_parameter(rotate, std::to_string((turns + step) % 4), true);
+      });
+    } else if (entry.id == "crop-16" || entry.id == "crop-17") {  // 水平翻转、垂直翻转
+      const bool horizontal = entry.id == "crop-16";
+      const panels::SliderBinding flip = horizontal ? flip_h : flip_v;
+      auto* button = button_row(label, horizontal ? "refine-crop-flip-horizontal" : "refine-crop-flip-vertical");
+      button->setCheckable(true);
+      if (live) {
+        button->setChecked(actions->parameter_value(flip) == std::optional<std::string>("on"));
+        QObject::connect(button, &QPushButton::clicked, button, [actions, flip](bool on) {
+          actions->request_parameter(flip, on ? "on" : "off", true);
+        });
+      }
+    } else {
+      layout->addWidget(disabledLabel(label));
+    }
+  }
+}
+
 void addModules(QWidget* modules, QVBoxLayout* modules_layout, PageActions* actions,
                 PixCakeHistogram** histogram) {
   for (const auto& entry : ui::shell::page_list("refine-modules")) {
@@ -258,13 +336,7 @@ void addModules(QWidget* modules, QVBoxLayout* modules_layout, PageActions* acti
                "refine-pet", true);
 
   auto* crop = labelPanel(modules, modules_layout, "refine-crop-labels", moduleDescription("crop"));
-  for (const auto& entry : ui::shell::page_list("refine-crop")) {
-    QString accessible;
-    if (entry.id == "angle") {
-      accessible = qs(panels::slider_spec(entry.text, panels::refine_crop_angle_binding()).accessible_name);
-    }
-    crop->addWidget(disabledLabel(qs(entry.text), accessible));
-  }
+  addCropPanel(modules, crop, actions);
 
   auto* history = labelPanel(modules, modules_layout, "refine-history-labels", moduleDescription("history"));
   history->addWidget(disabledLabel(qs(copyItem("refine-history", "title").text)));

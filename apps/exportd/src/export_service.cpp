@@ -1,4 +1,5 @@
 #include "pixcake/exportd/export_service.hpp"
+#include "pixcake/gpu/geometry.hpp"
 
 #include "pixcake/exportd/watermark.hpp"
 
@@ -117,6 +118,7 @@ ExportResult ExportService::produce(const ExportWork& work) {
     }
     inputs.masks = std::move(masks.masks);
   }
+  gpu::apply_geometry(gpu::geometry_of(work.description), image, inputs.masks);
   gpu::RenderResult rendered;
   bool ok = false;
   bool drawn = false;

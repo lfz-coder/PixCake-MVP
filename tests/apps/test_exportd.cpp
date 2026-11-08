@@ -246,6 +246,49 @@ int main() {
     assert(after > before * 1.8 && after < before * 2.2);
   }
 
+  // Geometry (requirement 12.6): the export is drawn on the rotated, flipped, straightened and cropped frame.
+  {
+    const auto geometry_work = [&](const std::string& id, std::vector<RenderValue> values) {
+      ExportWork job = work(id, source, dir.path() + "/unused.jpg", dir.path());
+      pixcake::render::RenderOperation crop;
+      crop.capability_id = "crop";
+      crop.stage = "geometry";
+      crop.program = "pixcake.crop";
+      crop.order = 50;
+      crop.values = std::move(values);
+      job.description.operations.push_back(crop);
+      return job;
+    };
+    // Without a queue the task stays pending, so each case gets its own service.
+    const auto run = [&](const std::string& id, std::vector<RenderValue> values) {
+      ExportService service;
+      std::string why;
+      assert(service.submit(geometry_work(id, std::move(values)), why) == ResultCode::Ok);
+      return service.process_next();
+    };
+    const auto turned = run("geometry-turn", {{"rotate", "rotate", "1", 1.0}});
+    assert(turned.code == ResultCode::Ok && turned.width == 200 && turned.height == 320);  // 320x200 turned a quarter
+    const auto square = run("geometry-square", {{"ratio", "ratio", "1:1", 0.0}});
+    assert(square.code == ResultCode::Ok && square.width == 200 && square.height == 200);
+    const auto straight = run("geometry-angle", {{"angle", "angle", "5", 5.0}});
+    assert(straight.code == ResultCode::Ok && straight.width < 320 && straight.height < 200 &&
+           straight.width * 200 > straight.height * 320 - 400 && straight.width * 200 < straight.height * 320 + 400);
+    // Flipped horizontally the gradient runs the other way: the left edge is brighter.
+    const auto flipped = run("geometry-flip", {{"flip_horizontal", "flip_horizontal", "on", 0.0}});
+    assert(flipped.code == ResultCode::Ok && flipped.width == 320 && flipped.height == 200);
+    pixcake::PosixFileSystem files;
+    const std::string flipped_path = dir.path() + "/flipped.jpg";
+    assert(files.write_new(flipped_path, flipped.product).ok);
+    const auto original_pixels = decode(source);
+    const auto flipped_pixels = decode(flipped_path);
+    const auto red_at = [](const pixcake::platform::MacDecodedImage& image, std::uint32_t x, std::uint32_t y) {
+      return static_cast<int>(image.rgba[(static_cast<std::size_t>(y) * image.width + x) * 4]);
+    };
+    assert(red_at(original_pixels, 5, 100) < red_at(original_pixels, 315, 100));
+    assert(red_at(flipped_pixels, 5, 100) > red_at(flipped_pixels, 315, 100));
+    std::printf("export geometry: turn 200x320, 1:1 200x200, straighten %ux%u, flip ok\n", straight.width, straight.height);
+  }
+
   // Through the queue: the product is published at the destination, the task
   // leaves the pending list and the queue records success.
   {

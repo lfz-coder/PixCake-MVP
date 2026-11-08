@@ -1,0 +1,191 @@
+#include <pixcake/gpu/geometry.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
+
+namespace pixcake::gpu {
+namespace {
+
+constexpr double kPi = 3.14159265358979323846;
+
+// 一张 8 位多通道的紧凑平面（图像四通道，蒙版一通道）。
+struct Plane {
+  std::uint32_t width = 0;
+  std::uint32_t height = 0;
+  int channels = 1;
+  std::vector<std::uint8_t> data;
+  std::uint8_t* at(std::uint32_t x, std::uint32_t y) {
+    return data.data() + (static_cast<std::size_t>(y) * width + x) * static_cast<std::size_t>(channels);
+  }
+  const std::uint8_t* at(std::uint32_t x, std::uint32_t y) const {
+    return data.data() + (static_cast<std::size_t>(y) * width + x) * static_cast<std::size_t>(channels);
+  }
+};
+
+Plane make(std::uint32_t width, std::uint32_t height, int channels) {
+  Plane plane;
+  plane.width = width;
+  plane.height = height;
+  plane.channels = channels;
+  plane.data.assign(static_cast<std::size_t>(width) * height * static_cast<std::size_t>(channels), 0);
+  return plane;
+}
+
+Plane flip_h(const Plane& in) {
+  Plane out = make(in.width, in.height, in.channels);
+  for (std::uint32_t y = 0; y < in.height; ++y) {
+    for (std::uint32_t x = 0; x < in.width; ++x) {
+      std::copy_n(in.at(in.width - 1 - x, y), in.channels, out.at(x, y));
+    }
+  }
+  return out;
+}
+
+Plane flip_v(const Plane& in) {
+  Plane out = make(in.width, in.height, in.channels);
+  for (std::uint32_t y = 0; y < in.height; ++y) {
+    for (std::uint32_t x = 0; x < in.width; ++x) {
+      std::copy_n(in.at(x, in.height - 1 - y), in.channels, out.at(x, y));
+    }
+  }
+  return out;
+}
+
+// 顺时针转 90°：新图宽是旧图高；新 (x, y) 取自旧 (y, 旧高 - 1 - x)... 按“旧左下角变成新左上角”写。
+Plane turn_clockwise(const Plane& in) {
+  Plane out = make(in.height, in.width, in.channels);
+  for (std::uint32_t y = 0; y < out.height; ++y) {
+    for (std::uint32_t x = 0; x < out.width; ++x) {
+      std::copy_n(in.at(y, in.height - 1 - x), in.channels, out.at(x, y));
+    }
+  }
+  return out;
+}
+
+Plane crop(const Plane& in, std::uint32_t left, std::uint32_t top, std::uint32_t width, std::uint32_t height) {
+  Plane out = make(width, height, in.channels);
+  for (std::uint32_t y = 0; y < height; ++y) {
+    std::copy_n(in.at(left, top + y), static_cast<std::size_t>(width) * static_cast<std::size_t>(in.channels), out.at(0, y));
+  }
+  return out;
+}
+
+// 任意角度：绕中心转 angle 度（正数顺时针转内容），输出是同比例的最大内接矩形，双线性取样。
+Plane rotate(const Plane& in, double degrees) {
+  const double radians = degrees * kPi / 180.0;
+  const double c = std::cos(radians);
+  const double s = std::sin(radians);
+  const double w = in.width;
+  const double h = in.height;
+  const double fit = std::min(w / (w * std::abs(c) + h * std::abs(s)), h / (w * std::abs(s) + h * std::abs(c)));
+  const auto out_w = static_cast<std::uint32_t>(std::max(1.0, std::floor(w * fit + 0.5)));
+  const auto out_h = static_cast<std::uint32_t>(std::max(1.0, std::floor(h * fit + 0.5)));
+  Plane out = make(out_w, out_h, in.channels);
+  for (std::uint32_t y = 0; y < out_h; ++y) {
+    for (std::uint32_t x = 0; x < out_w; ++x) {
+      // 输出像素中心相对输出中心；内容顺时针转 angle，所以取样时逆时针转回去。
+      const double dx = x + 0.5 - out_w / 2.0;
+      const double dy = y + 0.5 - out_h / 2.0;
+      const double sx = dx * c + dy * s + w / 2.0 - 0.5;
+      const double sy = -dx * s + dy * c + h / 2.0 - 0.5;
+      const double fx = std::clamp(sx, 0.0, w - 1.0);
+      const double fy = std::clamp(sy, 0.0, h - 1.0);
+      const auto x0 = static_cast<std::uint32_t>(fx);
+      const auto y0 = static_cast<std::uint32_t>(fy);
+      const std::uint32_t x1 = std::min(x0 + 1, in.width - 1);
+      const std::uint32_t y1 = std::min(y0 + 1, in.height - 1);
+      const double tx = fx - x0;
+      const double ty = fy - y0;
+      for (int ch = 0; ch < in.channels; ++ch) {
+        const double top = in.at(x0, y0)[ch] * (1 - tx) + in.at(x1, y0)[ch] * tx;
+        const double bottom = in.at(x0, y1)[ch] * (1 - tx) + in.at(x1, y1)[ch] * tx;
+        out.at(x, y)[ch] = static_cast<std::uint8_t>(std::clamp(top * (1 - ty) + bottom * ty + 0.5, 0.0, 255.0));
+      }
+    }
+  }
+  return out;
+}
+
+bool ratio_of(const std::string& text, double& value) {
+  if (text == "original") return false;
+  const auto colon = text.find(':');
+  if (colon == std::string::npos) return false;
+  const double a = std::atof(text.substr(0, colon).c_str());
+  const double b = std::atof(text.substr(colon + 1).c_str());
+  if (a <= 0 || b <= 0) return false;
+  value = a / b;
+  return true;
+}
+
+Plane apply(const Geometry& geometry, Plane plane) {
+  if (geometry.flip_horizontal) plane = flip_h(plane);
+  if (geometry.flip_vertical) plane = flip_v(plane);
+  for (int i = 0; i < geometry.quarter_turns; ++i) plane = turn_clockwise(plane);
+  if (geometry.angle != 0.0) plane = rotate(plane, geometry.angle);
+  double target = 0;
+  if (ratio_of(geometry.ratio, target)) {
+    const double current = static_cast<double>(plane.width) / plane.height;
+    std::uint32_t width = plane.width;
+    std::uint32_t height = plane.height;
+    if (current > target) {
+      width = std::max<std::uint32_t>(1, static_cast<std::uint32_t>(std::floor(plane.height * target + 0.5)));
+    } else if (current < target) {
+      height = std::max<std::uint32_t>(1, static_cast<std::uint32_t>(std::floor(plane.width / target + 0.5)));
+    }
+    width = std::min(width, plane.width);
+    height = std::min(height, plane.height);
+    plane = crop(plane, (plane.width - width) / 2, (plane.height - height) / 2, width, height);
+  }
+  return plane;
+}
+
+}  // namespace
+
+Geometry geometry_of(const pixcake::render::RenderDescription& description) {
+  Geometry geometry;
+  for (const auto& operation : description.operations) {
+    if (operation.capability_id != "crop" || !operation.enabled) continue;
+    for (const auto& value : operation.values) {
+      if (value.channel == "rotate") geometry.quarter_turns = ((static_cast<int>(std::lround(value.numeric_value)) % 4) + 4) % 4;
+      if (value.channel == "flip_horizontal") geometry.flip_horizontal = value.display_value == "on";
+      if (value.channel == "flip_vertical") geometry.flip_vertical = value.display_value == "on";
+      if (value.channel == "angle") geometry.angle = value.numeric_value;
+      if (value.channel == "ratio") geometry.ratio = value.display_value;
+    }
+  }
+  return geometry;
+}
+
+bool apply_geometry(const Geometry& geometry, RgbaImage& image, std::vector<RenderMask>& masks) {
+  if (geometry.identity()) return true;
+  if (geometry.quarter_turns < 0 || geometry.quarter_turns > 3 || std::abs(geometry.angle) > 45.0 ||
+      image.width == 0 || image.height == 0) {
+    return false;
+  }
+  const std::size_t stride = image.row_stride == 0 ? static_cast<std::size_t>(image.width) * 4 : image.row_stride;
+  if (image.pixels.size() < stride * image.height) return false;
+  Plane plane = make(image.width, image.height, 4);
+  for (std::uint32_t y = 0; y < image.height; ++y) {
+    std::copy_n(image.pixels.data() + static_cast<std::size_t>(y) * stride, static_cast<std::size_t>(image.width) * 4, plane.at(0, y));
+  }
+  Plane out = apply(geometry, std::move(plane));
+  image.width = out.width;
+  image.height = out.height;
+  image.row_stride = out.width * 4;
+  image.pixels = std::move(out.data);
+  for (auto& mask : masks) {
+    if (mask.width == 0 || mask.height == 0 || mask.alpha.size() < static_cast<std::size_t>(mask.width) * mask.height) continue;
+    Plane alpha = make(mask.width, mask.height, 1);
+    alpha.data.assign(mask.alpha.begin(), mask.alpha.begin() + static_cast<std::ptrdiff_t>(alpha.data.size()));
+    Plane moved = apply(geometry, std::move(alpha));
+    mask.width = moved.width;
+    mask.height = moved.height;
+    mask.alpha = std::move(moved.data);
+  }
+  return true;
+}
+
+}  // namespace pixcake::gpu

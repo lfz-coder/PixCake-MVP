@@ -18,6 +18,7 @@
 #include <QDialog>
 #include <QScrollArea>
 #include <QShortcut>
+#include <set>
 #include <QSpinBox>
 #include <QToolButton>
 #include <QGroupBox>
@@ -71,18 +72,15 @@ Page parse_page(const QString& value) {
 }
 #endif
 
-QStringList list_texts(std::string_view list) {
-  QStringList out;
-  for (const auto& entry : pixcake::ui::shell::page_list(list)) out.append(QString::fromStdString(entry.text));
-  return out;
-}
-
 // 精修某个面板的标签全部按文案表画出，且都禁用。
-int check_disabled_labels(const QWidget& window, const char* object_name, std::string_view list) {
+int check_disabled_labels(const QWidget& window, const char* object_name, std::string_view list,
+                          const std::set<std::string>& live_ids = {}) {
   const auto* panel = window.findChild<QWidget*>(QString::fromLatin1(object_name));
   QStringList found;
   if (panel != nullptr) {
     for (const auto* label : panel->findChildren<QLabel*>()) {
+      // A panel with live controls: only the plain labels (direct children) are checked; a control's own labels are not.
+      if (!live_ids.empty() && label->parent() != panel) continue;
       found.append(label->text());
       if (label->isEnabled()) {
         qCritical("%s label enabled", object_name);
@@ -90,7 +88,11 @@ int check_disabled_labels(const QWidget& window, const char* object_name, std::s
       }
     }
   }
-  if (panel == nullptr || found != list_texts(list)) {
+  QStringList expected;
+  for (const auto& entry : pixcake::ui::shell::page_list(list)) {
+    if (live_ids.count(entry.id) == 0) expected.append(QString::fromStdString(entry.text));
+  }
+  if (panel == nullptr || found != expected) {
     qCritical("missing %s", object_name);
     return 3;
   }
@@ -172,7 +174,8 @@ int smoke(QWidget& window, Page first_page) {
     }
   }
   if (first_page == Page::Refine) {
-    if (const int crop = check_disabled_labels(window, "refine-crop-labels", "refine-crop"); crop != 0) return crop;
+    if (const int crop = check_disabled_labels(window, "refine-crop-labels", "refine-crop",
+                                                  {"crop-2", "crop-4", "crop-14", "crop-15", "crop-16", "crop-17", "angle"}); crop != 0) return crop;
     if (const int history = check_disabled_labels(window, "refine-history-labels", "refine-history"); history != 0) {
       return history;
     }
@@ -1208,6 +1211,84 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
     qCritical("grain amount did not draw or unblock its sliders");
     return 8;
   }
+  // Crop and rotate: the live controls change the frame (rotate swaps width and height, a ratio crops, straightening
+  // shrinks it); everything is put back before the next step.
+  {
+    auto& controller = window.controller();
+    const auto find_button = [&window](const char* name) {
+      QPushButton* found = nullptr;
+      for (auto* candidate : window.findChildren<QPushButton*>(QString::fromLatin1(name))) {
+        if (candidate->isVisibleTo(&window)) found = candidate;
+      }
+      return found;
+    };
+    auto* clockwise = find_button("refine-crop-clockwise");
+    auto* counter = find_button("refine-crop-counterclockwise");
+    auto* original = find_button("refine-crop-original");
+    auto* flip = find_button("refine-crop-flip-horizontal");
+    QComboBox* ratio = nullptr;
+    for (auto* candidate : window.findChildren<QComboBox*>(QStringLiteral("refine-crop-ratio"))) {
+      if (candidate->isVisibleTo(&window)) ratio = candidate;
+    }
+    QSlider* angle = nullptr;
+    for (auto* candidate : window.findChildren<QSlider*>(QStringLiteral("refine-crop-angle"))) {
+      if (candidate->isVisibleTo(&window)) angle = candidate;
+    }
+    if (clockwise == nullptr || counter == nullptr || original == nullptr || flip == nullptr || ratio == nullptr ||
+        angle == nullptr || !clockwise->isEnabled() || !ratio->isEnabled() || !angle->isEnabled()) {
+      qCritical("crop controls missing or disabled with a photo open");
+      return 8;
+    }
+    const auto settle = [&] { return wait_current(window, 30'000); };
+    const auto size_now = [&] { return view->image().size(); };
+    const QSize start = size_now();
+    clockwise->click();
+    if (!settle() || size_now() != QSize(start.height(), start.width())) {
+      qCritical("clockwise turn: %dx%d -> %dx%d", start.width(), start.height(), size_now().width(), size_now().height());
+      return 8;
+    }
+    counter->click();
+    if (!settle() || size_now() != start) {
+      qCritical("counter-clockwise turn did not come back");
+      return 8;
+    }
+    // Flipping keeps the size but changes the picture.
+    const QImage before_flip = view->image();
+    flip->click();
+    if (!settle() || size_now() != start || view->image() == before_flip) {
+      qCritical("horizontal flip changed nothing");
+      return 8;
+    }
+    flip->click();
+    if (!settle() || view->image() != before_flip) {
+      qCritical("flipping twice did not restore the picture");
+      return 8;
+    }
+    const int square = ratio->findData(QStringLiteral("1:1"));
+    ratio->setCurrentIndex(square);
+    emit ratio->activated(square);
+    if (!settle() || size_now().width() != size_now().height() || size_now().width() != std::min(start.width(), start.height())) {
+      qCritical("1:1 crop: %dx%d from %dx%d", size_now().width(), size_now().height(), start.width(), start.height());
+      return 8;
+    }
+    original->click();
+    if (!settle() || size_now() != start) {
+      qCritical("original size did not come back");
+      return 8;
+    }
+    angle->setValue(angle->value() + 10);
+    if (!settle() || !(size_now().width() < start.width()) || size_now().width() * start.height() > size_now().height() * start.width() + 2 * start.height() ||
+        size_now().width() * start.height() + 2 * start.height() < size_now().height() * start.width()) {
+      qCritical("straightening: %dx%d from %dx%d", size_now().width(), size_now().height(), start.width(), start.height());
+      return 8;
+    }
+    angle->setValue(angle->value() - 10);
+    if (!settle() || size_now() != start) {
+      qCritical("straightening back to 0 did not restore the frame");
+      return 8;
+    }
+    (void)controller;
+  }
   // Post colour: its exposure slider draws and commits to color.post (a step of its own in the history).
   {
     auto& controller = window.controller();
@@ -1260,7 +1341,8 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
     save->click();
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     const auto presets = controller.presets();
-    if (presets.size() != 1 || presets[0].name != "smoke warm" || presets[0].type != pixcake::kPresetColor ||
+    // The photo also carries a crop fragment now (the crop checks above): colour and crop make a combination preset.
+    if (presets.size() != 1 || presets[0].name != "smoke warm" || presets[0].type != pixcake::kPresetCombo ||
         window.findChild<QDialog*>(QStringLiteral("preset-save-dialog")) != nullptr) {
       qCritical("preset not saved: %zu presets", presets.size());
       return 8;

@@ -186,6 +186,18 @@ std::vector<ParameterMode> make_parameter_modes() {
   opacity.default_confirmed = false;
   ParameterMode& angle = add_unconfirmed_step("crop", "angle", -45.0, 45.0, 0.0, "geometry", "pixcake.crop", "angle", 50);
   angle.default_confirmed = false;
+  // 裁剪旋转的其余几何参数（需求 §12.6）：顺时针转几个 90°、水平和垂直翻转、居中的固定比例裁剪。官方没有逐项实测，
+  // 范围和选项按需求写的功能列出；交互式拖框裁剪、证件照尺寸、长宽分辨率等没有登记。
+  ParameterMode& turns = add("crop", "rotate", 0.0, 3.0, 1.0, 0.0, "geometry", "pixcake.crop", "rotate", 50);
+  turns.default_confirmed = false;
+  for (const char* flip : {"flip_horizontal", "flip_vertical"}) {
+    ParameterMode& mode = add("crop", flip, 0.0, 0.0, 1.0, 0.0, "geometry", "pixcake.crop", flip, 50);
+    mode.choices = {"off", "on"};
+    mode.default_choice = "off";
+  }
+  ParameterMode& ratio = add("crop", "ratio", 0.0, 0.0, 1.0, 0.0, "geometry", "pixcake.crop", "ratio", 50);
+  ratio.choices = {"original", "1:1", "4:3", "3:4", "3:2", "2:3", "16:9", "9:16", "5:4", "4:5"};
+  ratio.default_choice = "original";
   for (const char* axis : {"vertical", "horizontal", "rotation"}) {
     const std::string parameter = std::string("eye_glint_") + axis;
     add_unconfirmed_step("portrait.feature", parameter, -100.0, 100.0, 0.0, "portrait",

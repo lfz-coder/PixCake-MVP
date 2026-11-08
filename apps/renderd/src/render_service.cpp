@@ -1,4 +1,5 @@
 #include "pixcake/renderd/render_service.hpp"
+#include "pixcake/gpu/geometry.hpp"
 
 #include "pixcake/gl/native_backend.hpp"
 
@@ -134,7 +135,7 @@ PreviewResult RenderService::render_now(std::uint64_t sequence, const std::strin
     result.diagnostic = "preview resampling backend is not registered";
     return result;
   }
-  if (has_enabled_operations(description)) {
+  if (has_enabled_operations(description) || !gpu::geometry_of(description).identity()) {
     return render_operations(sequence, image_id, description, input, max_edge, std::move(result));
   }
 
@@ -174,6 +175,9 @@ PreviewResult RenderService::render_operations(std::uint64_t sequence, const std
   inputs.preview = true;
   inputs.preview_max_dimension = max_edge;
 
+  // 几何（翻转、旋转、拉直、比例裁剪）在颜色绘制之前整张图做完，蒙版同步；缩略图和预览走这里，导出走同一个函数。
+  gpu::apply_geometry(gpu::geometry_of(description), image, inputs.masks);
+
   gpu::RenderResult rendered;
   bool ok = false;
   bool drawn = false;
@@ -191,6 +195,12 @@ PreviewResult RenderService::render_operations(std::uint64_t sequence, const std
   }
   result.drawn_on_gpu = drawn && ok && !rendered.reference_fallback;
   if (!drawn) ok = gpu::RenderExecutor{}.renderReference(description, image, inputs, rendered);
+  // 裁剪旋转由上面的几何变换画完，绘制器对它报“没有注册”只是噪音。
+  const auto geometry_op = [](const auto& entry) { return entry.capability_id == "crop"; };
+  rendered.diagnostics.erase(std::remove_if(rendered.diagnostics.begin(), rendered.diagnostics.end(), geometry_op),
+                             rendered.diagnostics.end());
+  rendered.statuses.erase(std::remove_if(rendered.statuses.begin(), rendered.statuses.end(), geometry_op),
+                          rendered.statuses.end());
   if (!gpu_failure.empty()) rendered.diagnostics.push_back({"", gpu_failure, false});
   result.diagnostics = std::move(batch.diagnostics);
   result.diagnostics.insert(result.diagnostics.end(), rendered.diagnostics.begin(), rendered.diagnostics.end());
