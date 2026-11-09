@@ -19,10 +19,12 @@ set(PIXCAKE_PHOTOCRAFT_COMMIT_DATE "2026-11-09T11:55:33+01:00")
 # Upstream licence is "MIT OR Apache-2.0" (Cargo.toml, NOTICE: "at your option").
 # PixCake elects MIT for any code or shader ported from PhotoCraft: keep the
 # copyright line below and LICENSE-MIT with distributions that contain ported code.
+# The MIT text is committed at third_party/photocraft-LICENSES/LICENSE-MIT.
 set(PIXCAKE_PHOTOCRAFT_LICENSE "MIT OR Apache-2.0")
 set(PIXCAKE_PHOTOCRAFT_LICENSE_ELECTED "MIT")
 set(PIXCAKE_PHOTOCRAFT_COPYRIGHT "Copyright (c) 2026 ArtCraft Team and the PhotoCraft contributors")
 # Not covered by the licence above and not to be reused: docs/brand/ (ArtCraft
 # trademarks). Bundled fonts, icons, word lists and libfacedetection weights
 # carry their own licences (PhotoCraft NOTICE, ATTRIBUTION.md).
+set(PIXCAKE_PHOTOCRAFT_LICENSE_FILE "third_party/photocraft-LICENSES/LICENSE-MIT")
 set(PIXCAKE_PHOTOCRAFT_USE "reference-only")

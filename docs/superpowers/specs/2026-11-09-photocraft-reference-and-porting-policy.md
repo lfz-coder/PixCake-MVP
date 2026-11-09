@@ -147,7 +147,7 @@ PhotoCraft 自己说明其公式是 Photoshop 行为的 documented approximation
 
 PhotoCraft 本体代码以 **`MIT OR Apache-2.0`** 双许可发布（`Cargo.toml` 与 `NOTICE` 写明“at your option”），即使用者二选一，不是同时满足两份。
 
-- **PixCake 选用 MIT 条款。** 直接复制或翻译 PhotoCraft 代码、注释或 shader 时，在 PixCake 的分发物中保留 PhotoCraft 的版权声明（`Copyright (c) 2026 ArtCraft Team and the PhotoCraft contributors`）和 `LICENSE-MIT` 全文，并在 `third_party/photocraft.lock.cmake` 与对应证据中写明来源路径、提交和“MIT（选自 MIT OR Apache-2.0）”。移植文件头注明“Ported from PhotoCraft `<path>` @ `<commit>`, MIT”。若将来改选 Apache-2.0，需另行携带 NOTICE 并为修改过的文件添加修改说明。
+- **PixCake 选用 MIT 条款。** 直接复制或翻译 PhotoCraft 代码、注释或 shader 时，在 PixCake 的分发物中保留 PhotoCraft 的版权声明（`Copyright (c) 2026 ArtCraft Team and the PhotoCraft contributors`）和 `LICENSE-MIT` 全文（仓库内副本：`third_party/photocraft-LICENSES/LICENSE-MIT`，参考副本目录不入库），并在 `third_party/photocraft.lock.cmake` 与对应证据中写明来源路径、提交和“MIT（选自 MIT OR Apache-2.0）”。移植文件头注明“Ported from PhotoCraft `<path>` @ `<commit>`, MIT”。若将来改选 Apache-2.0，需另行携带 NOTICE 并为修改过的文件添加修改说明。
 - **独立用 C++/GLSL 重写**时不复制源代码表达，但仍记录 PhotoCraft 作为行为来源，并用 parity 证明语义一致。
 - **不在 PhotoCraft 本体许可范围内的内容不得顺带使用**：`docs/brand/` 下的 ArtCraft 名称、字标和图标是商标；PhotoCraft 捆绑的字体、图标、词表和 libfacedetection 权重各有自己的许可证（见其 `NOTICE` 与 `ATTRIBUTION.md`）。PixCake 界面和分发物不使用 PhotoCraft/ArtCraft 品牌。
 - 不复制 Photoshop 或其他闭源产品的源码、shader、profile、模型权重、素材和字符串。PhotoCraft 的 clean-room 规则仍然适用于它自己的参考仓库。

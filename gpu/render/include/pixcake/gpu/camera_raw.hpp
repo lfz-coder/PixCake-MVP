@@ -4,6 +4,7 @@
 // Ported from PhotoCraft crates/algo/src/camera_raw.rs and camera_raw/per_pixel.rs
 // @ 885a6ddf27cc58c07faf1722e5c327cd38953657, MIT (elected from MIT OR Apache-2.0).
 // Copyright (c) 2026 ArtCraft Team and the PhotoCraft contributors.
+// Licence text: third_party/photocraft-LICENSES/LICENSE-MIT.
 //
 // Values are display-encoded (sRGB) RGB, as PhotoCraft's develop() takes them.  Slider units
 // are Camera Raw's, which PixCake's parameter mode shares.  Spatial stages (Dehaze,
