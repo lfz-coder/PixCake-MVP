@@ -2,9 +2,12 @@
 // Analytic checks first; test_matches_photocraft_vectors compares against PhotoCraft's own output.
 #include <pixcake/gpu/camera_raw.hpp>
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <set>
+#include <string>
 
 namespace {
 
@@ -83,6 +86,63 @@ void test_grade_global_tint_direction() {  // a red global wheel raises R and lo
   assert(out[0] > 0.5F && out[2] < 0.5F);
 }
 
+// PhotoCraft's own develop() of 73 pixels under 28 settings (tools/photocraft_vectors).
+constexpr int kSettingCount = 44;
+struct VectorCase {
+  const char* name;
+  float settings[kSettingCount];
+  float in[3];
+  float out[3];
+};
+const VectorCase kVectors[] = {
+#include "data/camera_raw_per_pixel_vectors.inc"
+};
+
+// Same order as settings() in tools/photocraft_vectors/src/main.rs.
+Settings settingsOf(const float* v) {
+  Settings s;
+  s.temperature = v[0];
+  s.tint = v[1];
+  s.exposure = v[2];
+  s.contrast = v[3];
+  s.vibrance = v[4];
+  s.saturation = v[5];
+  for (int k = 0; k < 8; ++k) {
+    s.hsl_hue[k] = v[6 + k];
+    s.hsl_sat[k] = v[14 + k];
+    s.hsl_lum[k] = v[22 + k];
+  }
+  for (int z = 0; z < 4; ++z) s.grade[z] = {v[30 + 3 * z], v[31 + 3 * z], v[32 + 3 * z]};
+  s.grade_blending = v[42];
+  s.grade_balance = v[43];
+  return s;
+}
+
+// Both sides are CPU f32 with the same expression order; what is left is libm's pow/sin.
+constexpr float kTolerance = 2e-6F;
+
+void test_matches_photocraft_vectors() {
+  std::set<std::string> names;
+  float worst = 0.0F;
+  for (const VectorCase& v : kVectors) {
+    names.insert(v.name);
+    const Rgb out = developPixel({v.in[0], v.in[1], v.in[2]}, settingsOf(v.settings));
+    for (int ch = 0; ch < 3; ++ch) {
+      const float d = std::fabs(out[ch] - v.out[ch]);
+      worst = std::max(worst, d);
+      if (d > kTolerance) {
+        std::fprintf(stderr, "%s: in (%.6f %.6f %.6f) ours (%.9f %.9f %.9f) photocraft (%.9f %.9f %.9f)\n", v.name,
+                     v.in[0], v.in[1], v.in[2], out[0], out[1], out[2], v.out[0], v.out[1], v.out[2]);
+      }
+      assert(d <= kTolerance);
+    }
+  }
+  assert(sizeof(kVectors) / sizeof(kVectors[0]) == 28U * 73U);
+  assert(names.size() == 28U);
+  std::printf("photocraft vectors: %zu pixels, worst difference %.3g\n", sizeof(kVectors) / sizeof(kVectors[0]),
+              static_cast<double>(worst));
+}
+
 }  // namespace
 
 int main() {
@@ -95,6 +155,7 @@ int main() {
   test_hsl_leaves_greys();
   test_saturation_minus_100_greys_out();
   test_grade_global_tint_direction();
+  test_matches_photocraft_vectors();
   std::puts("test_camera_raw_port: ok");
   return 0;
 }
