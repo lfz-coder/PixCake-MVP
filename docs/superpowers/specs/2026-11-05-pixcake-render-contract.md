@@ -4,6 +4,8 @@
 
 本接口把“参数是什么”和“如何把参数交给渲染器”固定下来。它不实现白平衡、曝光或任何像素公式，也不携带 OpenGL、Qt、纹理、着色器或窗口对象。`gpu/render` 和未来的导出实现只消费这份描述；主进程和项目库只负责文档与命令。
 
+能力来源和移植规则见[PhotoCraft 能力来源与 PixCake 移植规范](2026-11-09-photocraft-reference-and-porting-policy.md)。对于 PhotoCraft 已经实现的通用能力，PhotoCraft 对应来源族（Camera Raw 滤镜管线或调整图层/合成）的 CPU 实现、GPU shader/lowering 和 parity 测试定义 `RenderOperation` 在渲染端应达到的行为；PixCake 的 C++ reference 与 OpenGL pass 负责移植它。这个来源约定不把 PhotoCraft 的 Rust/wgpu/egui 结构带入本契约，也不改变 PixCake 的参数、进程和 GPU facade 边界。
+
 公共代码位置：
 
 - 参数模式：`kernel/capability/include/pixcake/capability/capability_registry.hpp`
@@ -35,6 +37,7 @@ order
 4. `render_channel` 是渲染器使用的通道名，例如 `temperature`、`tint`、`exposure`。
 5. `order` 使用能力管线的稳定拓扑顺序，决定预览和导出的绘制顺序。渲染器不得自行按界面出现顺序重排。
 6. 参数模式升级通过 `schema_version` 处理；不能把过新片段静默改写或删除。
+7. `render_program` 的每个参数必须在来源登记中分两列标注：行为来源（`photocraft-target`、`PixCake-specific` 或 `no-equivalent`，PhotoCraft-backed 时再写来源族 Camera Raw 或调整图层/合成）和移植状态（`legacy-provisional`、`photocraft-reference-only`、`photocraft-ported` 或 `not-implemented`）。如果 PhotoCraft 已有对应实现，PixCake 当前 reference 公式只能标为 `legacy-provisional`，不能继续作为第二个行为标准。
 
 阶段一已冻结的模式包括：全局/局部/后期色彩、AI 追色和风格程度、蒙版羽化、裁剪角度、眼神光位置/旋转和光影均匀明度。参数模式可以先于绘制注册表发布范围，但默认 `CapabilityRegistry` 只会编译已经注册为绘制能力的片段；因此尚未注册的模式会被保留并给出诊断，不会被伪造为已完成的绘制能力。没有正式范围的能力仍不能伪造范围。
 
@@ -78,6 +81,7 @@ disabled_reason
 - `PreviewCoordinator` 只保留一个待处理请求，新请求替换旧请求；请求绑定原图、编辑实例和基础修订号，`take_latest` 交付时再次检查这些身份。
 - 按 `ParameterMode::order` 排序操作，预览和导出可复用同一描述。
 - 未注册能力、过新片段和没有可编译参数的片段保留在原文档中，并写入诊断后跳过绘制。
+- 公式和 shader 只在 `gpu/render`/OpenGL 执行层解释；`kernel/render` 不复制 PhotoCraft 调整公式，也不把 PhotoCraft 的 `Adjustment`/wgpu plan 类型写进公共协议。
 - 文档恢复为空或缺少原图编号时返回明确结果码。
 - 描述版本目前为 `1`。变更字段时提升版本并增加兼容测试。
 

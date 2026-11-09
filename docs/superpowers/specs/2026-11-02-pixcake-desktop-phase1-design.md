@@ -6,6 +6,7 @@
 需求来源：像素蛋糕官网「桌面版使用手册」目录（手册根节点「桌面版使用手册」，工作区介绍更新于 2026-09-17）。本文覆盖该目录下全部 83 篇功能说明，并按可实现、可验收的产品规则重写。
 
 目录、模块职责、依赖方向、OpenGL 替换边界和失败行为以 [架构设计规范](2026-11-02-pixcake-kernel-architecture-design.md) 为准。本文第 3.10 节是产品模块清单。用户可见行为以本文为准；模块怎么拆、谁依赖谁以架构规范为准。
+像素能力的实现来源和移植要求以 [PhotoCraft 能力来源与 PixCake 移植规范](2026-11-09-photocraft-reference-and-porting-policy.md) 为准：PhotoCraft 已有的通用能力尽可能完整移植到 PixCake 的 C++17/OpenGL 管线；PhotoCraft 的 Rust/wgpu/egui 架构不改变本文的产品和进程设计。
 
 ## 1. 产品定义
 
@@ -65,6 +66,20 @@
 7. 创意模块液化子工具「褶皱」是 `S`，只在液化工具激活时生效。修复工具激活时 `S` 是仿制图章。
 8. 《AI 背景扩图》正文误把下一步写成点击「AI 老照片修复」。正确入口是「AI 背景扩图」。
 9. 工具包展示名和计费表里的工具名有个别不一致。目录展示用工具包清单，扣点用计费表。搜索要能命中两边的名字。软件内如果与本文数字不同，以软件内当时显示为准，并回写本文。
+
+### 2.4 像素能力来源与移植要求
+
+第一阶段的目标是实现用户在本需求中看到的能力；通用像素能力的具体算法按 PhotoCraft 移植规范执行。产品行为和 PixCake 的业务规则仍由本文决定，PhotoCraft 只决定已有通用算法的首选实现语义。
+
+| 能力类别 | 实现要求 | 状态记录 |
+| --- | --- | --- |
+| PhotoCraft 已有的对应能力：精修基础调色（色温、色调、曝光、对比度、高光、阴影、白色、黑色、纹理、清晰度、去雾、鲜艳度、饱和度）、曲线、HSL 八色带、色彩分级和颗粒对应 PhotoCraft 的 Camera Raw 滤镜管线；亮度（按 Photoshop 现代亮度）、色阶、可选颜色、3D LUT、混合与图层合成对应 PhotoCraft 的调整图层与合成 | 以 `third_party/photocraft` 对应来源族的 CPU 实现、GPU shader/lowering 和 parity 测试为目标，移植为 PixCake C++ reference 与 OpenGL pass；按语义而不是按名字对应；预览和导出共用一套执行路径和同一份图像统计 | 来源 `photocraft-target`；状态 `legacy-provisional` → `photocraft-reference-only` → `photocraft-ported`，来源路径和提交写入矩阵/公式登记 |
+| PhotoCraft 没有的 PixCake 产品能力：人物/衣物语义蒙版（模型方案）、八色带黑白混合、AI 追色/风格业务流程、点数账本、项目、账号、云空间和生成任务。天空/主体选择、修复重绘、液化等 PhotoCraft 有经典实现的能力须先按移植规范 4.3 判定 | 按本文的产品规则与 PixCake 进程/任务边界实现，不借用相似算法冒充 PhotoCraft 复刻 | `PixCake-specific` 或 `no-equivalent` |
+| 当前 PixCake 已有但尚未与 PhotoCraft 对齐的公式 | 可以作为迁移过渡和回退测试，但不能成为行为来源或完成标准；优先替换为 PhotoCraft 目标，或明确标为 PixCake-specific | `legacy-provisional` |
+
+移植不改变本文已冻结的项目形状：参数仍保存在非破坏性文档，`RenderDescription` 仍是纯数据，Qt shell 不写公式，`kernel` 不依赖 OpenGL/Qt/wgpu，预览在 `renderd`，全分辨率导出在 `exportd`，生成任务在 `generated`。PhotoCraft 的 Rust、Cargo、wgpu、egui、crate 分层和控制协议不属于 PixCake 需求。
+
+第一阶段的像素验收必须同时检查：PhotoCraft 来源和提交、PixCake C++ reference 向量、OpenGL readback、CPU/GPU 容差、预览/导出相同快照、失败诊断和许可证记录。没有完成这些证据时，能力只能标为 `photocraft-reference-only` 或 `legacy-provisional`，不能写成“官方像素算法已完成”。
 
 ## 3. 实现路线
 

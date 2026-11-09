@@ -1,5 +1,7 @@
 # 审核记录：2026-11-03，已落地的内核计划
 
+> 历史记录说明（2026-11-09）：本文保留当时审核事实。文中把 Free 分组当作排除项的结论已经被用户裁决和[PhotoCraft 能力来源与 PixCake 移植规范](../2026-11-09-photocraft-reference-and-porting-policy.md)取代；当前审核以[审核总则](2026-11-02-pixcake-review-index.md)、当前需求、状态矩阵和公式登记表为准。
+
 **结论：打回重写。** 最先要挡住三类损失：误删用户文件、重复扣费，以及最后一次成功保存的编辑或项目变得不可用。独立构建的 22 个 CTest 全部通过；下面的反例来自当前工作区的真实 SQLite、临时目录及注明的故障注入。部分现有测试断言的正是错误行为。
 
 **审查基线：** `kernel-project-library`，HEAD `2a54249`，含审查开始时工作区未提交的图层羽化限制、相应测试和规范改动。对照[审核总则](2026-11-02-pixcake-review-index.md)、[阶段需求](../2026-11-02-pixcake-desktop-phase1-design.md)、[架构](../2026-11-02-pixcake-kernel-architecture-design.md)。没有修改实现、既有测试、计划或清单。
@@ -40,7 +42,7 @@
 | 编号 | 结论 | 证据 | 差异 |
 | --- | --- | --- | --- |
 | C-01 | 不通过 | R15；需求 §6.4；test_library_controls | 工作区测试把“默认都开”固定成未设置。 |
-| C-02、C-06、C-07（Free 排除部分） | 通过 | capability_registry.cpp / test_pipeline；现有构建目标 | detail 两个阶段不绘制；没有 Free 组的模式、着色器、AI 校准或快捷键实现。白平衡、允许的按键另记未实现。 |
+| C-02、C-06、C-07（当时的 Free 排除判定） | 通过 | capability_registry.cpp / test_pipeline；现有构建目标 | 当时 detail 两个阶段不绘制；没有 Free 组的模式、着色器、AI 校准或快捷键实现。白平衡、允许的按键另记未实现；Free 范围现以当前需求和 PhotoCraft 移植规范为准。 |
 | C-03 | 通过 | ExportQueue::set_fast_export / test_snapshot_and_fast_export_stay | 队列清空不会解除开关；实际写入口绕开开关见 C-21。 |
 | C-04、C-30、C-34、C-55、C-62 | 未实现 | 未实现：生成/渲染进程、跳转、任务描述、语义分割执行 | 落层内核类型、工具名和管线表不能证明跨进程行为。 |
 | C-05、C-06（白平衡）、C-07（快捷键）、C-27、C-33 | 未实现 | 未实现：参数模式、编译与编辑器 | 黑白档禁用、精准控制切换及合法快捷键均未验收。 |

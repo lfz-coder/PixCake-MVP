@@ -1,16 +1,24 @@
 # 像素公式与来源逐参数登记
 
-日期：2026-11-09  
-状态：当前 reference 实际公式的逐参数登记
+日期：2026-11-09
+状态：当前 reference 实际公式与 PhotoCraft 移植目标的逐参数登记
+总裁决：[PhotoCraft 能力来源与 PixCake 移植规范](../specs/2026-11-09-photocraft-reference-and-porting-policy.md)
 
-这份文档回答三个问题：参数如何映射到内部数值、reference 实际执行什么公式、这个公式的来源能支持到什么程度。公式按当前代码登记，不把“GPU 与 reference 读回一致”写成“与 PixCake 官方一致”。
+这份文档回答四个问题：参数如何映射到内部数值、当前 reference 实际执行什么公式、PhotoCraft 对应目标在哪里、来源能支持到什么程度。当前代码公式仍如实记录，但只要 PhotoCraft 有对应能力，当前 PixCake 公式就是 `legacy-provisional`，不能继续作为第二套行为标准；“GPU 与 reference 读回一致”也不等于“与 PhotoCraft 或 PixCake 官方一致”。
 
 ## 阅读规则
 
 - p 是 RenderExecutor 收到的归一化 RGB 工作值，理论范围为 [0,1]；alpha 不参与这些颜色公式。当前 macOS 解码器仍输出 sRGB RGBA8，进入线性工作缓冲区的转换没有闭环，见[来源与共识登记](../specs/2026-11-06-pixel-processing-provenance.md)。
 - clamp01(x)=min(max(x,0),1)。reference 在每个绘制步骤写回 RGBA8；最终写回使用 round(clamp01(x)*255)。GPU shader 保持相同的步骤顺序和量化语义。
-- standard 只说明外部标准支持公式的基础数学语义；滑杆范围、系数和参数映射仍要单独标为 project-decision，除非有固定版本的官方黑盒证据。
+- standard 只说明外部标准支持公式的基础数学语义；PhotoCraft 有对应实现时来源列使用 `photocraft-target`，当前 PixCake 旧系数标为 `legacy-provisional`。只有没有 PhotoCraft 等价能力时，才使用 `PixCake-specific` 或 `project-decision`。
 - 代码位置以 gpu/render/src/render_executor.cpp 为主，GPU 对应实现位于 gpu/render/src/shader_sources.hpp。
+
+PhotoCraft 参考副本当前提交为 `885a6ddf27cc58c07faf1722e5c327cd38953657`。PhotoCraft 有两个来源族，必须按语义选，不按名字选（见移植规范 4.1）：
+
+- **A. Camera Raw 滤镜管线**：PixCake 的基础显影滑杆、HSL 八色带、色彩分级、曲线和颗粒的目标。CPU 看 `third_party/photocraft/crates/algo/src/camera_raw.rs` 及其 `camera_raw/per_pixel.rs`、`local_tone.rs`、`whites_blacks.rs`；GPU 逐像素阶段看 `crates/gpu/src/camera_raw.wgsl`；parity 看 `crates/gpu/tests/it/camera_raw.rs`。
+- **B. Photoshop 调整图层与合成**：色阶、可选颜色、3D LUT、混合与图层合成的目标。CPU 看 `crates/compose/src/adjust.rs`、`adjust/tone.rs`、`adjust/color.rs`、`psblend.rs`、`composite.rs`；GPU 和 lowering 看 `crates/gpu/src/compose.wgsl`、`crates/gpu/src/plan/lower.rs`。
+
+这些路径定义移植目标，不改变 PixCake 的 C++/OpenGL 架构。下文“来源/结论”列先写来源（`photocraft-target`/`PixCake-specific`/`no-equivalent`），再写当前移植状态。
 
 ## 1. 全局色彩和影调
 
@@ -18,11 +26,11 @@
 
 | 参数 | UI 到内部值 | 当前实际公式 | 来源/结论 | 实现与证据 |
 | --- | --- | --- | --- | --- |
-| temperature | -100..100 线性映射到 D75→D65→D50 | M = XYZ→RGB · Bradford⁻¹ · diag(LMS_target/LMS_source) · Bradford · RGB→XYZ；D50/D65/D75 的 xy 白点在两端线性插值 | Bradford、sRGB 矩阵：normative-standard（ICC/CIE）；滑杆映射：project-decision；官方一致性未验证 | white_balance_matrix()；render_executor.cpp:75-97 |
-| tint | t/100·0.5 stop | LMS_target.g *= 2^(t/100·0.5)，再走同一 Bradford 矩阵 | Bradford：normative-standard；半档比例：project-decision | render_executor.cpp:88-97 |
-| AI 风格 amount | a=clamp(amount/100,0,2) | r'=r+0.04a; g'=g+0.01a; b'=b-0.03a | project-decision；没有官方像素公式来源 | color()；render_executor.cpp:153-163 |
-| exposure | EV，范围 -5..5 | g=2^EV；p'=p·g | EV 的倍增语义：ISO 2720；PixCake 滑杆保护策略未验证 | apply_exposure()、tone()；render_executor.cpp:30-34,139-140,166-168 |
-| contrast | k=1+contrast/100 | p'=(p-0.5)·k+0.5，最后在写回时裁剪 | affine contrast 的基础语义：W3C Filter Effects；-100..100→0..2 是 project-decision | render_executor.cpp:151-152,169-171 |
+| temperature | 当前 -100..100 为 PixCake 暂定映射 | 当前是旧 Bradford/D50-D65-D75 或黑盒曲线路径，具体以代码为准；PhotoCraft 目标为 `white_balance_gains(temperature, tint)` 按亮度归一的三通道增益，在线性光中相乘 | `photocraft-target`（A）；当前 `legacy-provisional`。9.3.0 的 +100/-50/-100 黑盒测量保留为官方一致性证据，不是公式来源 | white_balance_matrix()/apply_warm()；render_executor.cpp；PhotoCraft `algo/src/camera_raw.rs:670`、`camera_raw/per_pixel.rs:13-20` |
+| tint | 当前 t/100·0.5 stop | 旧路径为 Bradford 绿锥缩放；PhotoCraft 目标同上，与 temperature 共用一次增益 | `photocraft-target`（A）；当前 `legacy-provisional` | tint_matrix()；render_executor.cpp；同上 |
+| AI 风格 amount | a=clamp(amount/100,0,2) | r'=r+0.04a; g'=g+0.01a; b'=b-0.03a | `PixCake-specific`；没有 PhotoCraft 对应业务模型 | color()；render_executor.cpp:153-163 |
+| exposure | EV，范围 -5..5（与 Camera Raw 单位相同） | 旧路径 g=2^EV，作用于未闭环的“工作值”；PhotoCraft 目标为文档值按 sRGB 解码到线性光 → 乘 `2^exposure`（与白平衡增益合并）→ 非负裁剪 → 重新编码 | `photocraft-target`（A）；当前 `legacy-provisional`。Photoshop“曝光度”调整图层（`compose/src/adjust.rs:138-157`，带 offset/gamma）**不是**本滑杆的目标 | apply_exposure()、tone()；PhotoCraft `algo/src/camera_raw.rs` 的 `balance()` 与 `per_pixel::gains` |
+| contrast | k=1+contrast/100 | 旧路径 p'=(p-0.5)·k+0.5；PhotoCraft 目标是 Camera Raw 阶段 3 中围绕中灰的 S 曲线（强度 `contrast/100·0.6`），作用于亮度并保持颜色比例 | `photocraft-target`（A）；当前 `legacy-provisional` | render_executor.cpp:151-152,169-171；PhotoCraft `algo/src/camera_raw/per_pixel.rs:23-25` 与 `camera_raw.rs` 阶段 3 |
 
 ### 亮度、高光、阴影、白色、黑色
 
@@ -43,7 +51,9 @@ lift = h*hi*0.45 + s*lo*0.45 + w*hi*0.20 + k*lo*0.20
 p = p + lift
 ~~~
 
-结论：brightness、highlights、shadows、whites、blacks 的实现公式现在是清楚的，但来源不是官方公式；0.45、0.20、中灰分界和三角权重都是 project-decision。代码注释已明确它们仍是 provisional，不能登记成 standard 或 verified-against-product。
+结论：当前公式是清楚的，但 0.45、0.20、中灰分界和三角权重都是旧 PixCake `legacy-provisional`。highlights/shadows/whites/blacks 都有 PhotoCraft Camera Raw 目标（A）：高光/阴影是按引导滤波基底加权的局部曝光变化（`algo/src/camera_raw/local_tone.rs`），白色/黑色是按图像黑白点自适应的全局曲线（`algo/src/camera_raw/whites_blacks.rs`、`per_pixel::white_black_points`）。这两类都依赖整幅图像统计，移植时必须让预览代理和全分辨率导出共用同一统计。
+
+brightness 例外：Camera Raw（PV2012）没有亮度滑杆。2026-11-09 用户裁决按 Photoshop 来做：来源是 `photocraft-target`（B），目标为 Photoshop 现代亮度/对比度中的亮度部分 `modern_brightness`（`third_party/photocraft/crates/compose/src/adjust/tone.rs:155`），实现方式是 `modern_lut(brightness, 0)`（`tone.rs:230`）生成的 4096 点查找表，逐通道作用于编码值，保持纯黑和纯白不动；不使用 legacy 线性亮度（`compose/src/adjust.rs` 的 `legacy: true` 分支）。单位：Photoshop 现代亮度范围 −150..150，PixCake −100..100 直接取同值。对比度不走这里，仍按 Camera Raw。它在 A 管线中的位置是 `PixCake-specific` 顺序：暂定放在阶段 1（白平衡/曝光）之后、阶段 2（去雾）之前，沿用当前 PixCake“曝光后先做亮度”的顺序，待像素蛋糕黑盒测量确认。当前实现仍是旧加法偏移，状态 `legacy-provisional`。
 
 实现：tone()，render_executor.cpp:165-178；GPU：shader_sources.hpp:157-168。
 
@@ -58,7 +68,9 @@ gray = 0.2126*r + 0.7152*g + 0.0722*b
 p' = gray + (p - gray) * sat
 ~~~
 
-结论：三个“局部/细节”滑杆当前共用一个 local 对比度变换；vibrance 只是按最大通道衰减的饱和度缩放。没有记录到 PixCake 官方传递函数，这些全部是 project-decision，不能按产品原算法验收。
+结论：clarity/texture/dehaze 当前共用一个全局对比度变换，这是 `legacy-provisional`，与目标语义差距很大。三者都有 PhotoCraft Camera Raw 目标（A）：清晰度和纹理是引导滤波/高斯分带的局部对比度（`algo/src/camera_raw/local_tone.rs`），去雾是暗通道先验（He、Sun、Tang 2009）加引导滤波细化（`algo/src/camera_raw.rs` 阶段 2）。它们是空间阶段，PhotoCraft 只有 CPU 实现，PixCake 的 OpenGL 版本以移植后的 C++ reference 为 oracle。
+
+vibrance/saturation 的目标是 Camera Raw 阶段 4（Presence，鲜艳度向低饱和颜色加权），不是 Photoshop“自然饱和度”调整图层（`compose/src/adjust/color.rs:345-371`）。当前最大通道衰减公式是 `legacy-provisional`。
 
 实现：tone()、render_executor.cpp:149-150,176-182；GPU：shader_sources.hpp:165-168。
 
@@ -88,7 +100,7 @@ y = x^(1/gamma)
 c' = ob + y * (ow - ob)
 ~~~
 
-这里的 c 依次是原始 R、G、B，但参数只有一套 ib/iw/gamma/ob/ow，不是独立通道色阶。输入/输出黑白点的范围和 UI 名称来自架构附录及 test 版数值框观察；gamma=10^gray、最小跨度 1/255 和逐通道复用是 project-decision。红/绿/蓝独立通道的官方来源、参数和实现均缺失。
+这里的 c 依次是原始 R、G、B，但参数只有一套 ib/iw/gamma/ob/ow，不是独立通道色阶。输入/输出黑白点的范围和 UI 名称来自架构附录及 test 版数值框观察；gamma=10^gray、最小跨度 1/255 和逐通道复用是旧 PixCake `legacy-provisional`。PhotoCraft 的 `levels`、`levels_gamma`、`levels_float` 和 per-channel/master 组合在 `third_party/photocraft/crates/compose/src/adjust/tone.rs:299-367`，移植时必须覆盖这些边界；红/绿/蓝独立参数仍属于 PixCake 参数模式缺口。
 
 实现：color_groups()、apply_levels()，render_executor.cpp:278-290,329-336；GPU：shader_sources.hpp:170-175。
 
@@ -109,7 +121,7 @@ L' = clamp01(L + light * 0.5 * S0 * (light>0 ? 1-L : L))
 RGB' = HSL_to_RGB(H', S', L')
 ~~~
 
-HSL 转换本身是常见色彩空间算法，但八色带、±100→±30°、明亮度半余量和按原饱和度缩放都是 project-decision；没有 PixCake 官方公式来源。灰色 S=0 时直接保持不变。
+HSL 转换本身是常见色彩空间算法；当前 ±100→±30°、明亮度半余量、按原饱和度缩放和相邻两带线性权重是旧 PixCake `legacy-provisional`。目标是 PhotoCraft Camera Raw 阶段 6 Color Mixer（A）：同样的八个色带、色相环上的帽函数权重（`third_party/photocraft/crates/algo/src/camera_raw.rs` 的 `hsl_hue/hsl_sat/hsl_lum`）。Photoshop“色相/饱和度”调整图层（`compose/src/adjust/color.rs:6-71`）只有六个范围，不是本分组的目标。灰色 S=0 时的行为仍需在 parity 中固定。
 
 实现：to_hsl()、band_weights()、apply_hsl()，render_executor.cpp:204-258,339-358；GPU：shader_sources.hpp:101-149,176-187。
 
@@ -125,7 +137,7 @@ grey' = clamp01(grey + mix * chroma * 0.5)
 RGB' = (grey', grey', grey')
 ~~~
 
-0.2126/0.7152/0.0722 是项目采用的 Rec.709-style 亮度权重；登记中还没有把可复核的标准原文链接固定下来。混合半色度、八色带和黑白档切换都是 project-decision。这正是“算法有实现但来源登记不完整”的一项。
+0.2126/0.7152/0.0722 是旧 PixCake 采用的 Rec.709-style 亮度权重；混合半色度、八色带和黑白档切换属于 `legacy-provisional`。来源是 `PixCake-specific`：PhotoCraft 的 Camera Raw 管线没有黑白处理，Photoshop BlackWhite 调整图层（`compose/src/adjust.rs:231`、`compose/src/adjust/color.rs:98-119`）只有六个权重，和八色带不等价，只能作为“按色相加权灰度”的参考。若后续决定改成六范围或采用 Camera Raw HSL 权重，需要先修改参数模式。
 
 实现：apply_monochrome()，render_executor.cpp:360-381；GPU：shader_sources.hpp:189-198；测试：test_monochrome()。
 
@@ -141,7 +153,7 @@ change += target_weight * (next - ink)
 channel' = clamp01(channel - change)
 ~~~
 
-目标权重是由 max/mid/min 的差值、离中灰的距离构成的九项经验权重。CMYK 形状、相对/绝对映射、黑色混合和目标权重均为 project-decision；没有官方公式来源。
+目标权重是当前 PixCake 的九项经验权重，旧路径的 CMYK 形状、相对/绝对映射、黑色混合和目标权重均为 `legacy-provisional`。来源是 `photocraft-target`（B）：PhotoCraft 的 `selective_color_weights` 与 `selective_color` 在 `third_party/photocraft/crates/compose/src/adjust/color.rs:271-323`，九个目标和相对/绝对模式与 PixCake 参数一一对应，应替换为移植目标并补齐相对/绝对 parity。
 
 实现：apply_selective()，render_executor.cpp:384-414；GPU：shader_sources.hpp:199-224；测试：test_selective_color()。
 
@@ -158,7 +170,7 @@ lift = w_z * grading_luminance_z/100 * 0.25
 p += tint * (HSL(hue_z,1,0.5) - luminance(HSL(hue_z,1,0.5))) + lift
 ~~~
 
-全局区权重恒为 1。0.25、三角分区和混合半径是 project-decision；没有官方颜色分级传递函数。当前还没有注册“平衡”参数，因此不能宣称颜色分级全量完成。
+全局区权重恒为 1。当前 0.25、三角分区和混合半径是旧 PixCake `legacy-provisional`。来源是 `photocraft-target`（A）：Camera Raw 阶段 7 Color Grading 有同样的阴影/中间调/高光/全局四个色轮（色相 0..360、饱和度 0..100、明亮度 −100..100）以及 Blending 和 Balance（`third_party/photocraft/crates/algo/src/camera_raw.rs` 的 `Wheel`、`grade_*`），单位与 PixCake 一致。Photoshop ColorBalance 调整图层（`compose/src/adjust/color.rs:187-269`）不是本分组的目标。PixCake 当前没有注册“平衡”参数，因此不能宣称颜色分级全量完成。
 
 实现：apply_grading()，render_executor.cpp:416-437；GPU：shader_sources.hpp:225-239；测试：test_grading()。
 
@@ -185,15 +197,15 @@ G += strength * (mono + (noise(2)-mono)*colour)
 B += strength * (mono + (noise(3)-mono)*colour)
 ~~~
 
-hash01 的整数常量、三次平滑插值和尺寸映射都是项目选择；没有 PixCake 官方颗粒公式或胶片标定来源。amount=0 时整步跳过；colour=0 为单色颗粒，colour=1 为独立通道颗粒。
+hash01 的整数常量、三次平滑插值和尺寸映射都是项目选择，当前为 `legacy-provisional`。amount/size/roughness 有 PhotoCraft Camera Raw 阶段 9 grain 目标（A，按位置哈希、确定性、按全分辨率坐标——见 `crates/gpu/tests/it/camera_raw.rs` 的 `grain_in_full_resolution_coordinates`）；shadows/midtones/highlights/colour 四个子参数是 `PixCake-specific` 扩展，Camera Raw 没有。amount=0 时整步跳过；colour=0 为单色颗粒，colour=1 为独立通道颗粒。
 
 实现：grain_of()、hash01()、value_noise()、apply_grain()，render_executor.cpp:453-516；GPU：shader_sources.hpp:256-300；测试：test_grain()。
 
 ## 8. 局部、后期和 AI 色彩路径
 
-- `color.local` 和 `color.post` 复用同一组 white balance、style、tone 和 color-group reference 公式；它们的差异来自操作顺序和蒙版权重，不是另一套像素公式。每个像素先算出 `after`，再用蒙版 alpha 的乘积作为 opacity 做合成。
-- `color.style` 当前只执行固定 RGB 风格偏移：`r+=0.04a, g+=0.01a, b-=0.03a`，其中 `a=amount/100`。这不是官方 AI 风格模型。
-- `color.match` 当前也不是 AI 模型。关闭 precise 时，amount 走同一固定 RGB 偏移；打开 precise 后，amount 本身不再绘制，效果来自写回到 `color.global`/`color.local` 的参数记录。两种路径都没有官方模型或逐像素来源。
+- `color.local` 和 `color.post` 的基础白平衡/影调/色彩操作与全局调色共用同一 Camera Raw 目标（A）；操作顺序、蒙版权重、选择区和 PixCake 参数语义是 PixCake-specific。当前复用旧 reference，状态是 `legacy-provisional`，不是已完成移植。蒙版下的空间阶段（清晰度、去雾等）仍按整幅图像统计计算，再按蒙版混合。
+- `color.style` 当前只执行固定 RGB 风格偏移：`r+=0.04a, g+=0.01a, b-=0.03a`，其中 `a=amount/100`。PhotoCraft 没有 PixCake 的 AI 风格业务模型，因此这是 `PixCake-specific` 的临时实现，不得称为 PhotoCraft AI。
+- `color.match` 当前也不是 AI 模型。关闭 precise 时，amount 走同一固定 RGB 偏移；打开 precise 后，amount 本身不再绘制，效果来自写回到 `color.global`/`color.local` 的参数记录。PhotoCraft 没有对应 PixCake 点数/样片流程，当前实现是 `PixCake-specific`，不能用 PhotoCraft 普通调整冒充。
 - 局部操作最多四个 GPU 蒙版通道；超过四个蒙版、GPU 不可用或通道未通过支持门禁时回退 reference。
 
 ## 9. 其他已执行的像素运算
@@ -208,10 +220,10 @@ hash01 的整数常量、三次平滑插值和尺寸映射都是项目选择；�
 
 ## 10. 这次审查确认的缺口
 
-1. **不是每个参数都有来源。** 对比度已有 W3C 基础公式，但亮度、高光、阴影、白色、黑色、清晰度、纹理、祛雾、鲜艳度、饱和度、HSL、黑白、可选颜色、颜色分级和颗粒的具体系数主要是项目决定。
+1. **还没有任何参数完成来源迁移。** 白平衡、曝光、对比度、高光/阴影/白色/黑色、纹理/清晰度/去雾、鲜艳度/饱和度、曲线、HSL、色彩分级和颗粒基础三项以 Camera Raw（A）为目标；亮度、色阶、可选颜色、3D LUT 和混合以调整图层/合成（B）为目标；PixCake 当前对它们都只有旧公式。亮度按用户裁决以 Photoshop `modern_brightness`（B）为目标；八色带黑白、颗粒扩展子参数和 AI 业务是 PixCake-specific；色彩编辑器是 no-equivalent。
 2. **色阶不是红绿蓝独立色阶。** 当前只有一套 RGB 复合黑/灰/白参数，代码对 R/G/B 复用同一映射；用户所说的红、绿、蓝独立黑场/灰场/白场目前没有实现。
 3. **黑白混合的 Rec.709 来源链接没有在登记中固定。** 代码和测试都写了权重，但来源登记仍不完整。
-4. **GPU 证据只证明 CPU reference 对齐。** test_gpu_backend_C57_C60、test_gpu_shader_path 和 test_reference_color_groups 不能证明官方 PixCake 逐像素一致。
+4. **GPU 证据只证明 CPU reference 对齐。** test_gpu_backend_C57_C60、test_gpu_shader_path 和 test_reference_color_groups 不能证明 PhotoCraft parity 或官方 PixCake 逐像素一致；PhotoCraft 目标必须单独引入向量/器件测试。
 5. **颜色编辑器仍无目标颜色公式，输入色彩管理仍未闭环。** 这两项不能写成“已实现”。
 
-因此，你的判断是对的：之前的“来源与公式登记”只能算分组级状态登记，不能算完整的逐公式来源登记。现在这份文档把已有实现的公式逐项摊开，同时把没有来源、没有独立通道或没有实现的部分明确标出来。
+因此，这份文档把当前旧实现的公式逐项摊开，同时明确 PhotoCraft 目标、PixCake-specific 能力和没有实现的部分。旧公式的详细记录是迁移基线，不是继续保留两套行为标准的理由。

@@ -4,6 +4,8 @@
 状态：全局约束  
 适用范围：仓库内所有生产模块、进程、平台适配器和构建目标。
 
+像素算法的补充裁决：[PhotoCraft 能力来源与 PixCake 移植规范](2026-11-09-photocraft-reference-and-porting-policy.md)。该文档规定 PhotoCraft-backed 能力的行为来源、C++/OpenGL 移植方式和许可证记录；本文件继续规定依赖如何选型、锁定、构建和挂接到 PixCake 模块。
+
 ## 1. 总原则
 
 实现通用能力时，优先评估成熟、维护中的第三方库。已经有合适库覆盖的能力，不得为了“自己可控”而手写生产实现。图像解码、图像编码、缩放、色彩管理、标准格式解析、密码学、压缩、模型运行时和通用 IPC 编解码都属于这一原则覆盖的能力。
@@ -11,6 +13,12 @@
 本项目自己实现的部分应限于项目语义和适配层：参数/文档契约、结果码、尺寸和长度校验、任务生命周期、队列事务、资源释放，以及把第三方库转换为项目已有的数据结构。适配层不能把第三方库的错误伪装成成功，也不能用占位像素或假文件掩盖库缺失。
 
 这条规范不改变架构边界：图像 I/O 依赖应放在 `apps/renderd`、`apps/exportd` 或明确的平台适配器，不能把图像库头文件和实现塞进 `kernel/`；Qt、OpenGL、动态能力插件等已有禁令继续有效。
+
+## 1.1 PhotoCraft 的特殊处理
+
+仓库中的 `third_party/photocraft` 是 PixCake 的算法参考副本。PhotoCraft 已有的调整、色彩、混合、图层合成和 parity 测试优先作为 PixCake 的行为和测试来源；这不等于把 PhotoCraft 的 Rust、Cargo、wgpu 或 egui 作为 PixCake 的运行时依赖。生产实现必须按 PixCake 的 C++17/CMake、`gpu/render`、`pixcake::gl` 和 OpenGL backend 规则落地。
+
+参考副本由 `third_party/photocraft.lock.cmake` 锁定上游 URL 和提交；副本目录本身被 `.gitignore` 排除，不进入构建和分发物。PhotoCraft 本体是 `MIT OR Apache-2.0` 二选一双许可，PixCake 选用 MIT：直接移植 PhotoCraft 的代码或 shader 时，选型记录必须写出当前提交、所选许可证、版权声明和 `LICENSE-MIT` 随包位置，移植文件头注明来源路径和提交。ArtCraft 商标、PhotoCraft 捆绑的字体/图标/libfacedetection 权重不在本体许可范围内，不得顺带使用。独立 C++/GLSL 重写不复制源代码表达，但仍须登记 PhotoCraft 路径和提交，并用 CPU/GPU parity 验证语义。PhotoCraft 没有等价能力时，按 PixCake-specific 或 no-equivalent 处理，不为了“有第三方来源”而套用相似公式。
 
 ## 2. 选型门槛
 

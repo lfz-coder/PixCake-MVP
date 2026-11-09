@@ -5,6 +5,8 @@
 总则：[审核总则](2026-11-02-pixcake-review-index.md)  
 边界编号来自 [边界条件清单](2026-11-02-pixcake-boundary-checklist.md)。
 
+PhotoCraft 已有能力的测试还要覆盖 C++ CPU 参考实现、OpenGL readback 与 PhotoCraft 向量或 corpus 的 parity；旧 PixCake CPU/GPU 对齐只能证明旧路径一致，不能单独证明 PhotoCraft 目标已经移植。具体来源和状态见[PhotoCraft 能力来源与移植规范](../2026-11-09-photocraft-reference-and-porting-policy.md)及[像素处理状态矩阵](../../evidence/2026-11-09-pixel-processing-status-matrix.md)。
+
 没有测试的实现，这一轮不算做完。测试期望和契约相反时，改实现，不改期望去迎合错误行为。
 
 ## 1. 五种测试都要有

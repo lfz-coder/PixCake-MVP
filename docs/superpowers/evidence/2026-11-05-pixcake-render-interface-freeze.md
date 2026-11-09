@@ -2,6 +2,8 @@
 
 日期：2026-11-05
 
+来源边界：本证据只冻结 PixCake 的数据契约，不冻结像素公式。PhotoCraft-backed 公式的当前来源和移植状态以[PhotoCraft 能力来源与 PixCake 移植规范](../specs/2026-11-09-photocraft-reference-and-porting-policy.md)及[像素处理来源与执行现状矩阵](2026-11-09-pixel-processing-status-matrix.md)为准。
+
 ## 已完成
 
 - `ParameterMode` 已成为阶段一参数范围、步进、默认值、渲染阶段、稳定程序名、通道名、模式版本和绘制顺序的唯一来源。

@@ -3,6 +3,8 @@
 计划：`docs/superpowers/plans/2026-11-05-refine-sliders-from-parameter-mode.md`
 对应：第三轮审核 C-38、Q-06、Q-20 否决项（壳层控件源码写死滑杆范围）
 
+来源说明：[PhotoCraft 能力来源与 PixCake 移植规范](../specs/2026-11-09-photocraft-reference-and-porting-policy.md)决定像素能力的行为来源；本记录只证明当时壳层已从参数模式取值，不证明任何 PhotoCraft parity。
+
 ## 改动
 
 - 新增无 Qt 的 `ui/panels`（`pixcake_ui_panels`，链接 `pixcake_capability`），按架构 §5 的目录约定放置“由能力参数模式生成的面板”。
@@ -44,7 +46,7 @@ RED 证据：`test_slider_spec` 先因缺少头文件编译失败；精修页 sm
 
 ## 仍未关闭
 
-- 原 Free 分组、色阶和创意色彩还没有内核参数模式。它们的范围要先有需求原文或 test 版实测读数，再由内核注册；注册后壳层会自动显示，不需要再改壳层源码。
+- PhotoCraft-backed 分组、色阶和创意色彩当时还没有完整的内核参数模式。它们的范围要先有需求原文或 test 版实测读数，再由内核注册；这表示当时的来源/注册缺口，不是 Free 标记造成的产品排除。注册后壳层会自动显示，不需要再改壳层源码。
 - 内核 `crop/angle` 的步进 1、默认 0 没有引用来源，需要在第 3 项复核参数模式时确认。
 - 黑白档规则、禁用原因字段属于第 3 项。
 - 视觉变化：未绑定的滑杆现在刻度为 0..0，圆点停在左端，不再居中。这是不猜范围的直接结果；拿到实测范围后会恢复正确位置。

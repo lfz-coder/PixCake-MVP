@@ -2,6 +2,8 @@
 
 日期：2026-11-05
 
+像素能力来源按[PhotoCraft 能力来源与 PixCake 移植规范](../specs/2026-11-09-photocraft-reference-and-porting-policy.md)执行：PhotoCraft-backed 能力保留 PixCake 的阶段与 RenderDescription 边界并进入 C++/OpenGL 移植；只有尚未注册、`no-equivalent` 或缺少资源的 operation 才能跳过并诊断。本文不把 PhotoCraft 的 Rust/wgpu/egui 架构带进 kernel。
+
 ## 范围
 
 这份计划承接 `2026-11-05-pixcake-render-contract.md` 和
@@ -24,7 +26,7 @@ OpenGL 后端、`gpu/render` 和 UI 消费的内容。实现必须保持 kernel 
 - 扩展 `PipelineStep` 的依赖声明，保留现有能力标识和旧片段兼容行为。
 - 为阶段一管线补齐依赖边，启动校验拒绝未知依赖、重复步骤、同一能力的非法重复和环路。
 - 提供稳定的拓扑顺序/能力排序 API，`kernel/render` 按它生成 `RenderOperation::order`。
-- 修正 `color.match → color.style → color.global → color.local → 人像/图像 → color.post → manual.* → crop` 的顺序；Free 能力保留阶段标识但不生成绘制操作。
+- 修正 `color.match → color.style → color.global → color.local → 人像/图像 → color.post → manual.* → crop` 的顺序；PhotoCraft-backed 能力保留阶段标识并由后续 render pass 消费，尚未注册或 `no-equivalent` 的 operation 才不生成绘制操作并保留诊断。
 
 ### Task 2：预览请求和最新值合并 `[x]`
 

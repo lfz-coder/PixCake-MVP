@@ -1,8 +1,10 @@
 # Free 分组范围实测与参数模式注册 Implementation Plan
 
 日期：2026-11-06
-状态：本阶段收口（2026-11-05）：已注册色阶、HSL、颜色分级、可选颜色、颗粒、色彩编辑器偏移、创意色彩程度；其余分组按用户裁定暂缓
+状态：历史 checkpoint（2026-11-09）：已注册色阶、HSL、颜色分级、可选颜色、颗粒、色彩编辑器偏移、创意色彩程度；其余分组当时暂缓，当前必须按 PhotoCraft/PixCake 来源矩阵重新排期
 基线：`1e9e479`
+
+来源裁决：[PhotoCraft 能力来源与 PixCake 移植规范](../specs/2026-11-09-photocraft-reference-and-porting-policy.md)优先于本历史计划。Free 只是试用或额度标记；PhotoCraft 有对应实现的分组不能继续以 Free 或“非主要”为理由排除，当前完成状态以[像素处理状态矩阵](../evidence/2026-11-09-pixel-processing-status-matrix.md)和[像素公式登记表](../evidence/2026-11-09-pixel-formula-registry.md)为准。
 
 ## Goal
 
@@ -45,8 +47,8 @@
 - [x] 创意色彩“程度”：AI 色彩风格按官方 0..100；AI 追色按需求 0..200（第四轮复审后用户裁定恢复，追色没有实测）。需求文档与契约、边界清单已同步。
 - [x] 色彩编辑器：色相/饱和度/明亮度偏移按官方手册 -100..100、默认 0 注册，步进待确认；参数标识由本项目选定（`color_editor_<hue|saturation|luminance>_shift`）。色彩平滑、亮度平滑、色彩均匀度无来源，未注册。
 - [x] 像素实现（2026-11-06）：色阶、HSL、黑白配置文件与黑白混合、可选颜色、颜色分级、颗粒接入参考绘制，精修滑杆按“画得出且未被禁用”开放；色彩编辑器缺目标颜色参数，不画。见 `docs/superpowers/evidence/2026-11-06-color-groups-reference-pixels.md`。
-- [ ] 曲线：只有通道和控件结构观察，没有任何数值实测，未注册。
-- [ ] 细节、镜头调整、透视矫正、校准、AI 校准：用户 2026-11-05 确认非主要，本阶段暂不测量。
+- [ ] 曲线：只有通道和控件结构观察，没有任何数值实测，未注册；PhotoCraft 的 curves 已有参考实现，需按来源规范继续移植并补 PixCake 参数映射。
+- [ ] 细节、镜头调整、透视矫正、校准、AI 校准：本历史计划当时暂不测量；当前是否属于 PhotoCraft-backed、PixCake-specific 或 no-equivalent，必须重新登记，不能沿用“非主要”作为排除理由。
 
 ## Rulings
 

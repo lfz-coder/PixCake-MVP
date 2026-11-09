@@ -3,3 +3,6 @@ build-*/
 CMakeFiles/
 graphify-out/
 .cursor/
+
+# PhotoCraft algorithm reference clone; pinned by third_party/photocraft.lock.cmake
+third_party/photocraft/

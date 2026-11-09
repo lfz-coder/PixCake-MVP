@@ -1,5 +1,7 @@
 # 审核记录：2026-11-04，当前工作树七关复审
 
+> 历史记录说明（2026-11-09）：本文只记录当时七关复审的事实和结论。Free 标记不构成当前能力排除；PhotoCraft-backed 能力、旧 PixCake 公式和当前完成状态以[PhotoCraft 能力来源与 PixCake 移植规范](../2026-11-09-photocraft-reference-and-porting-policy.md)及状态矩阵为准。
+
 ## 结论
 
 **打回重写。** 当前工作树可以独立构建，已有 29 个 CTest 全部通过，但第 1 关仍有契约否决项，且多个产品责任模块没有实现。测试全绿不能把页面模型、元数据注册表或内核状态模型当成完整桌面功能。
@@ -36,7 +38,7 @@ git diff --check
 
 | 结论 | 编号 | 证据与差异 |
 | --- | --- | --- |
-| 通过（已有子路径） | C-01、C-02、C-03、C-09、C-14、C-15、C-24、C-40、C-41、C-42、C-43、C-44、C-45、C-46、C-47、C-48、C-49、C-50、C-54 | `WorkspaceDisplay::home/entered_project` 默认打开三个显示项；Free 能力在 `CapabilityRegistry::phase_one` 中不注册绘制；`ExportQueue` 不因队列变空自动关闭极速导出；项目索引、回收站、虚拟副本、预设类型/名称、同步、账本、导出快照和历史已有对应测试。证据包括 `test_workspace_display`、`test_capability_registry`、`test_preset_library`、`test_sync`、`test_ledger`、`test_export_queue`、`test_history`。这些结论只覆盖已有子路径。 |
+| 通过（已有子路径） | C-01、C-02、C-03、C-09、C-14、C-15、C-24、C-40、C-41、C-42、C-43、C-44、C-45、C-46、C-47、C-48、C-49、C-50、C-54 | `WorkspaceDisplay::home/entered_project` 默认打开三个显示项；当时的 `CapabilityRegistry::phase_one` 尚未为 Free 能力注册绘制（这是代码事实，不是当前范围裁决）；`ExportQueue` 不因队列变空自动关闭极速导出；项目索引、回收站、虚拟副本、预设类型/名称、同步、账本、导出快照和历史已有对应测试。证据包括 `test_workspace_display`、`test_capability_registry`、`test_preset_library`、`test_sync`、`test_ledger`、`test_export_queue`、`test_history`。这些结论只覆盖已有子路径。 |
 | 不通过 | C-10、C-21、C-23、C-25、C-26、C-35、C-61 | `EditDocument` 的 `set_preview/commit_preview/commit_fragment_replacement`、`HistoryLog`、`LayerDocument` 仍有公开写入口；`CommandGate` 只在当前进程按路径共享 mutex，不能成为所有入口的统一提交边界。`PresetLibrary::apply` 已显式接收极速导出门闩，但这不能覆盖其它公开入口。参数模式没有统一数据结构，结果码、持久化和未知片段保护也没有覆盖所有写入路径。能力注册表只检查管线重复，不验证依赖环和环路日志。 |
 | 不通过 | C-36、C-37、C-38、C-39 | `validate_parameter_display_value` 在 `kernel/capability/src/capability_registry.cpp:119-156` 只覆盖 `color.global` 的部分参数以及 `color.match/style.amount`。色温、色调、影调的其它能力参数、蒙版/裁剪/人物/眼神光等契约范围没有统一模式来源。现有校验是硬编码分支，不是“参数模式是界面唯一来源”。 |
 | 未实现 | C-04、C-05、C-06（白平衡以外的生成路径）、C-11、C-12、C-18、C-19、C-27、C-30、C-31、C-32、C-33、C-34、C-51、C-52、C-53、C-55、C-56、C-57、C-58、C-59、C-60、C-62 | 当前仓库没有 `kernel/import`、`kernel/render`、`kernel/generate`、`kernel/config`、`kernel/cli`、`apps/renderd`、`apps/generated`、`gpu` 或 `services`。没有真实导入解码、能力编译、预览/导出共享帧、生成式任务描述、kernel-cli、OpenGL 冻结接口或可替换语义部位模型。`ui/shell` 和 `apps/shell` 只有页面与禁用控件，不能作为这些模块的实现证据。 |
@@ -85,9 +87,9 @@ git diff --check
 
 | 结论 | 编号 | 证据与差异 |
 | --- | --- | --- |
-| 通过（有限模块） | Q-02、Q-03、Q-07、Q-08、Q-09、Q-10、Q-17、Q-19、Q-30 | 能力标识、历史内存折叠、账本、导出快照、图层模型、Free 排除和极速导出保持规则已有清晰类型与测试。 |
+| 通过（有限模块） | Q-02、Q-03、Q-07、Q-08、Q-09、Q-10、Q-17、Q-19、Q-30 | 能力标识、历史内存折叠、账本、导出快照、图层模型、当时的 Free 排除假设和极速导出保持规则已有清晰类型与测试；Free 范围结论已由后续裁决取代。 |
 | 不通过 | Q-01、Q-04、Q-05、Q-06、Q-11–Q-15、Q-18、Q-20、Q-22、Q-23、Q-25、Q-31 | `WorkspaceDisplay`、`ui/shell` 和 `apps/shell/main.cpp` 重复维护大量页面/控件文字；参数范围、步进、默认值没有统一模式；`LogSink`/结果码没有接入导出、账本和恢复入口；`CommandGate` 不能约束所有公开写入口；导出任务虽存 `document_snapshot`，但没有 renderer/CLI 消费它的端到端链路。 |
-| 未实现/不适用 | Q-21、Q-24、Q-26–Q-29、Q-32–Q-33 | 蒙版部位、快捷键表、IPC 字段、GPU/native、生成进程和后续阶段入口尚未形成完整模块；Free 深层能力按架构排除，当前不因未实现而判通过，但若后续实现了 Free 绘制应改判不通过。 |
+| 未实现/不适用 | Q-21、Q-24、Q-26–Q-29、Q-32–Q-33 | 蒙版部位、快捷键表、IPC 字段、GPU/native、生成进程和后续阶段入口尚未形成完整模块；本记录当时把 Free 深层能力按旧架构排除，当前应按 PhotoCraft 来源矩阵重新判定，不能用本行代替现行状态。 |
 
 架构门禁路径问题已在本轮修正为 `kernel/capability`；但门禁仍然不能替代运行时的跨进程锁、配置和协议测试。
 

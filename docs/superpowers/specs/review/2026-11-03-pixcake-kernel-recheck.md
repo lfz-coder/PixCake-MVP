@@ -1,5 +1,7 @@
 # 审核记录：2026-11-03，已实现的内核计划复审
 
+> 历史记录说明（2026-11-09）：本文保留当时审核事实。若文中把 Free 分组或旧 PixCake 公式当作排除/权威，它们已被用户裁决和[PhotoCraft 能力来源与 PixCake 移植规范](../2026-11-09-photocraft-reference-and-porting-policy.md)取代；当前审核以[审核总则](2026-11-02-pixcake-review-index.md)、当前需求、状态矩阵和公式登记表为准。
+
 **结论：打回重写。** 导出仍可能覆盖其他文件；取消、订阅资格和结算在部分顺序下会失效；旧版保存的有效图层文件可能被当成损坏。下面的反例均只操作临时文件或测试账本。
 
 **基线与范围：** 分支 `kernel-project-library`，当前 HEAD `4a1e665`（包含 `4d68d5b`、`62cb4dc`、`128fc94` 的账本、导出目标和同步重试修复），并纳入工作区已有的图层羽化、规范和测试修改。覆盖 [14 份已落地的功能计划及修复计划](../../plans/)：文档核心、项目库、图片标记、虚拟副本、复制已提交文档、历史、预设、同步、账本、导出、图层、工作区展示、手册文案、能力注册表。以[总则](2026-11-02-pixcake-review-index.md)、[需求](../2026-11-02-pixcake-desktop-phase1-design.md)和[架构](../2026-11-02-pixcake-kernel-architecture-design.md)裁决。工作区展示是数据模型，能力注册表是元数据，没有将它们计为实际桌面或像素功能。
@@ -31,7 +33,7 @@
 | 编号 | 结论 | 证据 | 差异 |
 | --- | --- | --- | --- |
 | C-01 | 不通过 | [图库显示模型](../../../../kernel/workspace/include/pixcake/workspace/workspace_display.hpp#L54)、test_library_controls；需求 §6.4 | RAW、修图状态、导出状态应默认打开；新项目三个值均未设置。 |
-| C-02、C-06、C-07（排除项） | 通过 | CapabilityRegistry::phase_one、test_pipeline、构建目标 | detail 保留阶段不绘制，内核未加入带 Free 的分组、AI 校准、对应快捷键。 |
+| C-02、C-06、C-07（当时的排除判定） | 通过 | CapabilityRegistry::phase_one、test_pipeline、构建目标 | 当时 detail 保留阶段不绘制，内核未加入带 Free 的分组、AI 校准、对应快捷键；这是旧工作树事实，Free 范围现以当前需求和 PhotoCraft 移植规范为准。 |
 | C-03 | 通过 | ExportQueue::set_fast_export、test_snapshot_and_fast_export_stay | 队列空闲不会关闭用户开关；绕过开关的写入口见 C-21。 |
 | C-04、C-05、C-06（白平衡）、C-07（阶段一快捷键）、C-08、C-11、C-12、C-18、C-19、C-27、C-30、C-32、C-33、C-34 | 未实现 | 未实现：生成/渲染进程、能力模式/编译、配置服务、导入解码、网络及停止在途工作 | 元数据、页面名称、取消命令被接收，都不能证明端到端行为。 |
 | C-09、C-20、C-46 | 通过 | CreditLedger；test_free_queue_switches_and_master_allowance、test_balances_stay_separate_and_queue_cancel_is_free | 两套版本开关独立，点数与张数分账，余额不足有独立结果；大师资格另判。 |

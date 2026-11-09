@@ -3,6 +3,7 @@
 日期：2026-11-05
 基线：`/Users/lifangzai/PixCake-MVP` 当前工作区
 来源：项目架构约束、RenderDescription 接口冻结证据、renderd/exportd 基线证据、已有色彩调节像素管线计划、官方 PixCake 色彩调节说明
+算法来源补充：[PhotoCraft 能力来源与 PixCake 移植规范](../specs/2026-11-09-photocraft-reference-and-porting-policy.md)。PhotoCraft 有对应能力时，旧 PixCake reference 只能作为迁移基线。
 
 ## 当前判断
 
@@ -24,7 +25,7 @@
 2. 不修改 `kernel/capability`、`kernel/render` 的参数范围、渲染字段和排序规则来迁就 GPU 实现。
 3. 不在 `gpu/render` 复制参数模式、业务范围、滤镜名称、CUBE/XMP 解析规则或 UI 字段。
 4. 预览和导出必须共用同一个 executor/pass registry；没有真实解码器、编码器、IPC 或 GPU 资源时必须返回明确诊断。
-5. 官方手册只作为用户可见行为证据；内部公式、LUT 内容和第三方库选择没有来源时保持 reference-only/UnsupportedFormat。
+5. 官方手册只作为用户可见行为证据；PhotoCraft 有对应实现时，内部公式和 GPU 语义以固定 PhotoCraft 提交为移植目标；没有 PhotoCraft 或其他可靠来源时保持 PixCake-specific/no-equivalent/UnsupportedFormat。
 6. 每一阶段先建立独立构建和测试证据，再进入下一阶段；失败时保留失败原因，不用桩结果冒充像素完成。
 
 ## 阶段 0：主线基线冻结（先执行）
@@ -73,7 +74,7 @@
 
 ## 阶段 4：真实 GPU 像素覆盖
 
-- 保留已验证的 `color.global` temperature/tint/exposure/contrast shader。
+- 保留 backend 和 contract；temperature/tint 的同名映射先按来源矩阵判断，PhotoCraft 有对应能力的 exposure/brightness/contrast 等 shader 按固定提交移植，旧公式只作 fallback 迁移基线。
 - 结构化 LUT 先保持 reference-only；只有 facade 提供 3D texture/多纹理绑定和真实 readback 证据后，才加入 GPU LUT pass。
 - 局部调色、蒙版和图层必须使用显式像素资源；没有多纹理/多层编排接口时保持 reference fallback。
 - 不把官方滤镜、profile、RAW 预设或创意色彩内容写死到代码中。

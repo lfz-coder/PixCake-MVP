@@ -1,5 +1,7 @@
 # 审核记录：2026-11-04，当前工作树
 
+> 历史记录说明（2026-11-09）：本文只记录当时工作树的审核事实。涉及 Free 分组“不注册绘制”的判断不再是当前范围裁决；PhotoCraft-backed 能力应按[PhotoCraft 能力来源与 PixCake 移植规范](../2026-11-09-photocraft-reference-and-porting-policy.md)移植，当前状态以状态矩阵和公式登记表为准。
+
 **结论：打回重写。** 当前工作树的构建和现有 CTest 都是绿色，但仍有会改变用户文件、导出状态和余额的否决项。修复计划把批次 A–E 标成完成与实际行为不符；本记录按七份审核清单重新检查当前源码、测试和跨句柄/故障探针，不把页面模型或测试通过当成端到端实现。
 
 **范围：** 当前分支 `codex/desktop-official-layout` 的 HEAD 与未提交工作树，包含 `kernel/`、`storage/sqlite/`、`ui/shell/`、`apps/shell/` 以及当前审核清单和修复计划。规则依据：

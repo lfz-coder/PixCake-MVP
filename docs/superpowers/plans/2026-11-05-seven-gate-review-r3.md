@@ -17,6 +17,7 @@
 - 七份清单：`2026-11-02-pixcake-{contract,boundary,safelist,performance,quality,test,ops}-checklist.md`（safelist 文件名为 `2026-11-02-pixcake-safelist.md`）
 - 上一轮：`docs/superpowers/specs/review/2026-11-04-pixcake-seven-gate-review-rerun.md`
 - 上位文档：`specs/2026-11-02-pixcake-desktop-phase1-design.md`、`specs/2026-11-02-pixcake-kernel-architecture-design.md`、`specs/2026-11-06-pixcake-third-party-dependency-policy.md`
+- 像素能力来源：`specs/2026-11-09-photocraft-reference-and-porting-policy.md`、`evidence/2026-11-09-pixel-processing-status-matrix.md`
 
 ## Global Constraints
 
@@ -24,7 +25,7 @@
 - 第 1 关命中否决项，总结论即为“打回重写”，后续关继续记录但不能改变结论。
 - 禁止为让结论变绿而修改需求、架构、清单或产品代码。
 - 不许删行；整模块缺失的行记“未实现”，不能记“通过”。
-- 架构第 17 节排除项（Free 分组）若在代码里出现，改判“不通过”。
+- 架构第 17 节明确排除项若在代码里出现，改判“不通过”；Free 标记不属于排除项，PhotoCraft-backed 分组按当前来源规范审核。
 - 证据不足、无法从代码/测试/文档确认的行，记“不通过（证据不足）”，不猜测为通过。
 - 页面 smoke 不得作为导入、配置、渲染、生成、IPC、kernel-cli、GPU、日志/指标、更新器、卸载器的实现证据。
 - 探针代码只放在 scratchpad，不提交进仓库。
@@ -32,7 +33,7 @@
 ## Review Focus
 
 1. 跨进程提交：两个进程/两个句柄同时写同一文档、历史、图层或导出任务时，旧修订不得覆盖新修订（打回项 1）。
-2. 参数模式：步进错误值（如曝光 0.03、整数参数 1.5）、未声明参数、Free 分组参数必须被拒绝（打回项 2）。
+2. 参数模式：步进错误值（如曝光 0.03、整数参数 1.5）和未声明参数必须被拒绝；PhotoCraft-backed 分组的参数在来源与范围确认后必须正常注册（打回项 2）。
 3. 源文件删除：磁盘删除成功但索引事务失败后重启，项目状态必须可收敛、不丢原图事实（打回项 3）。
 4. 导入验真：扩展名正确但内容损坏、尺寸超限的文件不得进入项目（打回项 4）。
 5. 晚到事件：已取消/失败/旧修订的导出任务事件不能再发布成品（上一轮 B-53/B-73 反例）。

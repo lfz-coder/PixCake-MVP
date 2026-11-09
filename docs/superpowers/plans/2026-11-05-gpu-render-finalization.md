@@ -2,6 +2,8 @@
 
 日期：2026-11-05
 依据：项目架构合同、RenderDescription 接口、现有 gpu/render checkpoint、像素蛋糕官方《色彩调节》说明。
+算法来源：必须先遵守[PhotoCraft 能力来源与 PixCake 移植规范](../specs/2026-11-09-photocraft-reference-and-porting-policy.md)；本文记录的旧 PixCake reference 只作迁移基线。
+本文是 2026-11-05 的阶段计划，文中的“当前”只描述当时 checkpoint；今天的能力来源和完成状态以 2026-11-09 状态矩阵为准。
 
 ## 结论边界
 
@@ -9,14 +11,14 @@
 
 截至当前 checkpoint，阶段 1 的资源诊断已提交（`7f57722`、`beca2f4`），结构化 3D LUT 的 reference 三线性采样已提交（`3cfe271`），图层/蒙版的 reference 合成和 GPU fallback 标记已提交（`d518c0e`）。这些提交没有把 LUT、图层或蒙版宣称为 GPU 已实现；当前 GPU 仍只覆盖最小的 `color.global` shader 路径。
 
-官方手册只说明滤镜、配置文件、白平衡和影调的用户行为，没有提供内部 shader、色彩矩阵、LUT 内容或各滑杆的精确传递函数。因此没有来源的视觉公式不能自行猜测。CPU reference 中的公式只作为当前测试 oracle，不能直接宣称与官方产品视觉一致。
+官方手册只说明用户行为，没有提供产品内部 shader、色彩矩阵、LUT 内容或各滑杆的精确传递函数；PhotoCraft 已有对应实现的能力，应优先采用 PhotoCraft CPU/GPU/test 作为 PixCake C++/OpenGL 的移植目标。PhotoCraft 没有对应能力时才登记为 PixCake-specific 或 no-equivalent。当前 CPU reference 中的旧公式只作为迁移基线，不能继续作为第二个行为标准，也不能直接宣称与官方产品视觉一致。
 
 ## 不可违反的项目约束
 
 1. 不修改其他进程维护的 `kernel/capability` 参数模式和 `kernel/render` RenderDescription 字段。
 2. 不在 `gpu/render` 复制参数范围、业务字段、图层文档或蒙版枚举。
 3. GPU 后端只处理显式上传的像素、蒙版和 LUT 资源，不打开用户文件。
-4. 空字段、未知 program、Free 能力和缺少资源必须诊断并跳过/回退，不能猜测默认效果。
+4. 空字段、未知 program、尚未注册/尚未完成来源移植的 operation 和缺少资源必须诊断并跳过/回退，不能猜测默认效果；Free 标记本身不是排除条件。
 5. 预览与导出只能共用同一 executor 和 pass registry；尺寸是输入选项，不是第二套参数。
 6. 没有真实 renderd/exportd 协议时，不伪造进程端到端完成。
 
@@ -24,13 +26,13 @@
 
 - [x] 对每个 `RenderOperation.program` 建立 pass registry 条目和能力状态：已实现、reference-only、缺资源、未注册。
 - [x] 明确 RGBA 输入、蒙版 alpha、图层像素、LUT 资源的尺寸、格式、行距、生命周期和 revision 校验。
-- [x] 增加缺失资源、尺寸错误、旧 revision、未知混合模式和 Free operation 的诊断测试。
+- [x] 增加缺失资源、尺寸错误、旧 revision、未知混合模式和未注册 operation 的诊断测试；Free operation 只有在尚未注册或尚未完成来源移植时才走这条路径。
 - [x] 不为 `.cube` 或 `.xmp` 猜解析规则；先接收已解析的 LUT/profile 资源。
 
 ## 阶段 2：可证实的 GPU pass
 
 - 保留已经通过代码审查的 temperature/tint/exposure/contrast shader path。
-- 只有当项目合同、现有实现或官方/运行中产品证据给出明确公式时，才把其他影调参数加入 GPU pass。
+- 先检查 PhotoCraft 是否有对应调整和 parity 证据；有则按其行为移植到 GPU pass，没有才依据项目合同、标准或官方/运行中产品证据实现 PixCake-specific pass。
 - GPU pass 与 reference 共享参数绑定和顺序，但不复制另一套范围校验。
 - 有 GPU 时做 readback 误差测试；无 GPU 时测试必须明确 skip，不能把 skip 当成像素通过。
 
@@ -58,8 +60,8 @@
 
 ## 完成条件
 
-- 每个声称“已实现”的 program 都有明确来源、pass、资源依赖、reference/GPU 测试和失败诊断。
-- 无来源的视觉公式标为 reference-only，不标记为官方效果完成。
+- 每个声称“已实现”的 program 都有明确 PhotoCraft/PixCake-specific 来源、pass、资源依赖、reference/GPU 测试和失败诊断。
+- PhotoCraft-backed 能力仍跑旧公式时标为 `legacy-provisional`，只有 PhotoCraft 语义的 C++ reference 完成后才标为 `photocraft-reference-only`；无来源的视觉公式标为 `no-equivalent` 或 `legacy-provisional`，不标记为官方效果完成。
 - 滤镜/LUT、局部调色、蒙版、图层分别有像素级断言。
 - 有 GPU 的环境完成真实 readback；无 GPU 环境只通过 reference 和明确 skip 测试。
 - renderd/exportd 接入前不宣称端到端预览/导出完成。

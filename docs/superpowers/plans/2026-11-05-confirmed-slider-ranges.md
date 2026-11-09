@@ -2,16 +2,18 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 把已经确认范围的非 Free 滑杆放进精修侧栏，并把用户批准用市面惯例填上的空缺写进记录。
+历史说明：本文件记录当时的官方布局试验和旧 checkpoint。其“带 Free 的分组仍是纯文字/不做成滑杆”假设已被 2026-11-05 用户裁决和当前[PhotoCraft 能力来源与 PixCake 移植规范](../specs/2026-11-09-photocraft-reference-and-porting-policy.md)取代。新实现以需求、架构、当前状态矩阵和公式登记表为准。
 
-**Architecture:** 只改精修侧栏里「色彩调节」那一组。滤镜程度、色温、色调和影调各滑杆使用最小值 -100、最大值 100、步进 1、默认 0，控件保持禁用。创意色彩按市面惯例只加一支「程度」，范围 0 到 100，默认 0。带 Free 的分组仍是纯文字。色阶步进和输出黑白只写入记录，不做成控件。
+**Goal:** 记录当时已确认范围的滑杆布局；它不定义当前 PhotoCraft-backed 能力的产品范围。
+
+**Architecture:** 这是当时只改精修侧栏「色彩调节」的旧布局试验。滤镜程度、色温、色调和影调各滑杆使用最小值 -100、最大值 100、步进 1、默认 0，控件保持禁用；创意色彩按当时的市面惯例只加一支「程度」。其中“带 Free 的分组仍是纯文字、色阶不做成控件”只描述该旧 checkpoint，不是当前产品范围。当前分组应按需求和 PhotoCraft 移植状态实现，参数范围以正式来源为准。
 
 **Tech Stack:** C++17、Qt 6 Widgets、现有 `pixcake_app_shell` smoke。
 
 ## Global Constraints
 
 - 分支保持 `codex/desktop-official-layout`。
-- 架构第 17 节带 Free 的分组不做成滑杆：AI 校准、色阶、曲线、HSL、色彩编辑器、颜色分级、可选颜色、细节、颗粒、镜头调整、透视矫正、校准。
+- 旧 checkpoint 采用了“架构第 17 节带 Free 的分组不做成滑杆”的临时假设；该假设已作废。AI 校准、色阶、曲线、HSL、色彩编辑器、颜色分级、可选颜色、细节、颗粒、镜头调整、透视矫正、校准按当前需求和 PhotoCraft/PixCake 状态重新登记。
 - 色温到饱和度的 -100～100 来自用户对双向拖动的确认，不是截图取样。
 - 创意色彩的「程度」、色阶整数步进 1、灰场步进 0.01、输出黑场和白场 0～255，来源标明为市面惯例，且用户只批准用在这些空缺上。
 - 滑杆禁用。不连接信号，不写内核。

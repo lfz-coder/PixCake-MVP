@@ -4,6 +4,8 @@
 状态：开工前合同  
 总则：[审核总则](2026-11-02-pixcake-review-index.md)
 
+像素公式和通用处理的来源、移植状态见[PhotoCraft 能力来源与移植规范](../2026-11-09-photocraft-reference-and-porting-policy.md)及[像素处理状态矩阵](../../evidence/2026-11-09-pixel-processing-status-matrix.md)。Q-33 的 Free 规则表示不能跳过已有能力；它不改变 PixCake 的 C++/OpenGL 架构边界。
+
 架构第 2 节的高内聚、低耦合、高鲁棒性是评审否决条件。这一关把它们收成可以逐行打的问题。风格偏好，例如空行和括号，不单独构成打回。
 
 ## 1. 命名

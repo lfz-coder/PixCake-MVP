@@ -1,6 +1,8 @@
 # gpu/render 真实像素处理完成计划
 
 日期：2026-11-05
+算法来源：PhotoCraft-backed 能力按[PhotoCraft 能力来源与 PixCake 移植规范](../specs/2026-11-09-photocraft-reference-and-porting-policy.md)移植；本文已有 PixCake 公式只作 `legacy-provisional` 基线。
+本文是历史执行计划；勾选项只说明当时 PixCake executor 的代码闭环，不代表 PhotoCraft-backed 能力已经完成移植或 parity。
 
 ## 目标
 
@@ -15,7 +17,7 @@
 - 图层：顺序、不透明度、混合模式、蒙版引用
 - 预览与导出：同一执行器、不同输入尺寸和输出帧元数据
 
-本阶段不实现 Free 分组、AI 校准模型、RAW 解码、文件导入和生成式能力。
+本计划只负责 `gpu/render` 的像素执行，不负责 AI 校准模型、RAW 解码、文件导入和生成式能力。带 Free 标记的像素分组不因此排除；PhotoCraft 有对应实现的分组要按来源规范进入移植计划，尚未注册或尚未完成移植的 operation 才按诊断路径跳过。
 
 ## 不可违反的边界
 
@@ -24,7 +26,7 @@
 3. `gpu/render` 只接收经过 kernel 验证的显示值和稳定通道名。
 4. GPU 后端不打开用户文件；纹理和 LUT 通过显式资源输入上传。
 5. 预览与导出必须调用同一个 executor；不维护第二套效果公式。
-6. Free 或未注册能力必须跳过并返回诊断，不能默认为已生效。
+6. 未注册、没有可用来源或缺少资源的能力必须跳过并返回诊断，不能默认为已生效；Free 标记本身不是跳过条件。
 7. 渲染失败不得修改参数文档或图层文档。
 
 ## 实施阶段
@@ -34,7 +36,7 @@
 先实现与 GPU 后端无关的 reference executor，使用 RGBA float/8-bit buffer：
 
 - 输入图像、RenderDescription、蒙版 buffer、图层输入。
-- 实现白平衡和影调 pass 的确定性公式。
+- 先登记 PhotoCraft 对应调整；PhotoCraft 有实现时移植其确定性行为，没有对应能力时才实现并标记 PixCake-specific 公式。
 - 实现强度混合、禁用 pass、顺序和诊断传播。
 - 作为 GPU 结果的对照实现和测试 oracle。
 
@@ -64,7 +66,7 @@
 
 - 预览使用最长边限制后的输入尺寸。
 - 导出使用任务快照和全分辨率。
-- 两者共享完全相同的 pass registry、排序和公式。
+- 两者共享完全相同的 pass registry、排序和 PixCake 移植后的公式；不得保留一套 PhotoCraft 目标和一套旧项目公式作为平行标准。
 - 输出包含修订号、宽、高、行距、RGBA 格式和诊断。
 - 预览旧修订不能覆盖新修订。
 
@@ -76,7 +78,7 @@
 - GPU executor 的资源绑定、pass 顺序、失败传播和无 backend 测试。
 - Qt offscreen smoke 只作为后端连通性测试，不作为像素正确性证据。
 - 预览与导出相同输入快照得到相同像素结果的测试。
-- Free/未注册能力跳过并保留诊断的测试。
+- 未注册、无来源或缺少资源的 operation 跳过并保留诊断；PhotoCraft-backed operation 另有来源映射、CPU reference、OpenGL readback 和 parity 测试。
 - 图层不透明度、混合模式和蒙版的像素测试。
 - 旧修订帧被拒绝或丢弃的测试。
 

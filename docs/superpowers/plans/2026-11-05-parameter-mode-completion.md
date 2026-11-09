@@ -12,6 +12,8 @@
 
 **Tech Stack:** C++17、CMake/CTest。
 
+像素能力的行为来源见[PhotoCraft 能力来源与 PixCake 移植规范](../specs/2026-11-09-photocraft-reference-and-porting-policy.md)。本计划只冻结 PixCake 参数模式和业务约束；PhotoCraft-backed 公式由 `gpu/render` 的 C++ reference/OpenGL pass 负责，不因参数模式已经存在就宣称完成 PhotoCraft parity。
+
 **Spec:**
 - 第三轮审核记录（打回项 2，C-05、C-31、Q-02、B-32、B-33）及后续裁决
 - 契约清单 C-05、§4 标识表、§5 段末规则；边界清单 B-32、B-47

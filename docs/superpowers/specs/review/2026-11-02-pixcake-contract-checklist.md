@@ -3,9 +3,11 @@
 日期：2026-11-02  
 状态：开工前合同  
 总则：[审核总则](2026-11-02-pixcake-review-index.md)  
-上位文档：[需求](../2026-11-02-pixcake-desktop-phase1-design.md)、[架构](../2026-11-02-pixcake-kernel-architecture-design.md)
+上位文档：[需求](../2026-11-02-pixcake-desktop-phase1-design.md)、[架构](../2026-11-02-pixcake-kernel-architecture-design.md)、[PhotoCraft 能力来源与移植规范](../2026-11-09-photocraft-reference-and-porting-policy.md)
 
 这一关只问一件事：做出来的操作，其入参、返回值和副作用，是不是用户要的那一件事。对不上就打回重写，不接受在错误返回值外面再包一层适配。
+
+像素操作的行为来源按《PhotoCraft 能力来源与移植规范》判定：PhotoCraft 已有等价能力时，需求验收的是 PixCake 对该行为的 C++/OpenGL 移植和 parity；本清单仍只审核 PixCake 的契约、进程边界和业务语义，不把 Rust、wgpu 或 egui 结构带进来。
 
 文档没有逐个规定的 C++ 方法拼写，不因为驼峰或下划线打回。文档已经写死的标识、状态、结果码语义、显示刻度和存储内容，用了另一套名字或另一种含义，就是否决。
 

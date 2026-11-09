@@ -7,12 +7,15 @@
 上位文档：[第一阶段需求](2026-11-02-pixcake-desktop-phase1-design.md)  
 对照产品：`pixcake-test` 9.3.0（构建号 811）
 全局依赖规则：[第三方依赖优先与引入规范](2026-11-06-pixcake-third-party-dependency-policy.md)
+像素能力来源规则：[PhotoCraft 能力来源与 PixCake 移植规范](2026-11-09-photocraft-reference-and-porting-policy.md)
 
 本文只规定目录、模块边界、依赖方向、精修能力怎么组合、OpenGL 怎么替换、失败时谁负责。滑杆名称、快捷键、扣点数字、验收步骤仍以上位文档为准。两边冲突时：用户能看见的行为以上位文档为准；代码放哪、谁可以 include 谁，以本文为准。像素蛋糕-test 标题旁的 Free 只是试用或额度标记，不构成范围排除：带这个标记的功能与其他功能一样在本阶段实现，行为以上位文档为准（2026-11-05 用户裁决）。
 
 看不清的控件不靠猜测补齐。先在正在运行的像素蛋糕-test 上用 Jarvis 看当前画面，再查手册 [工作区页面介绍](https://www.pixcakeai.com/guide/32445)。该页更新日期是 2026 年 9 月 17 日，写的是登录、主页、精修、图库和创意的区域划分，不写滑杆上下限，也不解释 Free。滑杆刻度以 test 版上拖到两端、右侧数字跟着改变的读数为准。
 
 本阶段不写实现。本文是开工前的结构合同。它故意覆盖整个桌面内核，让依赖规则只有一个出处。后面的实现计划按内核、GPU 后端、Qt 壳、导出与生成拆开，不在同一份计划里同时开工。
+
+**PhotoCraft 边界（2026-11-09 用户裁决）**：PhotoCraft 已有的通用像素能力、公式、边界行为和测试是 PixCake 的首选移植来源；生产实现仍写成 C++17 与 OpenGL，并放入本架构规定的 `gpu/render`、`gpu/facade` 和 backend 边界。PhotoCraft 的 Rust、wgpu、egui、crate 分层、应用进程和控制协议只用于参考，不能倒灌为 PixCake 的架构要求。人物/衣物语义蒙版、AI 追色与风格、项目、账号、点数和生成任务等没有 PhotoCraft 等价实现的能力，继续按 PixCake 需求单独实现并标记为 PixCake-specific。具体来源、提交、许可证和 parity 门禁见[移植规范](2026-11-09-photocraft-reference-and-porting-policy.md)。
 
 ## 1. 产品在架构里的形状
 
@@ -68,7 +71,13 @@ Qt 6 Widgets 负责窗口、菜单、模态层和快捷键。初始壳层只按�
 
 依赖必须锁定版本并通过可复现的 CMake/依赖记录接入，记录官方来源、许可证、传递依赖、平台支持、安全更新和资源上限。图像 I/O 库只能放在 `apps/renderd`、`apps/exportd` 或明确的平台适配器，不能让 `kernel/` 直接依赖。没有合适库时，手写实现必须先按全局依赖规范记录候选和排除理由；没有证据不得自行发明通用实现。
 
-### 2.3 高鲁棒性
+### 2.5 PhotoCraft 能力来源优先
+
+对于已经在 PhotoCraft 中存在的通用调整、色彩转换、混合或合成能力，不再把当前 PixCake reference 里的经验系数当作平行规范。实现顺序必须是：按语义选 PhotoCraft 来源族（Camera Raw 滤镜管线或调整图层/合成）→ 查对应 CPU 实现和测试 → 登记来源提交、参数单位换算与阶段顺序 → 在 PixCake `gpu/render` 写 C++ reference → 翻译到 `pixcake::gl` 的 OpenGL pass → 做 CPU/GPU parity 和预览/导出共用路径验证。PhotoCraft 没有对应能力时，才按 PixCake-specific 或 no-equivalent 处理。
+
+这条来源优先只约束**能力语义**，不改变模块依赖：`kernel` 仍不依赖 Qt、OpenGL、wgpu、Rust 或 PhotoCraft 私有类型；参数范围和稳定协议仍由 `ParameterMode`/`RenderDescription` 冻结；所有文件 I/O、任务账本、持久化、结果码和进程恢复仍由 PixCake 模块负责。直接复制 PhotoCraft 代码或 shader 时，按 PixCake 选用的 MIT 条款（PhotoCraft 为 `MIT OR Apache-2.0` 二选一）保留版权声明和 `LICENSE-MIT`，并在移植文件头写明来源路径和提交；独立 C++/GLSL 重写也必须记录 PhotoCraft 路径和提交。
+
+### 2.6 高鲁棒性
 
 损坏、满盘、断网、取消、删文件、崩溃，都是正常返回值，不是未捕获异常。
 
@@ -198,7 +207,7 @@ tests/
 6. 新能力的用户界面默认由参数模式生成。只有直方图、吸管、曲线、色轮（颜色分级）、液化锚点和画笔这类专用交互才进入 `ui/editors`。
 7. 测试镜像被测目录：`tests/kernel/editdoc` 对应 `kernel/editdoc`。内核测试目标不链接 Qt。
 
-新增一个内置精修能力时只做这些事：加一个能力目录，实现第 7 节的接口，在注册表加一行，在管线配置里加依赖边，给预设和同步树加它所属的模块标签。不修改其他能力的源码，不在界面类里写效果公式。
+新增一个内置精修能力时只做这些事：先按[PhotoCraft 移植规范](2026-11-09-photocraft-reference-and-porting-policy.md)判定它是 PhotoCraft-backed、PixCake-specific 还是 no-equivalent；加一个能力目录，实现第 7 节的接口，在注册表加一行，在管线配置里加依赖边，给预设和同步树加它所属的模块标签，并在来源矩阵中登记行为来源和 parity 状态。不修改其他能力的源码，不在界面类里写效果公式。
 
 ## 6. 内核模块
 
