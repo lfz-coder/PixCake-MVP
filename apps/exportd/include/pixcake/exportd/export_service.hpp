@@ -27,6 +27,8 @@ struct ExportWork {
   // 水印：素材文件与三套摆放（按成品的方向选一套），没有值就不加。
   std::optional<ExportWatermark> watermark;
   std::string watermark_path;
+  // 排版：把成品排到相纸上（在水印之后，编码之前）。
+  std::optional<ExportLayout> layout;
 };
 
 struct ExportResult {

@@ -77,7 +77,40 @@ std::string encode_placement(const WatermarkPlacement& p) {
          std::to_string(p.quarter_turns);
 }
 
+constexpr int kLayoutLows[11] = {0, 20, 20, 72, 1, 1, 0, 0, 0, 0, 0};
+constexpr int kLayoutHighs[11] = {1, 2000, 2000, 1200, 20, 20, 200, 400, 400, 400, 400};
+
+bool parse_layout(const std::string& text, ExportLayout& out) {
+  int values[11] = {};
+  std::size_t begin = 0;
+  for (int i = 0; i < 11; ++i) {
+    const std::size_t end = text.find(',', begin);
+    if ((i < 10) == (end == std::string::npos)) return false;
+    const std::string part = text.substr(begin, end == std::string::npos ? std::string::npos : end - begin);
+    if (!parse_int(part, kLayoutLows[i], kLayoutHighs[i], values[i])) return false;
+    begin = end + 1;
+  }
+  out = {values[0] == 1, values[1], values[2], values[3], values[4], values[5], values[6], values[7], values[8],
+         values[9], values[10]};
+  return layout_page_width(out) <= 20000 && layout_page_height(out) <= 20000;
+}
+
+std::string encode_layout(const ExportLayout& l) {
+  return std::string(l.id_photo ? "1" : "0") + "," + std::to_string(l.paper_width_mm) + "," +
+         std::to_string(l.paper_height_mm) + "," + std::to_string(l.dpi) + "," + std::to_string(l.rows) + "," +
+         std::to_string(l.cols) + "," + std::to_string(l.gap_px) + "," + std::to_string(l.margin_top_mm) + "," +
+         std::to_string(l.margin_bottom_mm) + "," + std::to_string(l.margin_left_mm) + "," +
+         std::to_string(l.margin_right_mm);
+}
+
 }  // namespace
+
+std::uint32_t layout_page_width(const ExportLayout& layout) {
+  return static_cast<std::uint32_t>(std::llround(layout.paper_width_mm * layout.dpi / 25.4));
+}
+std::uint32_t layout_page_height(const ExportLayout& layout) {
+  return static_cast<std::uint32_t>(std::llround(layout.paper_height_mm * layout.dpi / 25.4));
+}
 
 WatermarkShape watermark_shape(std::uint32_t width, std::uint32_t height) {
   // 方图：长宽相差不超过 1%（test 版的判定没有测，取一个容得下取整误差的值）。
@@ -194,6 +227,10 @@ ResultCode parse_export_settings(const std::string& text, ExportSettings& out) {
       const int shape = key == kShapeKeys[0] ? 0 : key == kShapeKeys[1] ? 1 : 2;
       if (!parsed.watermark) parsed.watermark.emplace();
       if (!parse_placement(value, parsed.watermark->placements[shape])) return ResultCode::StateConflict;
+    } else if (key == "layout") {
+      ExportLayout layout;
+      if (!parse_layout(value, layout)) return ResultCode::StateConflict;
+      parsed.layout = layout;
     } else {
       return ResultCode::StateConflict;
     }
@@ -222,6 +259,7 @@ std::string encode_export_settings(const ExportSettings& settings) {
       text += std::string(";") + kShapeKeys[shape] + "=" + encode_placement(settings.watermark->placements[shape]);
     }
   }
+  if (settings.layout) text += ";layout=" + encode_layout(*settings.layout);
   return text;
 }
 

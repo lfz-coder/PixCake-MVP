@@ -87,6 +87,7 @@ ResultCode work_from_job(const ExportJob& job, const std::string& source_path, E
     work.watermark_path = watermark_directory + "/" + settings.watermark->material;
     work.watermark = std::move(settings.watermark);
   }
+  work.layout = settings.layout;
   out = std::move(work);
   diagnostic.clear();
   return ResultCode::Ok;

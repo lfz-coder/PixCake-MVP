@@ -382,7 +382,7 @@ int smoke_export(pixcake::shell::ShellWindow& window, const QString& folder) {
       dialog->reject();
       return;
     }
-    if (tabs == nullptr || tabs->count() != 3 || tabs->isTabEnabled(2) || tabs->tabToolTip(2).isEmpty() ||
+    if (tabs == nullptr || tabs->count() != 3 || !tabs->isTabEnabled(2) ||
         watermark == nullptr || !watermark->isEnabled() || !watermark->isChecked() || material_button == nullptr ||
         material_button->toolTip() != qtext_for_smoke("export.wm.replace") || portrait == nullptr ||
         !portrait->isChecked() || centre == nullptr || top_left == nullptr || x == nullptr || y == nullptr ||
@@ -390,6 +390,35 @@ int smoke_export(pixcake::shell::ShellWindow& window, const QString& folder) {
       problem = QStringLiteral("export dialog controls differ from the observed dialog");
       dialog->reject();
       return;
+    }
+    // The layout tab: a switch (off by default), nine papers, 6寸 and 300 dpi by default; plain layout hides the grid.
+    {
+      auto* layout_group = dialog->findChild<QGroupBox*>(QStringLiteral("export-layout"));
+      auto* paper = dialog->findChild<QComboBox*>(QStringLiteral("export-layout-paper"));
+      auto* dpi = dialog->findChild<QSpinBox*>(QStringLiteral("export-layout-dpi"));
+      auto* rows = dialog->findChild<QSpinBox*>(QStringLiteral("export-layout-rows"));
+      auto* plain_layout = dialog->findChild<QRadioButton*>(QStringLiteral("export-layout-plain"));
+      tabs->setCurrentIndex(2);
+      const bool shown = layout_group != nullptr && layout_group->isVisibleTo(dialog) && !layout_group->isChecked() &&
+                         paper != nullptr && paper->count() == 9 && paper->currentData().toString() == QStringLiteral("152x102") &&
+                         dpi != nullptr && dpi->value() == 300 && rows != nullptr && rows->isVisibleTo(dialog) &&
+                         plain_layout != nullptr;
+      const QString snapshot = QStringLiteral("tab %1 group-hidden %2 visible %3 rows-visible %4")
+                                   .arg(tabs->currentIndex()).arg(layout_group && layout_group->isHidden())
+                                   .arg(layout_group && layout_group->isVisibleTo(dialog)).arg(rows && rows->isVisibleTo(dialog));
+      bool plain_hides_grid = false;
+      if (shown) {
+        plain_layout->setChecked(true);
+        plain_hides_grid = !rows->isVisibleTo(dialog);
+        dialog->findChild<QRadioButton*>(QStringLiteral("export-layout-id"))->setChecked(true);
+      }
+      tabs->setCurrentIndex(1);
+      if (!shown || !plain_hides_grid) {
+        problem = QStringLiteral("the layout tab differs from the observed one (shown %1, plain hides grid %2, %3)")
+                      .arg(shown).arg(plain_hides_grid).arg(snapshot);
+        dialog->reject();
+        return;
+      }
     }
     // 同时导出无水印图片 is available inside the watermark group, with the observed explanation.
     auto* plain = dialog->findChild<QCheckBox*>(QStringLiteral("export-wm-plain"));

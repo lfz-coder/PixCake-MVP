@@ -101,9 +101,6 @@ class ExportDialog final : public QDialog {
     tabs_ = new QTabBar(this);
     tabs_->setObjectName(QStringLiteral("export-tabs"));
     for (const auto& entry : ui::shell::page_list("export-tabs")) tabs_->addTab(qs(entry.text));
-    tabs_->setTabEnabled(2, false);
-    tabs_->setTabToolTip(2, qtext("export.why.print"));
-    tabs_->setAccessibleDescription(qtext("export.why.print"));
     outer->addWidget(tabs_);
 
     auto* body = new QHBoxLayout;
@@ -126,6 +123,8 @@ class ExportDialog final : public QDialog {
     column->addWidget(advanced_);
     watermark_ = buildWatermark();
     column->addWidget(watermark_);
+    layout_ = buildLayout();
+    column->addWidget(layout_);
     column->addStretch();
     scroll->setWidget(form);
     body->addWidget(scroll, 1);
@@ -619,12 +618,105 @@ class ExportDialog final : public QDialog {
     }
   }
 
+  // 排版印刷页（实测规则见 docs/superpowers/evidence/2026-11-07-print-layout-observation.md）。
+  QWidget* buildLayout() {
+    auto* group = new QGroupBox(qtext("export.layout.group"), this);
+    group->setObjectName(QStringLiteral("export-layout"));
+    group->setCheckable(true);
+    group->setChecked(false);  // 实测默认关
+    auto* form = new QFormLayout(group);
+    form->addRow(sectionLabel(qtext("export.layout.note")));
+    auto* kinds = new QHBoxLayout;
+    layout_id_ = new QRadioButton(qtext("export.layout.id"), group);
+    layout_id_->setObjectName(QStringLiteral("export-layout-id"));
+    layout_id_->setChecked(true);
+    layout_plain_ = new QRadioButton(qtext("export.layout.plain"), group);
+    layout_plain_->setObjectName(QStringLiteral("export-layout-plain"));
+    // 同一个父控件下的单选钮默认互斥，类型和方向要各自成组。
+    auto* kind_group = new QButtonGroup(group);
+    kind_group->addButton(layout_id_);
+    kind_group->addButton(layout_plain_);
+    kinds->addWidget(layout_id_);
+    kinds->addWidget(layout_plain_);
+    kinds->addStretch();
+    form->addRow(kinds);
+    auto* turn = new QHBoxLayout;
+    layout_landscape_ = new QRadioButton(qtext("export.layout.landscape"), group);
+    layout_landscape_->setObjectName(QStringLiteral("export-layout-landscape"));
+    layout_landscape_->setChecked(true);  // 实测默认横
+    auto* portrait = new QRadioButton(qtext("export.layout.portrait"), group);
+    portrait->setObjectName(QStringLiteral("export-layout-portrait"));
+    auto* turn_group = new QButtonGroup(group);
+    turn_group->addButton(layout_landscape_);
+    turn_group->addButton(portrait);
+    turn->addWidget(layout_landscape_);
+    turn->addWidget(portrait);
+    turn->addStretch();
+    form->addRow(qtext("export.layout.paper"), turn);
+    layout_paper_ = new QComboBox(group);
+    layout_paper_->setObjectName(QStringLiteral("export-layout-paper"));
+    layout_paper_->setAccessibleName(qtext("export.layout.paper"));
+    for (const auto& entry : ui::shell::page_list("export-papers")) layout_paper_->addItem(qs(entry.text), qs(entry.id));
+    layout_paper_->setCurrentIndex(std::max(0, layout_paper_->findData(QStringLiteral("152x102"))));  // 实测默认 6寸
+    form->addRow(layout_paper_);
+    const auto spin = [&](const char* name, const char* label, int low, int high, int value) {
+      auto* box = new QSpinBox(group);
+      box->setObjectName(QString::fromLatin1(name));
+      box->setAccessibleName(qtext(label));
+      box->setRange(low, high);
+      box->setValue(value);
+      form->addRow(qtext(label), box);
+      return box;
+    };
+    layout_dpi_ = spin("export-layout-dpi", "export.layout.dpi", 72, 1200, 300);
+    layout_rows_ = spin("export-layout-rows", "export.layout.rows", 1, 20, 1);
+    layout_cols_ = spin("export-layout-cols", "export.layout.cols", 1, 20, 1);
+    layout_gap_ = spin("export-layout-gap", "export.layout.gap", 0, 200, 10);
+    layout_top_ = spin("export-layout-margin-top", "export.layout.margin_top", 0, 400, 0);
+    layout_bottom_ = spin("export-layout-margin-bottom", "export.layout.margin_bottom", 0, 400, 0);
+    layout_left_ = spin("export-layout-margin-left", "export.layout.margin_left", 0, 400, 0);
+    layout_right_ = spin("export-layout-margin-right", "export.layout.margin_right", 0, 400, 0);
+    // 行数、列数、间隔只在证件照排版里出现（需求 §19）。
+    const auto grid_visible = [this, form] {
+      const bool id = layout_id_->isChecked();
+      for (QSpinBox* box : {layout_rows_, layout_cols_, layout_gap_}) {
+        box->setVisible(id);
+        if (auto* label = form->labelForField(box)) label->setVisible(id);
+      }
+    };
+    connect(layout_id_, &QRadioButton::toggled, this, grid_visible);
+    grid_visible();
+    return group;
+  }
+
+  ExportLayout currentLayout() const {
+    ExportLayout layout;
+    layout.id_photo = layout_id_->isChecked();
+    const QStringList size = layout_paper_->currentData().toString().split(QLatin1Char('x'));
+    const int wide = size.value(0).toInt();
+    const int tall = size.value(1).toInt();
+    layout.paper_width_mm = layout_landscape_->isChecked() ? wide : tall;
+    layout.paper_height_mm = layout_landscape_->isChecked() ? tall : wide;
+    layout.dpi = layout_dpi_->value();
+    layout.rows = layout_rows_->value();
+    layout.cols = layout_cols_->value();
+    layout.gap_px = layout_gap_->value();
+    layout.margin_top_mm = layout_top_->value();
+    layout.margin_bottom_mm = layout_bottom_->value();
+    layout.margin_left_mm = layout_left_->value();
+    layout.margin_right_mm = layout_right_->value();
+    return layout;
+  }
+
   void showTab() {
-    const bool custom = tabs_->currentIndex() == 1;
+    const int tab = tabs_->currentIndex();
+    const bool custom = tab == 1;
+    const bool print = tab == 2;
     preview_->setVisible(custom);
     advanced_->setVisible(custom);
     watermark_->setVisible(custom);  // 快速导出页没有水印（实测）
-    resize(custom ? QSize(902, 650) : QSize(480, 449));  // 实测两页的窗口大小
+    layout_->setVisible(print);
+    resize(custom || print ? QSize(902, 650) : QSize(480, 449));  // 实测页面的窗口大小
   }
 
   void submit_() {
@@ -658,6 +750,8 @@ class ExportDialog final : public QDialog {
       request.watermark_free_copy = plain_->isChecked();
     }
 
+    if (static_cast<QGroupBox*>(layout_)->isChecked()) request.settings.layout = currentLayout();
+
     ExportDefaults defaults = withWatermark(target_.defaults);
     if (remember_folder_->isChecked() && !request.original_folder) defaults.folder = request.folder;
     if (remember_format_->isChecked()) defaults.format = request.settings.format;
@@ -682,6 +776,19 @@ class ExportDialog final : public QDialog {
   QLabel* preview_ = nullptr;
   QWidget* advanced_ = nullptr;
   QWidget* watermark_ = nullptr;
+  QWidget* layout_ = nullptr;
+  QRadioButton* layout_id_ = nullptr;
+  QRadioButton* layout_plain_ = nullptr;
+  QRadioButton* layout_landscape_ = nullptr;
+  QComboBox* layout_paper_ = nullptr;
+  QSpinBox* layout_dpi_ = nullptr;
+  QSpinBox* layout_rows_ = nullptr;
+  QSpinBox* layout_cols_ = nullptr;
+  QSpinBox* layout_gap_ = nullptr;
+  QSpinBox* layout_top_ = nullptr;
+  QSpinBox* layout_bottom_ = nullptr;
+  QSpinBox* layout_left_ = nullptr;
+  QSpinBox* layout_right_ = nullptr;
   QComboBox* preset_ = nullptr;
   QComboBox* destination_ = nullptr;
   PixCakeField* folder_ = nullptr;

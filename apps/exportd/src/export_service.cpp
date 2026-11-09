@@ -3,6 +3,7 @@
 #include "pixcake/mask/combined_mask.hpp"
 #include "pixcake/mask/semantic_parts.hpp"
 
+#include "pixcake/exportd/layout.hpp"
 #include "pixcake/exportd/watermark.hpp"
 
 #include "pixcake/gl/native_backend.hpp"
@@ -154,6 +155,13 @@ ExportResult ExportService::produce(const ExportWork& work) {
     const auto shape = watermark_shape(pixels.width, pixels.height);
     code = draw_watermark(material.pixels, work.watermark->placements[static_cast<int>(shape)], pixels,
                           result.diagnostic);
+    if (code != ResultCode::Ok) {
+      result.code = code;
+      return result;
+    }
+  }
+  if (work.layout) {
+    code = compose_layout(*work.layout, pixels, result.diagnostic);
     if (code != ResultCode::Ok) {
       result.code = code;
       return result;

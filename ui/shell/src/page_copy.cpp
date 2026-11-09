@@ -337,7 +337,21 @@ Texts build_texts() {
   t["export.wm.need_material"] = "请先上传水印素材，或关闭水印";
   t["export.wm.not_saved"] = "水印素材没有保存：";
   t["export.why.overlay"] = "保留叠加层的作用还没有核实，暂不可用";
-  t["export.why.print"] = "排版印刷还没有接入";
+  t["export.layout.group"] = "照片排版";
+  t["export.layout.id"] = "证件照排版";
+  t["export.layout.plain"] = "普通照片排版";
+  t["export.layout.landscape"] = "横向";
+  t["export.layout.portrait"] = "竖向";
+  t["export.layout.paper"] = "相纸";
+  t["export.layout.dpi"] = "相纸分辨率（像素/英寸）";
+  t["export.layout.rows"] = "行数";
+  t["export.layout.cols"] = "列数";
+  t["export.layout.gap"] = "间隔（像素）";
+  t["export.layout.margin_top"] = "上边距（毫米）";
+  t["export.layout.margin_bottom"] = "下边距（毫米）";
+  t["export.layout.margin_left"] = "左边距（毫米）";
+  t["export.layout.margin_right"] = "右边距（毫米）";
+  t["export.layout.note"] = "排版把每张成品排到一张相纸上；边距是裁切窗口，照片的大小和位置不变。";
   t["export.why.keep_path"] = "保留导入时的完整路径还没有接入";
   t["export.list.empty"] = "暂无导出任务";
   t["export.list.retry"] = "重试";
@@ -932,6 +946,12 @@ Lists build_lists() {
       item("pet-18", "宠物美化-身型-祛碎毛"),
   };
   lists["export-tabs"] = {item("quick", "快速导出"), item("custom", "自定设置"), item("print", "排版印刷")};
+  // 相纸（宽×高 mm，横向写法；竖向时对调）；编号是 "宽x高"。
+  lists["export-papers"] = {item("89x127", "5寸 89×127mm"),   item("152x102", "6寸 152×102mm"),
+                            item("178x127", "7寸 178×127mm"),  item("203x152", "8寸 203×152mm"),
+                            item("254x203", "10寸 254×203mm"), item("254x305", "12寸 254×305mm"),
+                            item("297x210", "A4 297×210mm"),   item("148x105", "A6 148×105mm"),
+                            item("210x148", "A5 210×148mm")};
   lists["export-destinations"] = {item("folder", "指定文件夹"), item("original", "原始照片所在的文件夹")};
   // 原始格式、JPG、TIFF8位、TIFF16位；编号与 kernel/exportq 设置快照里的格式名一致。
   lists["export-formats"] = {item("original", "原始格式"), item("jpg", "JPG"), item("tiff", "TIFF8位"),

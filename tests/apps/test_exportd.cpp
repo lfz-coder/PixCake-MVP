@@ -473,6 +473,15 @@ int main() {
     assert(other.submit(std::move(watermark), diagnostic) == ResultCode::Ok);
     const auto missing = other.process_next();
     assert(missing.code != ResultCode::Ok && missing.diagnostic.find("水印素材") != std::string::npos);
+
+    // A layout lays the product on a 6寸 sheet (152x102 mm at 300 dpi = 1795x1205), whichever the photo's size.
+    auto laid = work("export-5", source, dir.path() + "/out/l.jpg", dir.path() + "/out");
+    laid.layout.emplace();
+    laid.layout->id_photo = false;
+    ExportService third;
+    assert(third.submit(std::move(laid), diagnostic) == ResultCode::Ok);
+    const auto sheet = third.process_next();
+    assert(sheet.code == ResultCode::Ok && sheet.width == 1795 && sheet.height == 1205 && !sheet.product.empty());
   }
 
   // Masks at full resolution come from the mask source: a local exposure +1
