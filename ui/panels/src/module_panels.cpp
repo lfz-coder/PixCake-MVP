@@ -1,4 +1,4 @@
-#include "pixcake/ui/panels/portrait_panel.hpp"
+#include "pixcake/ui/panels/module_panels.hpp"
 
 #include "pixcake/ui/shell/shared_words.hpp"
 
@@ -15,6 +15,7 @@ constexpr unsigned kExpand = 1u << 1;  // 数值右边的 ▸
 constexpr unsigned kChild = 1u << 2;   // 上一个可展开行或 Group 的子项
 constexpr unsigned kCenter = 1u << 3;  // 双向滑杆（截图里滑块在中间）
 constexpr unsigned kReset = 1u << 4;   // Section 标题栏右侧的“还原本组”
+constexpr unsigned kMax = 1u << 5;     // 滑块在最右端（截图里默认是最大值）
 
 constexpr char kNew[] = "New";
 constexpr char kBeta[] = "Beta";
@@ -94,7 +95,7 @@ constexpr Def kPortrait[] = {
     {K::Slider, "肤色美白"},
     {K::Slider, "皮肤红润"},
     {K::Slider, "AI多人肤色统一", kHelp},
-    {K::Tool, "AI全身肤色统一", kHelp, kNew},
+    {K::Tool, "AI全身肤色统一", kHelp, kNew, "|"},
     {K::Slider, "AI肤色统一（脸部）", kHelp},
     {K::Slider, "AI肤色统一（身体）"},
     {K::Slider, "肤色统一（身体）", kHelp},
@@ -243,6 +244,88 @@ constexpr Def kPortrait[] = {
     {K::AiButton, "AI瘦肚子"},
 };
 
+// 图像美化面板（PixCake 9.3.0，2026-11-08 用户截图，三个分组全部展开）。换天空在没有天空的照片上整组是灰的。
+constexpr Def kImage[] = {
+    {K::Section, "背景调整", kReset, kNew},
+    {K::Toggle, "纯色背景祛穿帮", kHelp},
+    {K::Toggle, "纯色背景祛瑕疵", kHelp, kNew},
+    {K::Toggle, "纯色背景光影均匀"},
+    {K::Toggle, "纯色背景祛色彩断层", kHelp},
+    {K::Slider, "背景增强", kHelp},
+    {K::AiButton, "AI布景"},
+    {K::AiButton, "春日樱花"},
+    {K::AiButton, "夏日晴空"},
+    {K::AiButton, "秋天落叶"},
+    {K::AiButton, "冬日雪景"},
+    {K::AiButton, "AI祛路人"},
+    {K::AiButton, "AI补草地"},
+    {K::AiButton, "沙滩美化"},
+    {K::AiButton, "智能道具修复"},
+
+    {K::Section, "证件照换背景", kHelp | kReset},
+    {K::AiButton, "证件照换衣服"},
+    {K::Segments, "证件照换背景-来源", 0, {}, "推荐|我的"},
+    {K::Tabs, "证件照换背景-颜色页签", 0, {}, "推荐颜色|自定义颜色"},
+    // 卡片截图里是纯色块（透明是棋盘格，更多是四色拼图），这里只画名字。
+    {K::Cards, "证件照换背景-颜色", 0, {}, "无|透明|登记红|司法蓝|白色|正红|经典蓝|更多"},
+    {K::Dropdown, "抠像保留范围", 0, {}, "主体及关联物品"},
+    {K::Dropdown, "背景混合模式", 0, {}, "正常"},
+    {K::Slider, "边缘调整"},
+    {K::Slider, ui::shell::kWordOpacity, kMax},
+    {K::Toggle, "祛背景色反光", kHelp, kNew},
+    {K::Tool, "原图阴影", 0, {}, ui::shell::kWordRestore},
+    {K::Toggle, "AI保留阴影"},
+    {K::Tool, "增加阴影", 0, {}, ui::shell::kWordRestore},
+    {K::Cards, "增加阴影-选择", 0, {}, "无|软投影|硬投影|剪影"},
+    {K::Slider, ui::shell::kWordOpacity},
+    {K::Slider, "阴影虚化", kExpand},
+    {K::Slider, "虚化范围", kChild},
+    {K::Slider, "渐变"},
+    {K::Dropdown, "阴影混合模式", 0, {}, "正常"},
+
+    {K::Section, "换天空", kReset},
+    {K::Segments, "换天空-来源", 0, {}, "推荐|我的"},
+    {K::Tabs, "换天空-页签", 0, {}, "蓝天|明亮蓝天|霞光|星空"},
+    {K::Notice, "未检测到天空"},
+    {K::Subheading, "天空调整"},
+    {K::Slider, ui::shell::kWordVerticalPosition, kCenter},
+    {K::Slider, ui::shell::kWordHorizontalPosition, kCenter},
+    {K::Subheading, "天空翻转", 0, "new"},
+    // 四个图标（截图）：逆时针旋转、顺时针旋转、水平翻转、垂直翻转。
+    {K::IconRow, "天空翻转-按钮", 0, {}, "逆时针旋转|顺时针旋转|左右翻转|上下翻转"},
+    {K::Slider, "角度", kCenter, kNew},
+    {K::Slider, "边缘过渡"},
+    {K::Slider, "天空渐变", 0, kNew},
+    {K::Slider, ui::shell::kWordTemperature, kCenter, {}, "track:temperature"},
+    {K::Slider, ui::shell::kWordTint, kCenter, {}, "track:tint"},
+    {K::Slider, ui::shell::kWordSaturation, kCenter},
+    {K::Slider, ui::shell::kWordBrightness, kCenter},
+    {K::Slider, "虚化"},
+    {K::Slider, ui::shell::kWordOpacity, kMax, kNew},
+    {K::Subheading, "人景调整"},
+    {K::Slider, "景物色彩（偏向天空）", kCenter},
+    {K::Slider, "人物色彩（偏向天空）", kCenter},
+    {K::Subheading, "水面调整", kHelp},
+    {K::Slider, "景物反射", kCenter},
+    {K::Slider, "景物水效虚化"},
+};
+
+// 衣物美化面板（PixCake 9.3.0，2026-11-08 用户截图）。
+constexpr Def kClothing[] = {
+    {K::Section, "衣服调整", kReset},
+    {K::Tabs, "衣服调整-人物", 0, {}, "所有|女|男|儿童|长辈女|长辈男"},
+    {K::Group, "衣服祛褶皱", 0, kNew},
+    {K::Slider, "上衣", kChild},
+    {K::Slider, "下装", kChild},
+    {K::Slider, "祛细褶皱", kChild | kMax},
+    {K::Slider, "祛粗褶皱", kChild | kMax},
+    {K::Slider, "衣服祛瑕疵", kHelp},
+    {K::Slider, "衣服边缘平整", kHelp | kExpand},
+    {K::Tool, "衣服边缘修复", kChild, {}, ui::shell::kWordRestore},
+    {K::Toggle, "道具保护", kChild | kHelp},
+    {K::AiButton, "AI衣服精修"},
+};
+
 std::vector<std::string> split(std::string_view text) {
   std::vector<std::string> parts;
   std::size_t start = 0;
@@ -256,11 +339,10 @@ std::vector<std::string> split(std::string_view text) {
   return parts;
 }
 
-}  // namespace
-
-std::vector<PanelRow> refine_portrait_rows() {
+template <std::size_t N>
+std::vector<PanelRow> rows_of(const Def (&table)[N]) {
   std::vector<PanelRow> rows;
-  for (const auto& def : kPortrait) {
+  for (const auto& def : table) {
     PanelRow row;
     row.kind = def.kind;
     row.label = std::string(def.label);
@@ -270,7 +352,9 @@ std::vector<PanelRow> refine_portrait_rows() {
     row.expandable = (def.flags & kExpand) != 0;
     row.child = (def.flags & kChild) != 0;
     row.centered = (def.flags & kCenter) != 0;
-    if (def.kind == K::Cards || def.kind == K::Swatches || def.kind == K::Tabs) {
+    row.at_maximum = (def.flags & kMax) != 0;
+    if (def.kind == K::Cards || def.kind == K::Swatches || def.kind == K::Tabs || def.kind == K::Tool ||
+        def.kind == K::Dropdown || def.kind == K::Segments || def.kind == K::IconRow) {
       row.options = split(def.options);
     } else if (def.options.rfind("track:", 0) == 0) {
       row.track = std::string(def.options.substr(6));
@@ -281,6 +365,12 @@ std::vector<PanelRow> refine_portrait_rows() {
   }
   return rows;
 }
+
+}  // namespace
+
+std::vector<PanelRow> refine_portrait_rows() { return rows_of(kPortrait); }
+std::vector<PanelRow> refine_image_rows() { return rows_of(kImage); }
+std::vector<PanelRow> refine_clothing_rows() { return rows_of(kClothing); }
 
 std::vector<std::string> refine_portrait_people() { return {"女", "男", "儿童", "长辈女", "长辈男", "单人", "所有人"}; }
 

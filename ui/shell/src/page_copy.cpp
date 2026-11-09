@@ -131,6 +131,7 @@ Texts build_texts() {
   t["refine.rail"] = "功能模块";
   t["refine.module.pending"] = "该模块暂未接入";
   t["refine.master-color"] = "大师级色彩";
+  t["refine.master-image"] = "大师级美化";
   t["refine.ai-calibrate"] = "AI 校准";
   t["refine.color-unify"] = "多图色彩统一";
   t["refine.wb.preset"] = kWordWhiteBalance;
@@ -148,7 +149,6 @@ Texts build_texts() {
   t["refine.side.link"] = "左右联动";
   t["refine.card.none"] = "无";
   t["refine.portrait.scan"] = "人脸识别";
-  t["refine.clothing.name"] = "衣服调整";
   t["refine.history.empty.name"] = "暂无已加载照片。关闭软件后再次打开时，先前步骤合并为上一次保存。当前不列出步骤。";
 
   t["region.creative-tools"] = "手动工具栏";
@@ -279,7 +279,7 @@ Texts build_texts() {
   t["trash.count"] = "共%1个项目";
   t["trash.empty"] = "回收站是空的";
   t["trash.left"] = "还剩：%1天";
-  t["trash.restore"] = "还原";
+  t["trash.restore"] = kWordRestore;
   t["trash.erase"] = "彻底删除";
   t["trash.cancel"] = "取消";
   t["trash.clear"] = "清空回收站";
@@ -354,9 +354,9 @@ Texts build_texts() {
   t["export.wm.anchor"] = "定位";
   t["export.wm.size"] = "大小";
   t["export.wm.fit"] = "合适";
-  t["export.wm.opacity"] = "不透明度";
-  t["export.wm.x"] = "水平位置";
-  t["export.wm.y"] = "垂直位置";
+  t["export.wm.opacity"] = kWordOpacity;
+  t["export.wm.x"] = kWordHorizontalPosition;
+  t["export.wm.y"] = kWordVerticalPosition;
   t["export.wm.plain"] = "同时导出无水印图片";
   // 问号说明原文（test 版实测）。
   t["export.wm.plain.tip"] = "开启该功能后，导出时将在指定导出路径下创建两个子文件夹，分别包含带水印图片和无水印图片";
@@ -473,13 +473,6 @@ Lists build_lists() {
                                   item("quick", "快速选区"),        item("brush", kWordBrush),
                                   item("linear", kWordLinearGradient), item("radial", kWordRadialGradient),
                                   item("color_range", kWordColorRange), item("luminance_range", kWordLuminanceRange)};
-  const std::string clothing_prefix = "衣物美化-衣服调整-";
-  for (const char* label : {"上衣祛褶皱", "上衣祛褶皱-祛粗褶皱", "上衣祛褶皱-祛细褶皱", "下装祛褶皱", "下装祛褶皱-祛粗褶皱",
-                            "下装祛褶皱-祛细褶皱", "衣服祛汗渍", "衣服祛瑕疵", "衣服祛褶皱", "衣服祛褶皱-祛粗褶皱",
-                            "衣服祛褶皱-祛细褶皱", "衣服边缘平整", "道具保护"}) {
-    auto& clothing = lists["refine-clothing"];
-    clothing.push_back(item("clothing-" + std::to_string(clothing.size() + 1), label, {}, clothing_prefix + label));
-  }
   lists["refine-crop"] = {};
   for (const char* label : {"裁剪", "原始尺寸", "原照设置", "固定比例", "长*宽*分辨率", "自由尺寸", "证件照尺寸",
                             "我的裁剪预设", "AI智能裁剪", "网格线", "分格数", "几何中心十字线", kWordRotate, "逆时针",
@@ -508,72 +501,6 @@ Lists build_lists() {
   lists["account-actions"] = {item("sheets", "查看剩余张数"), item("packages", "查看已购买套餐"),
                               item("version", "当前软件版本"), item("upgrade", "升级软件"), item("sign-out", "退出登录")};
   // 名字照抄 PixCake 9.3.0 Jarvis 页面图；不要改名、翻译或删减。
-  lists["refine-image"] = {
-      item("image-1", "图像美化-AI保留阴影-阴影混合模式"),
-      item("image-2", "图像美化-AI保留阴影-阴影混合模式(增加阴影)"),
-      item("image-3", "图像美化-去黑白边开关"),
-      item("image-4", "图像美化-去黑白边强度"),
-      item("image-5", "图像美化-换天空-人景调整-人物色彩（偏向天空）"),
-      item("image-6", "图像美化-换天空-人景调整-景物色彩（偏向天空）"),
-      item("image-7", "图像美化-换天空-地平线位置"),
-      item("image-8", "图像美化-换天空-天空素材路径"),
-      item("image-9", "图像美化-换天空-天空调整-不透明度"),
-      item("image-10", "图像美化-换天空-天空调整-亮度"),
-      item("image-11", "图像美化-换天空-天空调整-垂直位置"),
-      item("image-12", "图像美化-换天空-天空调整-垂直翻转"),
-      item("image-13", "图像美化-换天空-天空调整-旋转档位"),
-      item("image-14", "图像美化-换天空-天空调整-旋转角度"),
-      item("image-15", "图像美化-换天空-天空调整-水平位置"),
-      item("image-16", "图像美化-换天空-天空调整-水平翻转"),
-      item("image-17", "图像美化-换天空-天空调整-渐变"),
-      item("image-18", "图像美化-换天空-天空调整-色温"),
-      item("image-19", "图像美化-换天空-天空调整-色调"),
-      item("image-20", "图像美化-换天空-天空调整-虚化"),
-      item("image-21", "图像美化-换天空-天空调整-边缘过渡"),
-      item("image-22", "图像美化-换天空-天空调整-饱和度"),
-      item("image-23", "图像美化-换天空-水面调整-景物反射"),
-      item("image-24", "图像美化-换天空-水面调整-景物水效虚化"),
-      item("image-25", "图像美化-换背景绿幕祛反光"),
-      item("image-26", "图像美化-换背景阴影右锚点垂直位移"),
-      item("image-27", "图像美化-换背景阴影右锚点水平位移"),
-      item("image-28", "图像美化-换背景阴影左锚点垂直位移"),
-      item("image-29", "图像美化-换背景阴影左锚点水平位移"),
-      item("image-30", "图像美化-纯色背景祛色彩断层"),
-      item("image-31", "图像美化-背景调整-AI保留阴影"),
-      item("image-32", "图像美化-背景调整-纯色背景光影均匀"),
-      item("image-33", "图像美化-背景调整-纯色背景光影均匀-明度"),
-      item("image-34", "图像美化-背景调整-纯色背景光影均匀-程度"),
-      item("image-35", "图像美化-背景调整-纯色背景祛瑕疵"),
-      item("image-36", "图像美化-背景调整-纯色背景祛瑕疵-祛瑕疵程度"),
-      item("image-37", "图像美化-背景调整-纯色背景祛瑕疵-祛瑕疵程度-地面"),
-      item("image-38", "图像美化-背景调整-纯色背景祛瑕疵-祛瑕疵程度-背景"),
-      item("image-39", "图像美化-背景调整-纯色背景祛穿帮"),
-      item("image-40", "图像美化-背景调整-背景增强"),
-      item("image-41", "图像美化-背景调整-背景布祛褶皱-祛粗褶皱"),
-      item("image-42", "图像美化-背景调整-背景布祛褶皱-祛细褶皱"),
-      item("image-43", "图像美化-背景调整-背景布祛褶皱-程度"),
-      item("image-44", "图像美化-证件照不透明度"),
-      item("image-45", "图像美化-证件照垂直位置"),
-      item("image-46", "图像美化-证件照填充模式"),
-      item("image-47", "图像美化-证件照大小"),
-      item("image-48", "图像美化-证件照换背景"),
-      item("image-49", "图像美化-证件照换背景-不透明度"),
-      item("image-50", "图像美化-证件照换背景-增加阴影"),
-      item("image-51", "图像美化-证件照换背景-抠像模式"),
-      item("image-52", "图像美化-证件照换背景-抠图保留范围"),
-      item("image-53", "图像美化-证件照换背景-推荐-AI保留阴影-程度"),
-      item("image-54", "图像美化-证件照换背景-渐变"),
-      item("image-55", "图像美化-证件照换背景-素材路径"),
-      item("image-56", "图像美化-证件照换背景-背景混合模式"),
-      item("image-57", "图像美化-证件照换背景-自定义颜色"),
-      item("image-58", "图像美化-证件照换背景-虚化范围"),
-      item("image-59", "图像美化-证件照换背景-阴影3D垂直位移"),
-      item("image-60", "图像美化-证件照换背景-阴影3D水平位移"),
-      item("image-61", "图像美化-证件照换背景-阴影垂直位移"),
-      item("image-62", "图像美化-证件照换背景-阴影水平位移"),
-      item("image-63", "图像美化-证件照换背景-阴影虚化"),
-      item("image-64", "图像美化-证件照水平位置"),
-  };
   // 名字照抄 PixCake 9.3.0 Jarvis 页面图；不要改名、翻译或删减。
   lists["refine-pet"] = {
       item("pet-1", "宠物-眼睛增强-眼神光-垂直位置-右"),

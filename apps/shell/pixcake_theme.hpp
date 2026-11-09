@@ -166,6 +166,9 @@ struct PixCakeTheme final {
       QPushButton#refine-pill:disabled { color: #8a8d93; }
       QPushButton#refine-master-color { background: #33363d; border: none; border-radius: 4px; min-height: 28px; padding: 0 12px; }
       QFrame#refine-section-rule { background: #2a2c31; }
+      QPushButton#refine-segment { background: #2a2d33; border: none; border-radius: 0; min-height: 30px; color: #9a9da3; }
+      QPushButton#refine-segment:checked { background: #43464d; color: #f4f4f4; }
+      QLabel#refine-notice { background: #2a2d33; border-radius: 3px; color: #8a8d93; }
       QLabel#refine-subheading { color: #f4f4f4; font-size: 14px; font-weight: 600; }
       QLabel#refine-badge { color: #ffe000; background: #111214; border-radius: 2px; padding: 0 3px; font-size: 10px;
         font-weight: 600; }

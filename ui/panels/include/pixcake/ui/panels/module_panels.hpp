@@ -11,5 +11,9 @@ namespace pixcake::ui::panels {
 std::vector<PanelRow> refine_portrait_rows();
 // 面板顶部的人物属性（女、男、儿童、长辈女、长辈男、单人、所有人）。
 std::vector<std::string> refine_portrait_people();
+// “图像美化”面板的行（2026-11-08 用户截图）：背景调整、证件照换背景、换天空三个分组。
+std::vector<PanelRow> refine_image_rows();
+// “衣物美化”面板的行（2026-11-08 用户截图）：衣服调整一个分组。
+std::vector<PanelRow> refine_clothing_rows();
 
 }  // namespace pixcake::ui::panels

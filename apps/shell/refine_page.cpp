@@ -9,7 +9,7 @@
 #include "pixcake/capability/capability_registry.hpp"
 #include "pixcake/mask/brush_mask.hpp"
 #include "pixcake/mask/semantic_parts.hpp"
-#include "pixcake/ui/panels/portrait_panel.hpp"
+#include "pixcake/ui/panels/module_panels.hpp"
 #include "pixcake/ui/panels/slider_spec.hpp"
 
 #include <QAbstractScrollArea>
@@ -128,6 +128,7 @@ QWidget* decoratedName(QWidget* parent, const QString& label, const panels::Pane
   row->setContentsMargins(0, 0, 0, 0);
   row->setSpacing(6);
   auto* name = text(label);
+  name->setWordWrap(false);  // 官方的名字一行显示（如“景物色彩（偏向天空）”）
   name->setEnabled(enabled);
   row->addWidget(name);
   addNameDecor(row, box, decor);
@@ -153,6 +154,9 @@ void shapeUnboundSlider(QSlider* slider, const panels::PanelRow* decor) {
   if (decor == nullptr) return;
   if (decor->ticks > 0) {
     slider->setRange(0, decor->ticks - 1);
+  } else if (decor->at_maximum) {
+    slider->setRange(0, 1);
+    slider->setValue(1);
   } else if (decor->centered) {
     slider->setRange(0, 2);
     slider->setValue(1);
@@ -608,12 +612,72 @@ QWidget* toolRow(QWidget* parent, const panels::PanelRow& row) {
   auto* layout = new QHBoxLayout(line);
   layout->setContentsMargins(0, 0, 0, 0);
   layout->addWidget(decoratedName(line, qs(row.label), &row), 1);
-  for (int i = 0; i < 2; ++i) {
-    auto* icon = pendingIcon(line, 20, qs(row.label));
+  const std::vector<std::string> icons = row.options.empty() ? std::vector<std::string>{std::string()} : row.options;
+  for (const auto& tip : icons) {
+    const QString name = tip.empty() ? qs(row.label) : qs(tip);
+    auto* icon = pendingIcon(line, 20, name);
+    icon->setToolTip(name);
     icon->setEnabled(false);
     layout->addWidget(icon);
   }
   return line;
+}
+
+// 名字在上、下拉框在下；可选值只知道截图里显示的那个。
+QWidget* dropdownRow(QWidget* parent, const panels::PanelRow& row) {
+  auto* box = new QWidget(parent);
+  auto* column = new QVBoxLayout(box);
+  column->setContentsMargins(0, 0, 0, 0);
+  column->setSpacing(6);
+  column->addWidget(decoratedName(box, qs(row.label), &row));
+  auto* combo = new QComboBox(box);
+  combo->setAccessibleName(qs(row.label));
+  for (const auto& option : row.options) combo->addItem(qs(option));
+  combo->setEnabled(false);
+  column->addWidget(combo);
+  return box;
+}
+
+// 占满一行的两段切换（推荐 / 我的）。
+QWidget* segmentsRow(QWidget* parent, const panels::PanelRow& row) {
+  auto* box = new QWidget(parent);
+  box->setAccessibleName(qs(row.label));
+  auto* line = new QHBoxLayout(box);
+  line->setContentsMargins(0, 0, 0, 0);
+  line->setSpacing(2);
+  int index = 0;
+  for (const auto& option : row.options) {
+    auto* segment = new QPushButton(qs(option), box);
+    segment->setObjectName(QStringLiteral("refine-segment"));
+    segment->setCheckable(true);
+    segment->setChecked(index++ == 0);
+    segment->setEnabled(false);
+    line->addWidget(segment, 1);
+  }
+  return box;
+}
+
+QWidget* noticeRow(QWidget* parent, const panels::PanelRow& row) {
+  auto* notice = new QLabel(qs(row.label), parent);
+  notice->setObjectName(QStringLiteral("refine-notice"));
+  notice->setAlignment(Qt::AlignCenter);
+  notice->setMinimumHeight(120);
+  notice->setEnabled(false);
+  return notice;
+}
+
+QWidget* iconRow(QWidget* parent, const panels::PanelRow& row) {
+  auto* box = new QWidget(parent);
+  auto* line = new QHBoxLayout(box);
+  line->setContentsMargins(0, 0, 0, 0);
+  for (std::size_t i = 0; i < row.options.size(); ++i) {
+    if (i > 0) line->addStretch(1);
+    auto* icon = pendingIcon(box, 22, qs(row.options[i]));
+    icon->setToolTip(qs(row.options[i]));
+    icon->setEnabled(false);
+    line->addWidget(icon);
+  }
+  return box;
 }
 
 // 子项框（可展开行的子项、“瘦腿”这种带标题的框）。
@@ -718,6 +782,18 @@ void addSections(QWidget* parent, QVBoxLayout* layout, const std::vector<panels:
       case panels::PanelRowKind::Tool:
         target->addWidget(toolRow(body, row));
         break;
+      case panels::PanelRowKind::Dropdown:
+        target->addWidget(dropdownRow(body, row));
+        break;
+      case panels::PanelRowKind::Segments:
+        target->addWidget(segmentsRow(body, row));
+        break;
+      case panels::PanelRowKind::Notice:
+        target->addWidget(noticeRow(body, row));
+        break;
+      case panels::PanelRowKind::IconRow:
+        target->addWidget(iconRow(body, row));
+        break;
       case panels::PanelRowKind::Group: {
         QVBoxLayout* group_layout = nullptr;
         auto* box = childBox(body, &group_layout);
@@ -765,13 +841,6 @@ void addColorPanel(QWidget* parent, QVBoxLayout* parent_layout, PageActions* act
   addSections(frame, layout, panels::refine_color_rows(), actions, "color");
 }
 
-void addLabelList(QVBoxLayout* layout, std::string_view list, bool accessible_is_text = false) {
-  for (const auto& entry : ui::shell::page_list(list)) {
-    const QString label = qs(entry.text);
-    const QString accessible = !entry.accessible.empty() ? qs(entry.accessible) : (accessible_is_text ? label : QString());
-    layout->addWidget(disabledLabel(label, accessible));
-  }
-}
 
 // 裁剪旋转（需求 §12.6）：固定比例（居中裁）、原始尺寸、逆时针、顺时针、水平翻转、垂直翻转、角度滑杆是真的，
 // 参数写进 crop 能力，预览、缩略图和导出都按它画；其余条目（原照设置、证件照尺寸、AI 智能裁剪、网格等）还是灰的标签。
@@ -1749,13 +1818,19 @@ void addModuleContent(const std::string& id, QWidget* content, QVBoxLayout* layo
     addSections(frame, portrait, panels::refine_portrait_rows(), actions, "portrait");
     return;
   }
+  if (id == "image" || id == "clothing") {
+    // 图像美化、衣物美化：和色彩调节、人像同一套折叠分组（ui/panels 的表）。效果还没有实现，全部禁用。
+    const bool image = id == "image";
+    QFrame* frame = nullptr;
+    auto* panel = labelPanel(content, layout, image ? "refine-image-labels" : "refine-clothing-labels",
+                             moduleDescription(id.c_str()), &frame);
+    panel->setSpacing(0);
+    addSections(frame, panel, image ? panels::refine_image_rows() : panels::refine_clothing_rows(), actions, id);
+    return;
+  }
   layout->setContentsMargins(12, 12, 12, 12);
   layout->setSpacing(8);
-  if (id == "clothing") {
-    addLabelList(labelPanel(content, layout, "refine-clothing-labels", qtext("refine.clothing.name")), "refine-clothing");
-  } else if (id == "image") {
-    addLabelList(labelPanel(content, layout, "refine-image-labels", moduleDescription("image")), "refine-image", true);
-  } else if (id == "crop") {
+  if (id == "crop") {
     addCropPanel(content, labelPanel(content, layout, "refine-crop-labels", moduleDescription("crop")), actions);
   } else if (id == "history") {
     auto* history = labelPanel(content, layout, "refine-history-labels", moduleDescription("history"));
@@ -1814,6 +1889,10 @@ QWidget* modulePage(const CopyItem& entry, PageActions* actions, std::vector<Pix
   header_row->addStretch(1);
   if (entry.id == "color") {
     auto* master = action(qtext("refine.master-color"), header, false);
+    master->setObjectName(QStringLiteral("refine-master-color"));
+    header_row->addWidget(master);
+  } else if (entry.id == "image") {
+    auto* master = action(qtext("refine.master-image"), header, false);
     master->setObjectName(QStringLiteral("refine-master-color"));
     header_row->addWidget(master);
   } else if (entry.id == "portrait") {

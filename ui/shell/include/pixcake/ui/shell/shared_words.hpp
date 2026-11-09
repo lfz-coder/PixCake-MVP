@@ -17,5 +17,12 @@ inline constexpr char kWordHairline[] = "发际线";
 inline constexpr char kWordRemoveVeins[] = "祛青筋";
 inline constexpr char kWordClarity[] = "清晰度";
 inline constexpr char kWordSaturation[] = "饱和度";
+inline constexpr char kWordTemperature[] = "色温";
+inline constexpr char kWordTint[] = "色调";
+inline constexpr char kWordBrightness[] = "亮度";
+inline constexpr char kWordOpacity[] = "不透明度";
+inline constexpr char kWordHorizontalPosition[] = "水平位置";
+inline constexpr char kWordVerticalPosition[] = "垂直位置";
+inline constexpr char kWordRestore[] = "还原";
 
 }  // namespace pixcake::ui::shell

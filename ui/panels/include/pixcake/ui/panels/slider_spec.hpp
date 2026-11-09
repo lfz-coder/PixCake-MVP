@@ -46,10 +46,13 @@ SliderBinding refine_crop_angle_binding();
 // 人像美化等面板还用到这些（PixCake 9.3.0 截图里的控件种类）：Subheading 组内小标题，Separator 组内分隔线，
 // Toggle 开关，Checkbox 复选框，PairSlider 左右两支联动滑杆，Cards 图片卡片单选（options 是各卡片名），
 // Swatches 色块单选（options 是 #rrggbb，第一个空串表示“无”），AiButton AI 大按钮，Tabs 页签（options），
-// Group 一个带标题的框，里面是后面的子项（child），Tool 名字加右侧两个小按钮。
+// Group 一个带标题的框，里面是后面的子项（child），Tool 名字加右侧的小图标按钮（options 是各按钮的说明，
+// 至少一个），Dropdown 名字在上、下拉框在下（options 是可选值，第一个是当前值），Segments 占满一行的两段切换
+// （推荐/我的），Notice 一块提示（如“未检测到天空”），IconRow 一行图标按钮（options 是各按钮的说明）。
 enum class PanelRowKind {
   Title, Section, HeaderAction, Picker, Slider, Choice,
-  Subheading, Separator, Toggle, Checkbox, PairSlider, Cards, Swatches, AiButton, Tabs, Group, Tool
+  Subheading, Separator, Toggle, Checkbox, PairSlider, Cards, Swatches, AiButton, Tabs, Group, Tool,
+  Dropdown, Segments, Notice, IconRow
 };
 struct PanelRow {
   PanelRowKind kind = PanelRowKind::Title;
@@ -64,6 +67,7 @@ struct PanelRow {
   bool expandable = false;
   bool child = false;
   bool centered = false;
+  bool at_maximum = false;  // 截图里滑块在最右端（默认是最大值，如不透明度 100）
   int ticks = 0;
   std::string track;  // 色带：temperature、tint
   std::vector<std::string> options;
