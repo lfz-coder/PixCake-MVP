@@ -121,5 +121,19 @@ int main() {
     });
   }
   std::printf("%-20s %7.1f ms %7.1f ms\n", "24 MP export, all", reference, on_gpu);
+
+  // The shell uses this interactive edge while a slider is being dragged.
+  // It keeps the full-quality max_edge for commit, but bounds the amount of
+  // work and the shared-memory frame copied for each transient value.
+  pixcake::gpu::RgbaImage interactive;
+  interactive.width = 600;
+  interactive.height = 450;
+  interactive.row_stride = interactive.width * 4;
+  interactive.pixels.resize(static_cast<std::size_t>(interactive.row_stride) * interactive.height);
+  for (std::size_t i = 0; i < interactive.pixels.size(); ++i) interactive.pixels[i] = static_cast<std::uint8_t>((i * 2654435761u) >> 24);
+  const double interactive_reference = best_ms([&] {
+    return pixcake::gpu::RenderExecutor{}.renderReference(all, interactive, {}, result);
+  });
+  std::printf("%-20s %7.1f ms %7.1f ms\n", "interactive 600px, all", interactive_reference, -1.0);
   return 0;
 }

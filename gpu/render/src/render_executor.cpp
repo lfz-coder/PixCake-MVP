@@ -4,6 +4,7 @@
 #include "shader_sources.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -72,6 +73,8 @@ constexpr Mat3 kBradfordInverse{{{0.9869929F, -0.1470543F, 0.1599627F},
                                   {0.4323053F, 0.5183603F, 0.0492912F},
                                   {-0.0085287F, 0.0400428F, 0.9684867F}}};
 
+// PP-WB-001: tint is a symmetric half-stop of the Bradford green-cone response;
+// temperature is interpolated between the D75/D65/D50 white points above.
 Mat3 white_balance_matrix(float temperature, float tint) {
   if (std::abs(temperature) < 1e-6F && std::abs(tint) < 1e-6F) return identity_matrix();
   const Vec3 source_white = white_from_xy(0.3127F, 0.3290F);  // CIE D65.
@@ -85,9 +88,6 @@ Mat3 white_balance_matrix(float temperature, float tint) {
                                                          -temperature_fraction));
   const Vec3 source_lms = mul(kBradford, source_white);
   Vec3 target_lms = mul(kBradford, target_white);
-  // Project consensus PP-WB-001: tint is a symmetric half-stop adjustment
-  // of the Bradford green-cone response.  The scale is documented here and
-  // is not a hidden per-channel coefficient.
   target_lms.y *= std::exp2(std::clamp(tint / 100.0F, -1.0F, 1.0F) * 0.5F);
   const Mat3 cone_scale{{{target_lms.x / source_lms.x, 0.0F, 0.0F},
                          {0.0F, target_lms.y / source_lms.y, 0.0F},
@@ -150,6 +150,15 @@ ToneColor tone_color_of(const std::map<std::string, float>& v) {
   t.saturation = get(v, "saturation") / 100.0F;
   t.vibrance = get(v, "vibrance") / 100.0F;
   return t;
+}
+bool color_is_active(const ToneColor& t) {
+  return t.white_balance || std::abs(t.style) > 1e-7F;
+}
+bool tone_is_active(const ToneColor& t) {
+  return std::abs(t.exposure_gain - 1.0F) > 1e-7F || std::abs(t.brightness) > 1e-7F ||
+         std::abs(t.contrast_amount - 1.0F) > 1e-7F || std::abs(t.highlights) > 1e-7F ||
+         std::abs(t.shadows) > 1e-7F || std::abs(t.whites) > 1e-7F || std::abs(t.blacks) > 1e-7F ||
+         std::abs(t.local) > 1e-7F || std::abs(t.saturation) > 1e-7F || std::abs(t.vibrance) > 1e-7F;
 }
 Pixel color(Pixel p, const ToneColor& t) {
   if (t.white_balance) {
@@ -245,18 +254,23 @@ Pixel from_hsl(Hsl c, float alpha) {
 // the weights always sum to 1 (no band edge shows as a seam).
 constexpr float kBandHue[8] = {0.0F, 30.0F, 60.0F, 120.0F, 180.0F, 240.0F, 270.0F, 300.0F};
 constexpr const char* kBandName[8] = {"red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta"};
-void band_weights(float hue, float weights[8]) {
-  for (int i = 0; i < 8; ++i) weights[i] = 0.0F;
-  for (int i = 0; i < 8; ++i) {
-    const float start = kBandHue[i], end = i == 7 ? 360.0F : kBandHue[i + 1];
-    if (hue >= start && hue < end) {
-      const float t = (hue - start) / (end - start);
-      weights[i] = 1.0F - t;
-      weights[(i + 1) % 8] = t;
-      return;
-    }
-  }
-  weights[0] = 1.0F;
+int band_index(float hue) {
+  if (!(hue >= 0.0F && hue < 360.0F)) return -1;
+  if (hue < 30.0F) return 0;
+  if (hue < 60.0F) return 1;
+  if (hue < 120.0F) return 2;
+  if (hue < 180.0F) return 3;
+  if (hue < 240.0F) return 4;
+  if (hue < 270.0F) return 5;
+  if (hue < 300.0F) return 6;
+  return 7;
+}
+float band_value(const float values[8], float hue) {
+  const int index = band_index(hue);
+  if (index < 0) return values[0];
+  const float start = kBandHue[index], end = index == 7 ? 360.0F : kBandHue[index + 1];
+  const float t = (hue - start) / (end - start);
+  return (1.0F - t) * values[index] + t * values[(index + 1) % 8];
 }
 
 struct ColorGroups {
@@ -268,6 +282,8 @@ struct ColorGroups {
   float mix[8]{};
   bool selective = false, absolute = false;
   float selective_ink[9][4]{};  // target x (cyan, magenta, yellow, black), -1..1
+  std::array<std::uint8_t, 9> selective_targets{};
+  std::size_t selective_target_count = 0;
   bool grading = false;
   float zone_hue[4]{}, zone_saturation[4]{}, zone_lightness[4]{}, blending = 0.5F;
   float zone_tint[4][3]{};  // the zone hue's colour minus its own luminance
@@ -300,10 +316,13 @@ ColorGroups color_groups(const Values& v) {
   const char* targets[9] = {"red", "yellow", "green", "cyan", "blue", "magenta", "white", "neutral", "black"};
   const char* inks[4] = {"cyan", "magenta", "yellow", "black"};
   for (int t = 0; t < 9; ++t) {
+    bool target_active = false;
     for (int k = 0; k < 4; ++k) {
       g.selective_ink[t][k] = param(v, cap, std::string("selective_") + targets[t] + "_" + inks[k]) / 100.0F;
       g.selective = g.selective || g.selective_ink[t][k] != 0.0F;
+      target_active = target_active || g.selective_ink[t][k] != 0.0F;
     }
+    if (target_active) g.selective_targets[g.selective_target_count++] = static_cast<std::uint8_t>(t);
   }
   g.absolute = choice_is(v, cap, "selective_mode", "absolute");
   const char* zones[4] = {"shadows", "midtones", "highlights", "global"};
@@ -342,14 +361,9 @@ Pixel apply_levels(Pixel p, const ColorGroups& g) {
 Pixel apply_hsl(Pixel p, const ColorGroups& g) {
   Hsl c = to_hsl(p);
   if (c.s <= 0.0F) return p;
-  float w[8];
-  band_weights(c.h, w);
-  float hue = 0, saturation = 0, lightness = 0;
-  for (int i = 0; i < 8; ++i) {
-    hue += w[i] * g.hue[i];
-    saturation += w[i] * g.saturation[i];
-    lightness += w[i] * g.lightness[i];
-  }
+  const float hue = band_value(g.hue, c.h);
+  const float saturation = band_value(g.saturation, c.h);
+  const float lightness = band_value(g.lightness, c.h);
   const float s0 = c.s;
   c.h = std::fmod(c.h + hue * 30.0F + 360.0F, 360.0F);
   c.s = clamp01(c.s * (1.0F + saturation));
@@ -364,10 +378,7 @@ Pixel apply_monochrome(Pixel p, const ColorGroups& g) {
   float grey = luminance(p);
   const float chroma = std::max({p.r, p.g, p.b}) - std::min({p.r, p.g, p.b});
   if (chroma > 0.0F) {
-    float w[8];
-    band_weights(to_hsl(p).h, w);
-    float mix_amount = 0;
-    for (int i = 0; i < 8; ++i) mix_amount += w[i] * g.mix[i];
+    const float mix_amount = band_value(g.mix, to_hsl(p).h);
     grey = clamp01(grey + mix_amount * chroma * 0.5F);
   }
   return {grey, grey, grey, p.a};
@@ -401,7 +412,8 @@ Pixel apply_selective(Pixel p, const ColorGroups& g) {
   for (int c = 0; c < 3; ++c) {
     const float ink = 1.0F - channel[c];
     float change = 0;
-    for (int t = 0; t < 9; ++t) {
+    for (std::size_t active = 0; active < g.selective_target_count; ++active) {
+      const int t = g.selective_targets[active];
       if (weight[t] <= 0.0F) continue;
       const float s = g.selective_ink[t][c], k = g.selective_ink[t][3];
       float next = clamp01(g.absolute ? ink + s : ink * (1.0F + s));
@@ -481,13 +493,7 @@ float hash01(std::uint32_t x, std::uint32_t y, std::uint32_t channel) {
   h ^= h >> 16;
   return static_cast<float>(h & 0xFFFFFFU) / 16777216.0F;
 }
-float value_noise(float x, float y, std::uint32_t channel) {
-  const float fx = std::floor(x), fy = std::floor(y);
-  const auto ix = static_cast<std::uint32_t>(static_cast<std::int64_t>(fx));
-  const auto iy = static_cast<std::uint32_t>(static_cast<std::int64_t>(fy));
-  float tx = x - fx, ty = y - fy;
-  tx = tx * tx * (3.0F - 2.0F * tx);
-  ty = ty * ty * (3.0F - 2.0F * ty);
+float value_noise_grid(std::uint32_t ix, std::uint32_t iy, float tx, float ty, std::uint32_t channel) {
   const float top = hash01(ix, iy, channel) + (hash01(ix + 1, iy, channel) - hash01(ix, iy, channel)) * tx;
   const float bottom =
       hash01(ix, iy + 1, channel) + (hash01(ix + 1, iy + 1, channel) - hash01(ix, iy + 1, channel)) * tx;
@@ -500,8 +506,16 @@ Pixel apply_grain(Pixel p, std::uint32_t x, std::uint32_t y, const Grain& g) {
                      std::max(0.0F, 1.0F - (1.0F - l) / 0.5F) * g.highlights;
   const float strength = g.amount * zone * 0.5F;
   if (strength <= 0.0F) return p;
+  const float grid_x = static_cast<float>(x) * g.inv_cell;
+  const float grid_y = static_cast<float>(y) * g.inv_cell;
+  const float grid_fx = std::floor(grid_x), grid_fy = std::floor(grid_y);
+  const auto grid_ix = static_cast<std::uint32_t>(static_cast<std::int64_t>(grid_fx));
+  const auto grid_iy = static_cast<std::uint32_t>(static_cast<std::int64_t>(grid_fy));
+  float tx = grid_x - grid_fx, ty = grid_y - grid_fy;
+  tx = tx * tx * (3.0F - 2.0F * tx);
+  ty = ty * ty * (3.0F - 2.0F * ty);
   const auto noise = [&](std::uint32_t channel) {
-    const float smooth = value_noise(static_cast<float>(x) * g.inv_cell, static_cast<float>(y) * g.inv_cell, channel);
+    const float smooth = value_noise_grid(grid_ix, grid_iy, tx, ty, channel);
     return smooth + (hash01(x, y, channel + 8U) - smooth) * g.roughness - 0.5F;
   };
   const float mono = noise(0);
@@ -646,6 +660,7 @@ struct PreparedOperation {
   float lut_amount = 1.0F;
   std::vector<const RenderMask*> masks;
   bool is_color = false, is_tone = false, is_detail = false, has_groups = false;
+  bool color_active = false, tone_active = false;
   ColorGroups groups;
   Grain grain;
   ToneColor tone_color;
@@ -742,6 +757,8 @@ bool prepare(const pixcake::render::RenderDescription& description, const RgbaIm
     if (draw.is_detail) draw.grain = grain_of(values, input.width, input.height);
     if (draw.is_detail && !draw.grain.on) continue;
     draw.tone_color = tone_color_of(values);
+    draw.color_active = color_is_active(draw.tone_color);
+    draw.tone_active = tone_is_active(draw.tone_color);
     draw.lut_amount = values.find("amount") == values.end() ? 1.0F : clamp01(get(values, "amount") / 100.0F);
     draw.blend = blend_of(operation.blend_mode);
     draws.push_back(std::move(draw));
@@ -750,18 +767,97 @@ bool prepare(const pixcake::render::RenderDescription& description, const RgbaIm
 }
 
 void draw_reference(const PreparedOperation& draw, RgbaImage& frame) {
+  const RenderMask* single_mask = draw.masks.size() == 1 ? draw.masks.front() : nullptr;
+  const bool direct_normal = draw.masks.empty() && draw.blend == Blend::Normal;
   for_rows(frame.width, frame.height, [&](std::uint32_t first, std::uint32_t end) {
     for (std::uint32_t y = first; y < end; ++y) for (std::uint32_t x = 0; x < frame.width; ++x) {
       const Pixel before = read(frame, x, y);
       Pixel after = before;
       if (draw.has_lut) after = mix(before, lut_sample(draw.lut, before), draw.lut_amount);
-      if (!draw.has_lut && draw.is_color) after = color(after, draw.tone_color);
-      if (!draw.has_lut && draw.is_tone) after = tone(after, draw.tone_color);
+      if (!draw.has_lut && draw.color_active) after = color(after, draw.tone_color);
+      if (!draw.has_lut && draw.tone_active) after = tone(after, draw.tone_color);
       if (draw.has_groups) after = apply_color_groups(after, draw.groups);
       if (draw.is_detail) after = apply_grain(after, x, y, draw.grain);
-      float weight = 1.0F;
-      for (const auto* mask : draw.masks) weight *= mask->alpha[static_cast<std::size_t>(y) * frame.width + x] / 255.0F;
-      write(frame, x, y, composite(before, after, weight, draw.blend));
+      const std::size_t pixel = static_cast<std::size_t>(y) * frame.width + x;
+      if (direct_normal && before.a >= 1.0F) {
+        write(frame, x, y, after);
+      } else {
+        float weight = 1.0F;
+        if (single_mask != nullptr) {
+          weight = single_mask->alpha[pixel] / 255.0F;
+        } else {
+          for (const auto* mask : draw.masks) weight *= mask->alpha[pixel] / 255.0F;
+        }
+        write(frame, x, y, composite(before, after, weight, draw.blend));
+      }
+    }
+  });
+}
+
+// A drag on the common channel-independent tone controls does not need the
+// general per-pixel colour pipeline.  Their exact byte result can be
+// precomputed once and applied as a 256-entry lookup table.  Keeping this as a
+// narrow fast path preserves the reference formula and its rounding/clamping
+// semantics while avoiding exp2/pow and the general colour-group dispatch for
+// every pixel.
+bool scalar_tone_operation(const PreparedOperation& draw) {
+  if (draw.operation == nullptr || draw.has_lut || draw.is_detail || !draw.is_color || !draw.is_tone ||
+      !draw.masks.empty() || draw.blend != Blend::Normal || draw.tone_color.white_balance ||
+      std::abs(draw.tone_color.style) > 1e-7F || std::abs(draw.tone_color.local) > 1e-7F ||
+      std::abs(draw.tone_color.saturation) > 1e-7F || std::abs(draw.tone_color.vibrance) > 1e-7F ||
+      std::abs(draw.tone_color.highlights) > 1e-7F || std::abs(draw.tone_color.shadows) > 1e-7F ||
+      std::abs(draw.tone_color.whites) > 1e-7F || std::abs(draw.tone_color.blacks) > 1e-7F ||
+      draw.groups.hsl || draw.groups.monochrome || draw.groups.selective || draw.groups.grading ||
+      draw.groups.editor_offsets) {
+    return false;
+  }
+  for (const auto& value : draw.operation->values) {
+    const bool scalar = value.channel == "exposure" || value.channel == "brightness" || value.channel == "contrast";
+    const bool levels = draw.groups.levels && has_prefix(value.channel, "levels_rgb_");
+    if (!scalar && !levels) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void draw_scalar_tone(const PreparedOperation& draw, RgbaImage& frame) {
+  // `after` keeps the unquantised result: partially transparent pixels are
+  // composited from it exactly as draw_reference does.
+  std::array<std::array<std::uint8_t, 256>, 3> lut{};
+  std::array<std::array<float, 256>, 3> after{};
+  for (std::size_t channel = 0; channel < lut.size(); ++channel) {
+    for (std::size_t i = 0; i < lut[channel].size(); ++i) {
+      float value = static_cast<float>(i) / 255.0F;
+      value *= draw.tone_color.exposure_gain;
+      value += draw.tone_color.brightness;
+      value = (value - 0.5F) * draw.tone_color.contrast_amount + 0.5F;
+      if (draw.groups.levels) {
+        const float span = std::max(draw.groups.in_white - draw.groups.in_black, 1.0F / 255.0F);
+        const float x = clamp01((value - draw.groups.in_black) / span);
+        value = draw.groups.out_black + std::pow(x, 1.0F / draw.groups.gamma) *
+                                               (draw.groups.out_white - draw.groups.out_black);
+      }
+      after[channel][i] = value;
+      lut[channel][i] = static_cast<std::uint8_t>(std::lround(clamp01(value) * 255.0F));
+    }
+  }
+  const std::size_t stride = frame.row_stride == 0 ? static_cast<std::size_t>(frame.width) * 4 : frame.row_stride;
+  for_rows(frame.width, frame.height, [&](std::uint32_t first, std::uint32_t end) {
+    for (std::uint32_t y = first; y < end; ++y) {
+      auto* row = frame.pixels.data() + static_cast<std::size_t>(y) * stride;
+      for (std::uint32_t x = 0; x < frame.width; ++x) {
+        auto* pixel = row + static_cast<std::size_t>(x) * 4;
+        if (pixel[3] != 255) {
+          const Pixel before = read(frame, x, y);
+          const Pixel top{after[0][pixel[0]], after[1][pixel[1]], after[2][pixel[2]], before.a};
+          write(frame, x, y, composite(before, top, 1.0F, Blend::Normal));
+          continue;
+        }
+        pixel[0] = lut[0][pixel[0]];
+        pixel[1] = lut[1][pixel[1]];
+        pixel[2] = lut[2][pixel[2]];
+      }
     }
   });
 }
@@ -961,6 +1057,11 @@ bool RenderExecutor::renderReference(const pixcake::render::RenderDescription& d
                                      RenderResult& result) const {
   std::vector<PreparedOperation> draws;
   if (!prepare(description, input, inputs, result, draws)) return false;
+  if (draws.size() == 1 && inputs.layers.empty() && scalar_tone_operation(draws.front())) {
+    draw_scalar_tone(draws.front(), result.image);
+    result.success = true;
+    return true;
+  }
   for (const auto& draw : draws) draw_reference(draw, result.image);
   for (const auto& layer : prepare_layers(inputs, input.width, input.height, result)) {
     draw_layer_reference(layer, result.image);

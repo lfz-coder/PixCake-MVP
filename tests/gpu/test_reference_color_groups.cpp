@@ -89,6 +89,53 @@ void test_levels() {
   assert(near(render(global({value("levels_rgb_input_gray", -1)}), image(128, 128, 128)), {0, 0, 0}));
 }
 
+void test_scalar_tone_fast_path_matches_general_reference() {
+  const auto input = image(17, 93, 221, 8);
+  const auto fast = global({value("exposure", 0.65), value("brightness", -12), value("contrast", 37)});
+  // A neutral HSL value keeps the pixels unchanged but deliberately takes the
+  // general path, giving us an in-process equivalence oracle.
+  const auto general = global({value("exposure", 0.65), value("brightness", -12), value("contrast", 37),
+                               value("hsl_hue_red", 0)});
+  RenderResult fast_result;
+  RenderResult general_result;
+  assert(RenderExecutor{}.renderReference(fast, input, RenderInputs{}, fast_result));
+  assert(RenderExecutor{}.renderReference(general, input, RenderInputs{}, general_result));
+  assert(fast_result.image.pixels == general_result.image.pixels);
+
+  const auto fast_levels = global({value("levels_rgb_input_black", 16), value("levels_rgb_input_white", 240),
+                                   value("levels_rgb_input_gray", 0.25), value("levels_rgb_output_black", 8),
+                                   value("levels_rgb_output_white", 248)});
+  const auto general_levels = global({value("levels_rgb_input_black", 16), value("levels_rgb_input_white", 240),
+                                      value("levels_rgb_input_gray", 0.25), value("levels_rgb_output_black", 8),
+                                      value("levels_rgb_output_white", 248), value("hsl_hue_red", 0)});
+  assert(RenderExecutor{}.renderReference(fast_levels, input, RenderInputs{}, fast_result));
+  assert(RenderExecutor{}.renderReference(general_levels, input, RenderInputs{}, general_result));
+  assert(fast_result.image.pixels == general_result.image.pixels);
+
+  // White balance keeps the general path so the fast path remains limited to
+  // channel-independent tone and RGB levels; the neutral HSL value still
+  // gives us a byte-for-byte generic-path oracle.
+  const auto fast_warm = global({value("temperature", 68), value("exposure", 0.2)});
+  const auto general_warm = global({value("temperature", 68), value("exposure", 0.2),
+                                    value("hsl_hue_red", 0)});
+  assert(RenderExecutor{}.renderReference(fast_warm, input, RenderInputs{}, fast_result));
+  assert(RenderExecutor{}.renderReference(general_warm, input, RenderInputs{}, general_result));
+  assert(fast_result.image.pixels == general_result.image.pixels);
+
+  // Partially transparent pixels: the general path composites them with their
+  // alpha, so the fast path must give the same bytes there too.
+  auto translucent = input;
+  for (std::size_t i = 3; i < translucent.pixels.size(); i += 4) {
+    translucent.pixels[i] = static_cast<std::uint8_t>(32 + (i / 4) * 3 % 224);
+  }
+  assert(RenderExecutor{}.renderReference(fast, translucent, RenderInputs{}, fast_result));
+  assert(RenderExecutor{}.renderReference(general, translucent, RenderInputs{}, general_result));
+  assert(fast_result.image.pixels == general_result.image.pixels);
+  assert(RenderExecutor{}.renderReference(fast_levels, translucent, RenderInputs{}, fast_result));
+  assert(RenderExecutor{}.renderReference(general_levels, translucent, RenderInputs{}, general_result));
+  assert(fast_result.image.pixels == general_result.image.pixels);
+}
+
 void test_hsl() {
   // Red hue +100 turns pure red 30 degrees, to orange; blue is outside the red band.
   assert(near(render(global({value("hsl_hue_red", 100)}), image(255, 0, 0)), {255, 128, 0}));
@@ -220,6 +267,7 @@ int main() {
   test_document_to_pixels();
   test_identity_at_defaults();
   test_levels();
+  test_scalar_tone_fast_path_matches_general_reference();
   test_hsl();
   test_monochrome();
   test_selective_color();
