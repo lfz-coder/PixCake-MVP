@@ -1,5 +1,6 @@
 #include "pixcake/account/account_session.hpp"
 #include "pixcake/instance/single_instance.hpp"
+#include "pixcake/mask/brush_mask.hpp"
 #include "pixcake/logging/file_log_sink.hpp"
 #include "pixcake/platform/mac_source_access.hpp"
 #include "pixcake/project_session/project_session.hpp"
@@ -1637,6 +1638,79 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
         qCritical("the invert checkbox lost its state after the rebuild");
         return 8;
       }
+    }
+    // Brush: pick it in the part list, set the brush, paint two strokes (each one history step), erase one.
+    drop = visibleChild<QPushButton>(window, "refine-local-item-remove");
+    drop->click();
+    wait_current(window, 30'000);
+    region_box = visibleChild<QComboBox>(window, "refine-local-item-region");
+    region_box->setCurrentIndex(region_box->findData(QStringLiteral("brush")));
+    {
+      auto* size = visibleChild<QSlider>(window, "refine-local-brush-size");
+      auto* feather = visibleChild<QSlider>(window, "refine-local-brush-feather");
+      if (size == nullptr || feather == nullptr || visibleChild<QSlider>(window, "refine-local-brush-flow") == nullptr ||
+          visibleChild<QSlider>(window, "refine-local-brush-density") == nullptr ||
+          visibleChild<QPushButton>(window, "refine-local-brush-erase") == nullptr) {
+        qCritical("the brush settings are missing after choosing the brush");
+        return 8;
+      }
+      size->setValue(60);
+      feather->setValue(0);
+    }
+    draw = visibleChild<QPushButton>(window, "refine-local-draw");
+    draw->setChecked(true);
+    const auto steps_before_stroke = controller.history().size();
+    if (!drag(20, 50, 80, 50)) {
+      qCritical("no frame after the first brush stroke");
+      return 8;
+    }
+    std::vector<pixcake::mask::BrushStroke> painted;
+    if (controller.history().size() != steps_before_stroke + 1 || text_of("region") != "brush" ||
+        !pixcake::mask::decode_brush_strokes(text_of("strokes"), painted) || painted.size() != 1 || painted[0].erase ||
+        painted[0].feather != 0 || painted[0].points.size() < 2 || std::abs(painted[0].points.front().first - 2000) > 60 ||
+        std::abs(painted[0].points.back().first - 8000) > 60) {
+      qCritical("the first brush stroke was not committed as one step (%zu steps, strokes '%s')",
+                controller.history().size() - steps_before_stroke, text_of("strokes").c_str());
+      return 8;
+    }
+    {
+      // 60 image pixels of the preview's long edge, as a fraction (the preview is the picture here).
+      const QImage& shown = view->image();
+      const int expected = static_cast<int>(std::lround(60.0 / std::max(shown.width(), shown.height()) * 10000.0));
+      if (std::abs(painted[0].size - expected) > 2) {
+        qCritical("brush size %d, expected about %d", painted[0].size, expected);
+        return 8;
+      }
+    }
+    draw = visibleChild<QPushButton>(window, "refine-local-draw");
+    draw->setChecked(true);
+    if (!drag(20, 30, 80, 30)) {
+      qCritical("no frame after the second brush stroke");
+      return 8;
+    }
+    items = visibleChild<QListWidget>(window, "refine-local-items");
+    if (!pixcake::mask::decode_brush_strokes(text_of("strokes"), painted) || painted.size() != 2 || items == nullptr ||
+        items->count() != 1) {
+      qCritical("the second stroke should extend the same item (%zu strokes)", painted.size());
+      return 8;
+    }
+    auto* erase_tool = visibleChild<QPushButton>(window, "refine-local-brush-erase");
+    erase_tool->setChecked(true);
+    draw = visibleChild<QPushButton>(window, "refine-local-draw");
+    draw->setChecked(true);
+    if (!drag(40, 50, 60, 50)) {
+      qCritical("no frame after the erasing stroke");
+      return 8;
+    }
+    if (!pixcake::mask::decode_brush_strokes(text_of("strokes"), painted) || painted.size() != 3 || !painted[2].erase) {
+      qCritical("the eraser stroke is missing");
+      return 8;
+    }
+    // Undo takes the last stroke back as one step; the history names it without the stroke text.
+    const auto rows_now = controller.history();
+    if (rows_now.empty() || rows_now.back().text.contains(QLatin1Char(',')) || rows_now.back().text.contains(QLatin1Char(':'))) {
+      qCritical("the history step carries the stroke text");
+      return 8;
     }
     // Clean up: delete the mask.
     auto* remove = visibleChild<QPushButton>(window, "refine-local-delete");

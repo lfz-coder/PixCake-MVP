@@ -200,6 +200,12 @@ Texts build_texts() {
   t["local.item.mode.subtract"] = "减去";
   t["local.item.text"] = "%1 · %2";
   t["local.item.invert"] = "反相";
+  t["local.brush.tool.paint"] = kWordBrush;
+  t["local.brush.tool.erase"] = "橡皮擦";
+  t["local.brush.size"] = "大小";
+  t["local.brush.flow"] = "流畅度";
+  t["local.brush.density"] = "密度";
+  t["history.local.strokes"] = "画笔笔触";
   t["local.item.text.invert"] = " · 反相";  // 接在子项行文字后面
   t["history.local.invert"] = "子项反相";
   t["history.local.remove"] = "删除蒙版";
@@ -408,7 +414,7 @@ Lists build_lists() {
         "身体皮肤", "眉毛", "眼白", "眼瞳", "嘴唇", "牙齿", "口腔", "耳朵", "头发", "全部衣服", "上衣", "内搭",
         "连体衣（裙）", "下装", "头纱/帽子", "手套", "鞋子", "背包", "首饰", "其他物品", "所有宠物", "全部背景",
         "天空", "草地", "地面", "礁石", "水面", "沙滩", "山", "建筑物", "智能选区", "自由选区", "快速选区",
-        "画笔", kWordLinearGradient, kWordRadialGradient, kWordColorRange, kWordLuminanceRange}) {
+        kWordBrush, kWordLinearGradient, kWordRadialGradient, kWordColorRange, kWordLuminanceRange}) {
     lists["refine-local"].push_back(item("local-" + std::to_string(lists["refine-local"].size() + 1), label));
   }
   const std::string clothing_prefix = "衣物美化-衣服调整-";

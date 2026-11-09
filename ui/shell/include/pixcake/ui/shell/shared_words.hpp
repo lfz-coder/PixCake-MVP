@@ -7,6 +7,7 @@ inline constexpr char kWordPreset[] = "预设";
 inline constexpr char kWordRotate[] = "旋转";
 inline constexpr char kWordLinearGradient[] = "线性渐变";
 inline constexpr char kWordRadialGradient[] = "径向渐变";
+inline constexpr char kWordBrush[] = "画笔";
 inline constexpr char kWordColorRange[] = "颜色范围";
 inline constexpr char kWordLuminanceRange[] = "亮度范围";
 

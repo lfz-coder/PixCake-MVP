@@ -7,6 +7,7 @@
 #include "sync_dialog.hpp"
 
 #include "pixcake/capability/capability_registry.hpp"
+#include "pixcake/mask/brush_mask.hpp"
 #include "pixcake/ui/panels/slider_spec.hpp"
 
 #include <QCheckBox>
@@ -311,6 +312,14 @@ struct LocalState {
   bool drag_new = false;  // 这次拖动要新建子项（区域和叠加方式到第一次有效移动时才写预览）
   std::string drag_mode;  // 新建子项的叠加方式
   std::vector<std::pair<panels::SliderBinding, std::string>> drag_values;  // 松开时一次提交的全部参数
+  // 画笔：工具设置（官方：大小 10..300 图像像素，羽化、流畅度、密度 0..100）和正在画的一笔。
+  int brush_size = 90;
+  int brush_feather = 100;
+  int brush_flow = 100;
+  int brush_density = 100;
+  bool brush_erase = false;
+  bool drag_brush = false;
+  std::vector<std::pair<int, int>> stroke_points;  // 正在画的一笔，位置是图像百分比的百倍（0..10000）
   QString signature;
 };
 
@@ -572,6 +581,61 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
     const auto own_parameter = [](const std::string& id) {
       return id.rfind("gradient_", 0) == 0 || id.rfind("range_", 0) == 0 || id.rfind("lum_", 0) == 0;
     };
+    // 画笔设置：选中的子项是画笔，或者“添加子项”的部位下拉选了画笔时显示。设置只存在界面里，每一笔画下时带进笔触。
+    {
+      auto* brush_box = new QWidget(body);
+      brush_box->setObjectName(QStringLiteral("refine-local-brush"));
+      auto* brush_layout = new QVBoxLayout(brush_box);
+      brush_layout->setContentsMargins(0, 0, 0, 0);
+      brush_layout->setSpacing(4);
+      auto* tools = new QWidget(brush_box);
+      auto* tools_layout = new QHBoxLayout(tools);
+      tools_layout->setContentsMargins(0, 0, 0, 0);
+      auto* paint = new QPushButton(qtext("local.brush.tool.paint"), tools);
+      auto* erase = new QPushButton(qtext("local.brush.tool.erase"), tools);
+      for (auto* button : {paint, erase}) {
+        button->setCheckable(true);
+        button->setAutoExclusive(true);
+        tools_layout->addWidget(button);
+      }
+      paint->setObjectName(QStringLiteral("refine-local-brush-paint"));
+      erase->setObjectName(QStringLiteral("refine-local-brush-erase"));
+      paint->setChecked(!state->brush_erase);
+      erase->setChecked(state->brush_erase);
+      QObject::connect(erase, &QPushButton::toggled, erase, [state](bool on) { state->brush_erase = on; });
+      brush_layout->addWidget(tools);
+      const auto setting = [&](const QString& label, const char* object, int low, int high, int* value) {
+        auto* line = new QWidget(brush_box);
+        auto* line_layout = new QHBoxLayout(line);
+        line_layout->setContentsMargins(0, 0, 0, 0);
+        line_layout->setSpacing(6);
+        auto* slider = new QSlider(Qt::Horizontal, line);
+        slider->setObjectName(QString::fromLatin1(object));
+        slider->setAccessibleName(label);
+        slider->setRange(low, high);
+        slider->setValue(*value);
+        auto* reading = text(QString::number(*value));
+        line_layout->addWidget(text(label));
+        line_layout->addWidget(slider, 1);
+        line_layout->addWidget(reading);
+        QObject::connect(slider, &QSlider::valueChanged, slider, [value, reading = QPointer<QLabel>(reading)](int v) {
+          *value = v;
+          if (reading) reading->setText(QString::number(v));
+        });
+        brush_layout->addWidget(line);
+      };
+      setting(qtext("local.brush.size"), "refine-local-brush-size", 10, 300, &state->brush_size);
+      setting(qs(panels::refine_local_feather_label()), "refine-local-brush-feather", 0, 100, &state->brush_feather);
+      setting(qtext("local.brush.flow"), "refine-local-brush-flow", 0, 100, &state->brush_flow);
+      setting(qtext("local.brush.density"), "refine-local-brush-density", 0, 100, &state->brush_density);
+      body_layout->addWidget(brush_box);
+      const auto show = [brush_box = QPointer<QWidget>(brush_box), region_box = QPointer<QComboBox>(region_box), item_region] {
+        if (!brush_box) return;
+        brush_box->setVisible(item_region == "brush" || (region_box && region_box->currentData().toString() == QStringLiteral("brush")));
+      };
+      show();
+      QObject::connect(region_box, &QComboBox::currentIndexChanged, brush_box, [show](int) { show(); });
+    }
     const auto rows = panels::refine_local_rows();
     if (!item_prefix.empty()) {
       for (const auto& row : rows) {
@@ -613,9 +677,15 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
       const auto items = items_of(state->mask);
       const auto found = std::find_if(items.begin(), items.end(), [&](const auto& pair) { return pair.first == state->item; });
       state->drag_sample = false;
+      state->drag_brush = false;
+      state->stroke_points.clear();
       state->sample_min = 100.0;
       state->sample_max = 0.0;
-      if (found != items.end() && (found->second == "color_range" || found->second == "luminance_range")) {
+      if (found != items.end() && found->second == "brush") {
+        state->drag_item = found->first;  // 在选中的画笔子项上继续画
+        state->drag_brush = true;
+        state->drag_new = false;
+      } else if (found != items.end() && (found->second == "color_range" || found->second == "luminance_range")) {
         state->drag_item = found->first;  // 取样：改选中的范围子项
         state->drag_sample = true;
         state->drag_region = found->second;
@@ -646,7 +716,9 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
         state->drag_radial = radial;
         state->drag_new = true;
         state->drag_mode = how.toStdString();
-        if (picked == QStringLiteral("color_range") || picked == QStringLiteral("luminance_range")) {
+        if (picked == QStringLiteral("brush")) {
+          state->drag_brush = true;  // 部位下拉选了画笔：在画布上画第一笔来新建
+        } else if (picked == QStringLiteral("color_range") || picked == QStringLiteral("luminance_range")) {
           state->drag_sample = true;  // 部位下拉选了颜色范围、亮度范围：点画布取样来新建
           state->drag_region = picked.toStdString();
         }
@@ -654,9 +726,61 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
       state->item = state->drag_item;
       state->drag_start = at;
       state->drag_values.clear();
-      if (!state->drag_sample) return;
+      if (!state->drag_sample && !state->drag_brush) return;
     }
     if (state->drag_item < 0) return;
+    if (state->drag_brush) {
+      // 画笔：收集这一笔的点（图像百分比的百倍，离上一点不到一个显示像素的不要），松开时整笔作为一步提交。
+      // 拖动中界面本地画出笔迹（hooks->paint），不写预览：笔触文本比预览请求的长度限制大。
+      const QSize shown = view->image().size();
+      if (shown.isEmpty()) return;
+      const int px = std::clamp(static_cast<int>(std::lround(at.x() * 100.0)), 0, 10000);
+      const int py = std::clamp(static_cast<int>(std::lround(at.y() * 100.0)), 0, 10000);
+      const bool far_enough =
+          state->stroke_points.empty() ||
+          std::hypot((px - state->stroke_points.back().first) / 10000.0 * shown.width(),
+                     (py - state->stroke_points.back().second) / 10000.0 * shown.height()) >= 1.0;
+      if (far_enough) state->stroke_points.emplace_back(px, py);
+      if (phase != 2) {
+        view->update();
+        return;
+      }
+      mask::BrushStroke stroke;
+      stroke.erase = state->brush_erase;
+      const double long_edge = std::max(shown.width(), shown.height());
+      stroke.size = std::clamp(static_cast<int>(std::lround(state->brush_size / long_edge * 10000.0)), 1, 10000);
+      stroke.feather = state->brush_feather;
+      stroke.flow = state->brush_flow;
+      stroke.density = state->brush_density;
+      stroke.points = state->stroke_points;
+      std::vector<mask::BrushStroke> all;
+      if (const auto existing = actions->parameter_value(binding_of(state->mask, state->drag_item, "strokes"))) {
+        mask::decode_brush_strokes(*existing, all);
+      }
+      const bool nothing_to_erase = stroke.erase && all.empty();
+      all.push_back(stroke);
+      const std::string joined = mask::encode_brush_strokes(all);
+      state->stroke_points.clear();
+      if (!nothing_to_erase && joined.size() <= mask::kMaxBrushTextChars) {
+        // 笔触放最前，区域放最后：提交后给渲染程序的请求带最后一个值，它必须是短的。
+        std::vector<std::pair<panels::SliderBinding, std::string>> values;
+        values.emplace_back(binding_of(state->mask, state->drag_item, "strokes"), joined);
+        if (state->drag_new && state->drag_item > 0) {
+          values.emplace_back(binding_of(state->mask, state->drag_item, "mode"), state->drag_mode);
+        }
+        values.emplace_back(binding_of(state->mask, state->drag_item, "region"), "brush");
+        actions->request_parameters(values);
+      }
+      state->drag_item = -1;
+      state->drag_new = false;
+      state->drag_brush = false;
+      view->update();
+      if (const auto run = std::weak_ptr<std::function<void()>>(rebuild).lock()) {
+        state->signature = signature();
+        (*run)();
+      }
+      return;
+    }
     if (state->drag_sample) {
       // 取样：点图片取 7×7 的平均色（颜色范围），或拖动经过的亮度范围（亮度范围）。取的是画布上现在显示的画面。
       const QImage& shown = view->image();
@@ -758,6 +882,20 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
     }
   };
   hooks->paint = [=](QPainter& painter, const QRectF& rect) {
+    if (state->drag_brush && !state->stroke_points.empty() && view && !view->image().isNull()) {
+      // 正在画的一笔：按笔的大小（图像像素）换算成显示像素，半透明红色，圆头。
+      const double scale = rect.width() / view->image().width();
+      QPen pen(QColor(235, 64, 52, 150));
+      pen.setWidthF(std::max(1.0, state->brush_size * scale));
+      pen.setCapStyle(Qt::RoundCap);
+      pen.setJoinStyle(Qt::RoundJoin);
+      painter.setPen(pen);
+      QPolygonF line;
+      for (const auto& point : state->stroke_points) {
+        line << QPointF(rect.left() + point.first / 10000.0 * rect.width(), rect.top() + point.second / 10000.0 * rect.height());
+      }
+      if (line.size() == 1) painter.drawPoint(line.first()); else painter.drawPolyline(line);
+    }
     if (state->mask < 0 || state->item < 0) return;
     const auto items = items_of(state->mask);
     const auto found = std::find_if(items.begin(), items.end(), [&](const auto& pair) { return pair.first == state->item; });

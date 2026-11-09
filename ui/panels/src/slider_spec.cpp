@@ -333,6 +333,7 @@ std::vector<ChoiceOption> choice_options(const SliderBinding& binding) {
       if (id == "all") label = kRegionAll;
       if (id == "linear") label = ui::shell::kWordLinearGradient;
       if (id == "radial") label = ui::shell::kWordRadialGradient;
+      if (id == "brush") label = ui::shell::kWordBrush;
       if (id == "color_range") label = ui::shell::kWordColorRange;
       if (id == "luminance_range") label = ui::shell::kWordLuminanceRange;
       for (const auto& part : mask::semantic_parts()) {

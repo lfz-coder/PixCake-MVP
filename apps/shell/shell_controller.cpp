@@ -361,6 +361,7 @@ QString history_text(const preview_channel::PreviewSession::HistoryEntry& entry)
       split_local_item(base, item, leaf);
       if (leaf == "name") name = qtext("local.mask.rename");
       if (leaf == "invert") name = qtext("history.local.invert");
+      if (leaf == "strokes") return qtext("history.local.strokes");  // 值是整串笔触，不写进历史名
       for (const auto& row : ui::panels::refine_local_rows()) {
         if (row.binding && row.binding->parameter_id == leaf) {
           name = qtext("local.mask.name").arg(instance) + QLatin1Char(' ') + QString::fromStdString(row.label);
