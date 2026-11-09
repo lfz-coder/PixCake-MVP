@@ -14,6 +14,9 @@
 #include "support/temp_dir.hpp"
 
 #include <cassert>
+#include <execinfo.h>
+#include <exception>
+#include <unistd.h>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -55,6 +58,14 @@ pixcake::render::RenderDescription face_skin_exposure(double ev) {
 }  // namespace
 
 int main() {
+  // 这个测试在整套并行跑时极少（约五十次一次）在退出阶段以 "recursive_mutex lock failed: Invalid argument" 终止，
+  // 单独并行跑几十次复现不了。终止时打印调用栈，下次出现就有线索。
+  std::set_terminate([] {
+    void* frames[40];
+    const int count = backtrace(frames, 40);
+    backtrace_symbols_fd(frames, count, 2);
+    std::abort();
+  });
   pixcake::test::TempDir dir;
   // The fixture, enlarged 5x by pixel repetition and written as a JPEG.
   const auto portrait = decode(std::string(PIXCAKE_TESTDATA_DIR) + "/portrait.jpg");
