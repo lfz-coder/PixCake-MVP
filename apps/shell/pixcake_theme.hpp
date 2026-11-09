@@ -170,6 +170,22 @@ struct PixCakeTheme final {
       QPushButton#refine-segment { background: #2a2d33; border: none; border-radius: 0; min-height: 30px; color: #9a9da3; }
       QPushButton#refine-segment:checked { background: #43464d; color: #f4f4f4; }
       QLabel#refine-notice { background: #2a2d33; border-radius: 3px; color: #8a8d93; }
+      QToolButton#refine-local-mask-toggle { background: #303030; border: 1px solid #555555; border-radius: 6px; }
+      QToolButton#refine-local-mask-toggle:checked { border-color: #ffd534; }
+      QFrame[floating-panel="true"] { background: #1f2227; border: 1px solid #36383e; border-radius: 4px; }
+      QFrame#floating-panel-handle { background: #35373c; border: none; border-radius: 2px; }
+      QLabel#floating-panel-title { color: #f2f2f2; font-size: 14px; font-weight: 600; }
+      QToolButton#floating-panel-close { background: transparent; border: none; padding: 2px; }
+      QFrame#floating-panel-rule { background: #36383e; border: none; }
+      QToolButton#refine-mask-new { background: transparent; border: none; color: #b4b6b8; font-size: 13px;
+        padding: 10px 16px; text-align: left; }
+      QToolButton#refine-mask-new:hover { color: #e6e6e6; }
+      QTreeWidget#refine-mask-tree { background: transparent; border: none; color: #ececec; font-size: 13px; outline: none; }
+      QPushButton#refine-mask-edit { background: transparent; border: 1px solid #3e3f42; border-radius: 2px;
+        color: #ececec; font-weight: 600; min-height: 22px; margin: 2px 12px 8px 0; }
+      QPushButton#refine-mask-edit:checked { border-color: #ffd534; }
+      QFrame#refine-local-edit { background: #1b1d21; border-top: 1px solid #2c2e33; border-bottom: 1px solid #2c2e33; }
+      QLabel#refine-local-edit-title { color: #f0f0f0; font-weight: 600; }
       QLabel#refine-subheading { color: #f4f4f4; font-size: 14px; font-weight: 600; }
       QLabel#refine-badge { color: #ffe000; background: #111214; border-radius: 2px; padding: 0 3px; font-size: 10px;
         font-weight: 600; }

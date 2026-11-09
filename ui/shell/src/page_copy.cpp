@@ -64,6 +64,7 @@ Texts build_texts() {
   t["icon.pending_named"] = "图标待补充";
   t["widget.histogram"] = "直方图";
   t["widget.canvas"] = "照片预览";
+  t["widget.close"] = "关闭";
   t["refine.preview.loading"] = "正在生成预览";
   t["refine.profile.pending"] = "这个配置文件的资源还没有接入";
   t["refine.preview.failed"] = "预览失败：";
@@ -213,13 +214,14 @@ Texts build_texts() {
   t["local.mask.name"] = "自定义-%1";
   t["local.mask.new"] = "创建蒙版";
   t["local.common"] = "常用蒙版";
-  t["local.overlay"] = "显示蒙版叠加";
   t["local.manage"] = "管理";
   t["local.linked"] = "联动调整";
   t["local.mask.list"] = "蒙版列表";
+  t["local.mask.create-new"] = "创建新蒙版";
+  t["local.mask.edit"] = "编辑蒙版";
+  t["local.mask.whole"] = "全图";
   t["local.part.pending"] = "这个部位还没有分割模型，暂不可用";
   t["local.mask.remove"] = "删除蒙版";
-  t["local.mask.none"] = "还没有蒙版：点上面的部位，或“创建蒙版”";
   t["local.draw"] = "在画布上拖动";
   t["local.item.add"] = "添加子项";
   t["local.item.remove"] = "删除子项";

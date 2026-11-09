@@ -22,6 +22,9 @@
 #include <QButtonGroup>
 #include <QComboBox>
 #include <QListWidget>
+#include <QTreeWidget>
+#include <QSignalBlocker>
+#include <QMenu>
 #include <QPointer>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -31,6 +34,7 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <set>
 #include <string>
@@ -304,6 +308,7 @@ struct RefineUiState {
   std::set<std::string> open_sections;  // “<页>/<分组名>”
   std::string local_tab = "subject";    // 局部调色的蒙版页签
   bool presets = true;
+  bool mask_list = true;  // 局部调色的蒙版列表浮窗开着（官方进局部调色时是开的）
 };
 RefineUiState& uiState() {
   static RefineUiState state;
@@ -945,8 +950,81 @@ struct LocalState {
   bool brush_on = false;  // 画笔设置显示着（选中画笔子项，或部位下拉选了画笔）
   std::vector<std::pair<int, int>> stroke_points;  // 正在画的一笔，位置是图像百分比的百倍（0..10000）
   std::string pending_region;  // 自定义页签点了画笔、渐变、取样：下一次在画布上拖动按它新建子项
+  bool whole = false;     // 蒙版列表里选的是“全图”（不选任何蒙版）
+  bool editing = false;   // “编辑蒙版”打开：右侧显示选中蒙版的子项编辑（部位、叠加方式、画笔、渐变位置）
+  std::set<int> collapsed;  // 蒙版列表里收起子项的蒙版
   QString signature;
 };
+
+// 蒙版列表（画布上的浮出面板）里每一行的数据：编号、种类（mask 蒙版、item 子项、edit “编辑蒙版”按钮行、whole 全图）、
+// 是否选中。冒烟测试按这几个角色找行。
+constexpr int kMaskRowId = Qt::UserRole;
+constexpr int kMaskRowKind = Qt::UserRole + 1;
+constexpr int kMaskRowSelected = Qt::UserRole + 2;
+
+// 蒙版列表的小图（官方 9.3.0 的样子；蒙版缩略图还没有渲染，先画底色）。图都画在 40×32 里，靠左。
+QPixmap maskListCanvas() {
+  QPixmap pixmap(80, 64);
+  pixmap.setDevicePixelRatio(2.0);
+  pixmap.fill(Qt::transparent);
+  return pixmap;
+}
+QIcon maskThumbIcon(bool selected) {
+  auto pixmap = maskListCanvas();
+  QPainter painter(&pixmap);
+  painter.fillRect(QRectF(0, 0, 32, 32), QColor(0x28, 0x29, 0x27));
+  if (selected) {
+    painter.setPen(QPen(QColor(0xff, 0xd5, 0x34), 1.0));
+    painter.drawRect(QRectF(0.5, 0.5, 31, 31));
+  }
+  painter.end();
+  return QIcon(pixmap);
+}
+QIcon wholeThumbIcon(const QImage& image) {
+  auto pixmap = maskListCanvas();
+  QPainter painter(&pixmap);
+  painter.setRenderHint(QPainter::SmoothPixmapTransform);
+  painter.fillRect(QRectF(0, 0, 32, 32), QColor(0x0d, 0x0d, 0x0d));
+  if (!image.isNull()) {
+    QSizeF size = image.size();
+    size.scale(30, 30, Qt::KeepAspectRatio);
+    painter.drawImage(QRectF((32 - size.width()) / 2, (32 - size.height()) / 2, size.width(), size.height()), image);
+  }
+  painter.setPen(QPen(QColor(0x5a, 0x5c, 0x60), 1.0));
+  painter.drawRect(QRectF(0.5, 0.5, 31, 31));
+  painter.end();
+  return QIcon(pixmap);
+}
+// 子项：左边一个“↳”折角，右边一块 24×24 的底（官方是部位类型的图标，图标文件还没有，只画底）。
+QIcon maskItemIcon() {
+  auto pixmap = maskListCanvas();
+  QPainter painter(&pixmap);
+  painter.setRenderHint(QPainter::Antialiasing);
+  painter.setPen(QPen(QColor(0xb4, 0xb6, 0xb8), 1.0));
+  painter.drawLine(QPointF(1.5, 6), QPointF(1.5, 11.5));
+  painter.drawLine(QPointF(1.5, 11.5), QPointF(6, 11.5));
+  painter.setPen(Qt::NoPen);
+  painter.setBrush(QColor(0x2d, 0x2f, 0x31));
+  painter.drawRect(QRectF(9, 4, 24, 24));
+  painter.end();
+  return QIcon(pixmap);
+}
+// “创建新蒙版”前面的浅灰圆加号。
+QIcon plusCircleIcon() {
+  QPixmap pixmap(76, 48);  // 圆 24 宽，右边空 14 和文字隔开
+  pixmap.setDevicePixelRatio(2.0);
+  pixmap.fill(Qt::transparent);
+  QPainter painter(&pixmap);
+  painter.setRenderHint(QPainter::Antialiasing);
+  painter.setPen(Qt::NoPen);
+  painter.setBrush(QColor(0xb5, 0xb5, 0xb7));
+  painter.drawEllipse(QRectF(0, 0, 24, 24));
+  painter.setPen(QPen(QColor(0x2a, 0x2c, 0x31), 1.6));
+  painter.drawLine(QPointF(12, 7), QPointF(12, 17));
+  painter.drawLine(QPointF(7, 12), QPointF(17, 12));
+  painter.end();
+  return QIcon(pixmap);
+}
 
 // 主体页签的“常用蒙版”（官方 9.3.0 的顺序）。名字来自 kernel/mask 的部位表；其余部位在蒙版列表的部位下拉里。
 constexpr const char* kCommonParts[] = {"person.all",       "clothes.all",     "person.skin.all", "person.face_skin",
@@ -1015,6 +1093,29 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
   }
   const auto state = std::make_shared<LocalState>();
   const auto rebuild = std::make_shared<std::function<void()>>();
+  // 蒙版列表：画布区上浮出的面板（官方 9.3.0），只在局部调色页、开关打开时显示（开关和显示见 modulePage）。
+  QPointer<PixCakeFloatingPanel> mask_panel;
+  if (canvas != nullptr && canvas->parentWidget() != nullptr) {
+    mask_panel = new PixCakeFloatingPanel(qtext("local.mask.list"), canvas->parentWidget());
+    mask_panel->setObjectName(QStringLiteral("refine-mask-panel"));
+    mask_panel->hide();
+  }
+  // 全图的缩略图跟着预览帧换（树每次重建都换新的，这里记着当前那棵）。
+  const auto current_tree = std::make_shared<QPointer<PixCakeMaskTree>>();
+  const auto current_fit = std::make_shared<std::function<void()>>();  // 画布区变大小时按新高度重算树高
+  const auto fitted = std::make_shared<std::atomic_bool>(false);
+  if (canvas != nullptr) {
+    canvas->onImageChanged([current_tree, view = QPointer<PixCakeImageView>(canvas)] {
+      const QPointer<PixCakeMaskTree> tree = *current_tree;
+      if (!tree || !view) return;
+      for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+        auto* row = tree->topLevelItem(i);
+        if (row->data(0, kMaskRowKind).toString() != QStringLiteral("whole")) continue;
+        const QSignalBlocker quiet(tree);
+        row->setIcon(0, wholeThumbIcon(view->image()));
+      }
+    });
+  }
   const auto binding_of = [](int mask, int item, const std::string& parameter) {
     return panels::SliderBinding{"color.local", local_instance_prefix(mask) + local_item_prefix(item) + parameter};
   };
@@ -1043,7 +1144,10 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
       delete entry;
     }
     const auto masks = actions->local_masks();
-    if (std::find(masks.begin(), masks.end(), state->mask) == masks.end()) {
+    if (state->whole) {
+      state->mask = -1;
+      state->item = -1;
+    } else if (std::find(masks.begin(), masks.end(), state->mask) == masks.end()) {
       state->mask = masks.empty() ? -1 : masks.front();
       state->item = -1;
     }
@@ -1133,6 +1237,7 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
               if (lone_region(mask) == part) {
                 state->mask = mask;
                 state->item = 0;
+                state->whole = false;
                 again();
                 return;
               }
@@ -1143,6 +1248,7 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
                                          {binding_of(fresh, 0, "region"), part}});
             state->mask = fresh;
             state->item = 0;
+            state->whole = false;
             again();
           });
         }
@@ -1162,8 +1268,10 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
               state->mask = fresh;
             }
             state->item = -1;
+            state->whole = false;
             state->pending_region = region;
             state->draw = true;
+            state->editing = true;  // 画笔设置、拖动开关在“编辑蒙版”里
             again();
           });
         }
@@ -1201,98 +1309,217 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
     area->addWidget(pages);
     const char* feather = panels::refine_local_feather_label();
     addDisabledSlider(body, area, panels::slider_spec(feather, panels::refine_local_binding(feather)), QString());
-    QObject::connect(create, &QPushButton::clicked, create, [=] {
+    // 新建空蒙版（右侧“创建蒙版”和蒙版列表的“创建新蒙版”）：没有子项，直接打开“编辑蒙版”去加。
+    const auto create_empty = [=] {
       const int fresh = fresh_mask();
       if (fresh < 0) return;
       actions->request_parameter(binding_of(fresh, 0, "region"), "all", true);
       state->mask = fresh;
       state->item = -1;
+      state->whole = false;
+      state->editing = true;
       again();
-    });
-    auto* list_title = text(qtext("local.mask.list"));
-    list_title->setObjectName(QStringLiteral("refine-local-list-title"));
-    area->addWidget(list_title);
-
-    // 蒙版列表。
-    auto* masks_list = new QListWidget(body);
-    masks_list->setObjectName(QStringLiteral("refine-local-masks"));
-    masks_list->setAccessibleName(qtext("local.mask.new"));
-    masks_list->setMaximumHeight(110);
-    for (const int mask : masks) {
-      // 名称是蒙版自己的文本参数；没有就显示“自定义-N”。双击改名。
-      const auto name = actions->parameter_value(binding_of(mask, 0, "name"));
-      auto* row = new QListWidgetItem(name ? qs(*name) : qtext("local.mask.name").arg(mask), masks_list);
-      row->setData(Qt::UserRole, mask);
-      row->setFlags(row->flags() | Qt::ItemIsEditable);
-      if (mask == state->mask) masks_list->setCurrentItem(row);
-    }
-    area->addWidget(masks_list);
-    auto* buttons = new QWidget(body);
-    auto* buttons_layout = new QHBoxLayout(buttons);
-    buttons_layout->setContentsMargins(0, 0, 0, 0);
-    auto* remove = action(qtext("local.mask.remove"), buttons, state->mask >= 0);
-    remove->setObjectName(QStringLiteral("refine-local-delete"));
-    buttons_layout->addWidget(remove);
-    area->addWidget(buttons);
-    QObject::connect(masks_list, &QListWidget::itemChanged, masks_list, [=](QListWidgetItem* row) {
-      const int mask = row->data(Qt::UserRole).toInt();
-      const std::string text = row->text().trimmed().toStdString();
-      // 不合格的名称（空、超过 20 个字符）还原成现在的名字；合格的提交成一步历史。
-      if (!text.empty() && validate_parameter_display_value("color.local", "m1:name", text)) {
-        if (actions->parameter_value(binding_of(mask, 0, "name")) != std::optional<std::string>(text)) {
-          actions->request_parameter(binding_of(mask, 0, "name"), text, true);
-        }
-      }
-      again();
-    });
-    QObject::connect(masks_list, &QListWidget::itemClicked, masks_list, [state, again](QListWidgetItem* row) {
-      state->mask = row->data(Qt::UserRole).toInt();
-      state->item = -1;
-      again();
-    });
-    QObject::connect(remove, &QPushButton::clicked, remove, [=] {
-      if (state->mask < 0) return;
-      actions->request_remove_local_mask(state->mask);
-      state->mask = -1;
-      state->item = -1;
-      again();
-    });
-    if (state->mask < 0) {
-      area->addWidget(disabledLabel(qtext("local.mask.none")));
-      add_adjustments();
-      state->signature = signature();
-      return;
-    }
-
-    // 选中蒙版的子项。
-    const auto items = items_of(state->mask);
+    };
+    QObject::connect(create, &QPushButton::clicked, create, create_empty);
+    const auto items = state->mask >= 0 ? items_of(state->mask) : std::vector<std::pair<int, std::string>>{};
     if (std::none_of(items.begin(), items.end(), [&](const auto& pair) { return pair.first == state->item; })) {
       // 自定义页签点了画笔、渐变、取样：不选已有子项，下一次拖动新建。
       state->item = items.empty() || !state->pending_region.empty() ? -1 : items.front().first;
     }
-    auto* items_list = new QListWidget(body);
-    items_list->setObjectName(QStringLiteral("refine-local-items"));
-    items_list->setAccessibleName(qtext("local.item.add"));
-    items_list->setMaximumHeight(110);
-    for (const auto& [item, region] : items) {
-      const auto how = item == 0 ? std::optional<std::string>("add")
-                                 : actions->parameter_value(binding_of(state->mask, item, "mode"));
-      const bool inverted = actions->parameter_value(binding_of(state->mask, item, "invert")) == std::optional<std::string>("on");
-      auto* row = new QListWidgetItem(
-          qtext("local.item.text").arg(region_label(region),
-                                       qtext(how == std::optional<std::string>("subtract") ? "local.item.mode.subtract"
-                                                                                           : "local.item.mode.add")) +
-              (inverted ? qtext("local.item.text.invert") : QString()),
-          items_list);
-      row->setData(Qt::UserRole, item);
-      if (item == state->item) items_list->setCurrentItem(row);
+    const auto item_text = [=](int mask, int item, const std::string& region) {
+      const auto how = item == 0 ? std::optional<std::string>("add") : actions->parameter_value(binding_of(mask, item, "mode"));
+      const bool inverted = actions->parameter_value(binding_of(mask, item, "invert")) == std::optional<std::string>("on");
+      return qtext("local.item.text")
+                 .arg(region_label(region), qtext(how == std::optional<std::string>("subtract") ? "local.item.mode.subtract"
+                                                                                                 : "local.item.mode.add")) +
+             (inverted ? qtext("local.item.text.invert") : QString());
+    };
+
+    // 蒙版列表（浮出面板）：创建新蒙版；每个蒙版一行（缩略图、名字，双击改名，右键改名或删除），展开是它的子项，选中的
+    // 蒙版下面是“编辑蒙版”；最后一行全图。选中的蒙版连同子项放在一块深色底上，缩略图描黄边（官方样子）。
+    if (mask_panel) {
+      auto* panel_body = mask_panel->body();
+      while (auto* entry = panel_body->takeAt(0)) {
+        if (auto* widget = entry->widget()) {
+          widget->hide();
+          widget->deleteLater();
+        }
+        delete entry;
+      }
+      auto* create_new = new QToolButton(mask_panel);
+      create_new->setObjectName(QStringLiteral("refine-mask-new"));
+      create_new->setText(qtext("local.mask.create-new"));
+      create_new->setIcon(plusCircleIcon());
+      create_new->setIconSize(QSize(38, 24));
+      create_new->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+      create_new->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+      QObject::connect(create_new, &QToolButton::clicked, create_new, create_empty);
+      panel_body->addWidget(create_new);
+      auto* tree = new PixCakeMaskTree;
+      tree->setObjectName(QStringLiteral("refine-mask-tree"));
+      tree->setAccessibleName(qtext("local.mask.list"));
+      tree->setContextMenuPolicy(Qt::CustomContextMenu);
+      tree->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);
+      const QColor group(0x18, 0x19, 0x1c);
+      const QColor picked(0x26, 0x28, 0x2c);
+      QPushButton* edit_button = nullptr;
+      QTreeWidgetItem* edit_row = nullptr;
+      for (const int mask : masks) {
+        const bool selected = mask == state->mask;
+        const auto name = actions->parameter_value(binding_of(mask, 0, "name"));
+        auto* row = new QTreeWidgetItem(tree);
+        row->setText(0, name ? qs(*name) : qtext("local.mask.name").arg(mask));
+        row->setData(0, kMaskRowId, mask);
+        row->setData(0, kMaskRowKind, QStringLiteral("mask"));
+        row->setData(0, kMaskRowSelected, selected);
+        row->setIcon(0, maskThumbIcon(selected));
+        row->setFlags(row->flags() | Qt::ItemIsEditable);
+        row->setSizeHint(0, QSize(0, 40));
+        if (selected) row->setBackground(0, group);
+        for (const auto& [item, region] : items_of(mask)) {
+          auto* child = new QTreeWidgetItem(row);
+          child->setText(0, item_text(mask, item, region));
+          child->setData(0, kMaskRowId, item);
+          child->setData(0, kMaskRowKind, QStringLiteral("item"));
+          child->setData(0, kMaskRowSelected, selected && item == state->item);
+          child->setIcon(0, maskItemIcon());
+          child->setSizeHint(0, QSize(0, 32));
+          if (selected) child->setBackground(0, selected && item == state->item ? picked : group);
+        }
+        if (selected) {
+          edit_row = new QTreeWidgetItem(row);
+          edit_row->setData(0, kMaskRowKind, QStringLiteral("edit"));
+          edit_row->setFlags(Qt::ItemIsEnabled);
+          edit_row->setSizeHint(0, QSize(0, 34));
+          edit_row->setBackground(0, group);
+        }
+        row->setExpanded(state->collapsed.count(mask) == 0);
+      }
+      auto* whole = new QTreeWidgetItem(tree);
+      whole->setText(0, qtext("local.mask.whole"));
+      whole->setData(0, kMaskRowId, -1);
+      whole->setData(0, kMaskRowKind, QStringLiteral("whole"));
+      whole->setData(0, kMaskRowSelected, state->mask < 0);
+      whole->setIcon(0, wholeThumbIcon(canvas != nullptr ? canvas->image() : QImage()));
+      whole->setSizeHint(0, QSize(0, 40));
+      if (edit_row != nullptr) {
+        edit_row->setFirstColumnSpanned(true);
+        edit_button = new QPushButton(qtext("local.mask.edit"), tree);
+        edit_button->setObjectName(QStringLiteral("refine-mask-edit"));
+        edit_button->setCheckable(true);
+        edit_button->setChecked(state->editing);
+        tree->setItemWidget(edit_row, 0, edit_button);
+        // 行高取按钮自己要的高度（树按两者较大的排，算总高时要一致）。
+        edit_button->ensurePolished();
+        edit_row->setSizeHint(0, QSize(0, std::max(34, edit_button->sizeHint().height())));
+        QObject::connect(edit_button, &QPushButton::toggled, edit_button, [state, again](bool on) {
+          state->editing = on;
+          if (!on) state->draw = false;
+          again();
+        });
+      }
+      auto* tree_box = new QWidget(mask_panel);  // 树两边、下边留 6（官方的内边距）
+      auto* tree_layout = new QVBoxLayout(tree_box);
+      tree_layout->setContentsMargins(6, 0, 6, 6);
+      tree_layout->addWidget(tree);
+      panel_body->addWidget(tree_box);
+      // 树的高度按内容；画布区放不下时（面板头和“创建新蒙版”约 110）才出滚动条。画布区还没排好版时不限。
+      const auto fit = [tree = QPointer<PixCakeMaskTree>(tree), panel = mask_panel] {
+        if (!tree || !panel) return;
+        const int room = panel->room() - 110;
+        const int wanted = tree->contentHeight() + 2 * tree->frameWidth() + 2;
+        tree->setFixedHeight(room >= 80 ? std::min(wanted, room) : wanted);
+        panel->refit();
+      };
+      fit();
+      if (!fitted->exchange(true)) {
+        mask_panel->onParentResized([current_fit] {
+          if (*current_fit) (*current_fit)();
+        });
+      }
+      *current_fit = fit;
+      QObject::connect(tree, &QTreeWidget::itemExpanded, tree, [state, fit](QTreeWidgetItem* row) {
+        state->collapsed.erase(row->data(0, kMaskRowId).toInt());
+        fit();
+      });
+      QObject::connect(tree, &QTreeWidget::itemCollapsed, tree, [state, fit](QTreeWidgetItem* row) {
+        state->collapsed.insert(row->data(0, kMaskRowId).toInt());
+        fit();
+      });
+      QObject::connect(tree, &QTreeWidget::itemClicked, tree, [state, again](QTreeWidgetItem* row, int) {
+        const QString kind = row->data(0, kMaskRowKind).toString();
+        if (kind == QStringLiteral("mask")) {
+          if (state->mask == row->data(0, kMaskRowId).toInt() && !state->whole) return;
+          state->mask = row->data(0, kMaskRowId).toInt();
+          state->item = -1;
+        } else if (kind == QStringLiteral("item") && row->parent() != nullptr) {
+          state->mask = row->parent()->data(0, kMaskRowId).toInt();
+          state->item = row->data(0, kMaskRowId).toInt();
+          state->pending_region.clear();
+        } else if (kind == QStringLiteral("whole")) {
+          state->whole = true;
+          state->draw = false;
+          again();
+          return;
+        } else {
+          return;
+        }
+        state->whole = false;
+        again();
+      });
+      QObject::connect(tree, &QTreeWidget::itemChanged, tree, [=](QTreeWidgetItem* row, int) {
+        if (row->data(0, kMaskRowKind).toString() != QStringLiteral("mask")) return;
+        const int mask = row->data(0, kMaskRowId).toInt();
+        const std::string text = row->text(0).trimmed().toStdString();
+        // 不合格的名称（空、超过 20 个字符）还原成现在的名字；合格的提交成一步历史。
+        if (!text.empty() && validate_parameter_display_value("color.local", "m1:name", text)) {
+          if (actions->parameter_value(binding_of(mask, 0, "name")) != std::optional<std::string>(text)) {
+            actions->request_parameter(binding_of(mask, 0, "name"), text, true);
+          }
+        }
+        QTimer::singleShot(0, tree, again);  // 改名的编辑器还在这棵树上，等它关掉再重建
+      });
+      QObject::connect(tree, &QTreeWidget::customContextMenuRequested, tree,
+                       [=, tree = QPointer<PixCakeMaskTree>(tree)](const QPoint& at) {
+        if (!tree) return;
+        auto* row = tree->itemAt(at);
+        if (row == nullptr || row->data(0, kMaskRowKind).toString() != QStringLiteral("mask")) return;
+        const int mask = row->data(0, kMaskRowId).toInt();
+        QMenu menu(tree);
+        auto* rename = menu.addAction(qtext("local.mask.rename"));
+        auto* remove = menu.addAction(qtext("local.mask.remove"));
+        auto* chosen = menu.exec(tree->viewport()->mapToGlobal(at));
+        if (chosen == rename) {
+          tree->editItem(row, 0);
+        } else if (chosen == remove) {
+          actions->request_remove_local_mask(mask);
+          if (state->mask == mask) {
+            state->mask = -1;
+            state->item = -1;
+          }
+          again();
+        }
+      });
+      *current_tree = tree;
     }
-    area->addWidget(items_list);
-    QObject::connect(items_list, &QListWidget::itemClicked, items_list, [state, again](QListWidgetItem* row) {
-      state->item = row->data(Qt::UserRole).toInt();
-      state->pending_region.clear();
-      again();
-    });
+
+    // 编辑蒙版（右侧）：选中蒙版、“编辑蒙版”打开时才有。官方点“编辑蒙版”后的界面还没看到，这里放的是本工程已有的
+    // 子项编辑：部位和叠加方式、在画布上拖动、添加/删除子项、删除蒙版、反相、画笔设置、渐变和范围的位置滑杆。
+    if (state->mask < 0 || !state->editing) {
+      add_adjustments();
+      state->signature = signature();
+      return;
+    }
+    auto* edit = new QFrame(body);
+    edit->setObjectName(QStringLiteral("refine-local-edit"));
+    auto* edit_layout = new QVBoxLayout(edit);
+    edit_layout->setContentsMargins(12, 8, 12, 12);
+    edit_layout->setSpacing(8);
+    auto* edit_title = text(qtext("local.mask.edit"));
+    edit_title->setObjectName(QStringLiteral("refine-local-edit-title"));
+    edit_layout->addWidget(edit_title);
+    body_layout->addWidget(edit);
+    area = edit_layout;
     auto* add_row = new QWidget(body);
     auto* add_layout = new QHBoxLayout(add_row);
     add_layout->setContentsMargins(0, 0, 0, 0);
@@ -1326,6 +1553,16 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
     item_buttons_layout->addWidget(add_item);
     item_buttons_layout->addWidget(remove_item);
     area->addWidget(item_buttons);
+    auto* remove = action(qtext("local.mask.remove"), edit, true);
+    remove->setObjectName(QStringLiteral("refine-local-delete"));
+    area->addWidget(remove);
+    QObject::connect(remove, &QPushButton::clicked, remove, [=] {
+      if (state->mask < 0) return;
+      actions->request_remove_local_mask(state->mask);
+      state->mask = -1;
+      state->item = -1;
+      again();
+    });
     QObject::connect(add_item, &QPushButton::clicked, add_item, [=] {
       int free_item = -1;
       for (int item = 0; item <= kMaxLocalItems && free_item < 0; ++item) {
@@ -1434,7 +1671,7 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
         if (row.kind != panels::PanelRowKind::Slider || row.binding->parameter_id.rfind(item_prefix, 0) != 0) continue;
         if (item_region == "linear" && row.binding->parameter_id == "gradient_ratio") continue;  // 椭圆比例只对径向
         const auto bound = binding_of(state->mask, state->item, row.binding->parameter_id);
-        addDisabledSlider(modules, body_layout, panels::slider_spec(row.label, bound),
+        addDisabledSlider(edit, edit_layout, panels::slider_spec(row.label, bound),
                           qs("refine-local-item-" + row.binding->parameter_id), actions, bound, refresh);
       }
     }
@@ -1865,6 +2102,23 @@ void addModuleContent(const std::string& id, QWidget* content, QVBoxLayout* layo
   }
 }
 
+// 控件显示或藏起来时回调（模块页切换时，蒙版列表浮窗跟着显示、藏起来）。
+class ShowHideHook final : public QObject {
+ public:
+  ShowHideHook(QObject* parent, std::function<void()> run) : QObject(parent), run_(std::move(run)) {}
+
+ protected:
+  bool eventFilter(QObject* watched, QEvent* event) override {
+    // 模块切换只让页面相对父控件显示/藏起来（ShowToParent/HideToParent），窗口本身没显示时收不到 Show/Hide。
+    const auto type = event->type();
+    if (type == QEvent::ShowToParent || type == QEvent::HideToParent || type == QEvent::Show || type == QEvent::Hide) run_();
+    return QObject::eventFilter(watched, event);
+  }
+
+ private:
+  std::function<void()> run_;
+};
+
 // 一个模块的面板页：顶部标题（色彩调节页右侧还有“大师级色彩”），下面是可滚动的内容。
 QWidget* modulePage(const CopyItem& entry, PageActions* actions, std::vector<PixCakeHistogram*>* histograms,
                     PixCakeImageView* canvas) {
@@ -1879,6 +2133,7 @@ QWidget* modulePage(const CopyItem& entry, PageActions* actions, std::vector<Pix
   header->setFixedHeight(PixCakeTheme::kToolbarHeight - 12);
   auto* header_row = new QHBoxLayout(header);
   header_row->setContentsMargins(16, 0, 12, 0);
+  QToolButton* local_toggle = nullptr;
   QString title = moduleDescription(entry.id.c_str());
   if (title.isEmpty()) title = qs(entry.text);
   auto* name = text(title);
@@ -1899,11 +2154,16 @@ QWidget* modulePage(const CopyItem& entry, PageActions* actions, std::vector<Pix
     scan->setEnabled(false);
     header_row->addWidget(scan);
   } else if (entry.id == "local") {
-    // 显示蒙版叠加（还没有接，图标文件也还没有）。
-    auto* overlay = pendingIcon(header, 28, qtext("local.overlay"));
-    overlay->setToolTip(qtext("local.overlay"));
-    overlay->setEnabled(false);
-    header_row->addWidget(overlay);
+    // 蒙版列表浮窗的开关（官方是勾选型按钮，浮窗开着时勾上；图标文件还没有，用灰块）。
+    local_toggle = new QToolButton(header);
+    local_toggle->setObjectName(QStringLiteral("refine-local-mask-toggle"));
+    local_toggle->setAccessibleName(qtext("local.mask.list"));
+    local_toggle->setToolTip(qtext("local.mask.list"));
+    local_toggle->setCheckable(true);
+    local_toggle->setChecked(uiState().mask_list);
+    local_toggle->setEnabled(canvas != nullptr);
+    local_toggle->setFixedSize(24, 24);  // 灰块由样式表画，勾上时描黄边
+    header_row->addWidget(local_toggle);
   }
   column->addWidget(header);
   // 色彩调节、局部调色：直方图卡片和“AI 校准”“多图色彩统一”固定在标题下面，只有下面的内容滚动（官方 9.3.0）。
@@ -1918,6 +2178,28 @@ QWidget* modulePage(const CopyItem& entry, PageActions* actions, std::vector<Pix
   layout->setContentsMargins(0, 0, 0, 0);
   layout->setSpacing(0);
   addModuleContent(entry.id, content, layout, actions, canvas);
+  // 蒙版列表浮窗：这一页显示着、开关开着才显示；点浮窗的关闭等于关掉开关。
+  auto* mask_panel = canvas != nullptr && canvas->parentWidget() != nullptr
+                         ? dynamic_cast<PixCakeFloatingPanel*>(canvas->parentWidget()->findChild<QFrame*>(
+                               QStringLiteral("refine-mask-panel"), Qt::FindDirectChildrenOnly))
+                         : nullptr;
+  if (local_toggle != nullptr && mask_panel != nullptr) {
+    const auto sync = [page = QPointer<QWidget>(page), panel = QPointer<PixCakeFloatingPanel>(mask_panel)] {
+      if (!page || !panel) return;
+      const bool shown = page->isVisibleTo(page->window()) && uiState().mask_list;
+      panel->setVisible(shown);
+      if (shown) panel->refit();
+    };
+    QObject::connect(local_toggle, &QToolButton::toggled, local_toggle, [sync](bool on) {
+      uiState().mask_list = on;
+      sync();
+    });
+    mask_panel->onClosed([toggle = QPointer<QToolButton>(local_toggle)] {
+      uiState().mask_list = false;
+      if (toggle) toggle->setChecked(false);
+    });
+    page->installEventFilter(new ShowHideHook(page, sync));
+  }
   layout->addStretch(1);
   scroll->setWidget(content);
   column->addWidget(scroll, 1);
@@ -2071,14 +2353,10 @@ QWidget* buildRefinePage(const PageContext& context) {
     button->setObjectName(QStringLiteral("refine-rail-") + qs(entry.id));
     button->setProperty("rail", true);
     button->setCheckable(true);
-    button->setText(qs(entry.text));
     button->setAccessibleName(qs(entry.text));
     const QString description = moduleDescription(entry.id.c_str());
-    if (!description.isEmpty()) {
-      button->setAccessibleDescription(description);
-      button->setToolTip(description);
-    }
-    // 图标文件放在 assets/refine-modules/<编号>.svg；还没有时只显示文字（官方“图标和文本”模式也带文字）。
+    if (!description.isEmpty()) button->setAccessibleDescription(description);
+    // 图标在 assets/refine-modules/<编号>.svg。没有文件就用 pending-icon，名字只在悬停时出现。
     const QString asset = QStringLiteral("refine-modules/") + qs(entry.id) + QStringLiteral(".svg");
     if (!shellAssetFile(asset).isEmpty()) {
       applyAssetIcon(button, asset, 20);

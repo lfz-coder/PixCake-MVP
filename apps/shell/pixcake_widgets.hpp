@@ -16,6 +16,8 @@
 #include <QPixmap>
 #include <QPushButton>
 #include <QToolButton>
+#include <QTreeWidget>
+#include <QResizeEvent>
 #include <QLinearGradient>
 #include <QStringList>
 #include <QSvgRenderer>
@@ -28,6 +30,7 @@
 #include "pixcake/ui/shell/page_copy.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -191,6 +194,7 @@ inline QString shellAssetFile(const QString& relative) {
 }
 
 // 色彩调节页顶部的 RGB 直方图（官方样式）：深色渐变底，三个通道各画一块半透明填充、叠加处相加变亮，再描一条细线。
+// 高度按 log(1+计数) 画。官方也是这样：背景往往挤在一个色阶里，线性高度会只剩三根尖峰，对数才能看到从暗部爬到高光的那条坡。
 // 计数来自 ui/panels::rgb_histogram；没有数据时只画底。Qt 控件画不出这种图，用 QPainter 自绘。
 class PixCakeHistogram final : public QFrame {
  public:
@@ -218,11 +222,12 @@ class PixCakeHistogram final : public QFrame {
     const qreal span = width();
     const qreal bottom = height();
     const qreal tall = height() - 2;
+    const qreal peak = std::log1p(static_cast<qreal>(histogram_.peak));
     const auto path_of = [&](const std::array<std::uint32_t, 256>& bins, bool closed) {
       QPainterPath path;
       path.moveTo(0, bottom);
       for (int i = 0; i < 256; ++i) {
-        const qreal y = bottom - tall * bins[static_cast<std::size_t>(i)] / histogram_.peak;
+        const qreal y = bottom - tall * std::log1p(static_cast<qreal>(bins[static_cast<std::size_t>(i)])) / peak;
         path.lineTo(span * i / 255.0, y);
       }
       path.lineTo(span, bottom);
@@ -352,6 +357,171 @@ struct CanvasHooks {
   std::function<double()> cursor_diameter;  // 画笔光标圈的直径（控件里的点）；<= 0 或没有就不画
 };
 
+// 画布上浮出的小面板（官方 9.3.0 局部调色的“蒙版列表”）：顶部居中一条拖动手柄，标题和关闭按钮，一条分隔线，下面
+// 是内容。默认贴在父控件（画布区）右上角；按住标题栏可以拖到别处，父控件变大小时留在里面。
+class PixCakeFloatingPanel final : public QFrame {
+ public:
+  PixCakeFloatingPanel(const QString& title, QWidget* parent) : QFrame(parent) {
+    setObjectName(QStringLiteral("floating-panel"));
+    setProperty("floating-panel", true);  // 换了对象名也按这个属性上样式
+    setAttribute(Qt::WA_StyledBackground);
+    setAccessibleName(title);
+    setFixedWidth(200);
+    auto* column = new QVBoxLayout(this);
+    column->setContentsMargins(1, 1, 1, 1);
+    column->setSpacing(0);
+    header_ = new QWidget(this);
+    header_->setObjectName(QStringLiteral("floating-panel-header"));
+    auto* header = new QVBoxLayout(header_);
+    header->setContentsMargins(16, 5, 10, 8);
+    header->setSpacing(4);
+    auto* handle = new QFrame(header_);
+    handle->setObjectName(QStringLiteral("floating-panel-handle"));
+    handle->setFixedSize(24, 4);
+    header->addWidget(handle, 0, Qt::AlignHCenter);
+    auto* title_row = new QHBoxLayout;
+    title_row->setContentsMargins(0, 0, 0, 0);
+    auto* name = new QLabel(title, header_);
+    name->setObjectName(QStringLiteral("floating-panel-title"));
+    title_row->addWidget(name, 1);
+    auto* close = new QToolButton(header_);
+    close->setObjectName(QStringLiteral("floating-panel-close"));
+    close->setAccessibleName(copyText("widget.close"));
+    close->setIcon(closeIcon());
+    close->setIconSize(QSize(14, 14));
+    close->setAutoRaise(true);
+    title_row->addWidget(close);
+    header->addLayout(title_row);
+    column->addWidget(header_);
+    auto* rule = new QFrame(this);
+    rule->setObjectName(QStringLiteral("floating-panel-rule"));
+    rule->setFixedHeight(1);
+    column->addWidget(rule);
+    body_ = new QVBoxLayout;
+    body_->setContentsMargins(0, 0, 0, 0);
+    body_->setSpacing(0);
+    column->addLayout(body_);
+    QObject::connect(close, &QToolButton::clicked, this, [this] {
+      hide();
+      for (const auto& closed : closed_) closed();
+    });
+    header_->installEventFilter(this);
+    if (parent != nullptr) parent->installEventFilter(this);
+  }
+
+  QVBoxLayout* body() { return body_; }
+  // 点了关闭按钮（面板已经藏起来）。
+  void onClosed(std::function<void()> callback) { closed_.push_back(std::move(callback)); }
+  // 内容变了：按内容重算高度，放回原位。
+  void refit() {
+    adjustSize();
+    place();
+  }
+  // 父控件（画布区）变大小时先回调这个（内容按新的可用高度重算），再放回原位。
+  void onParentResized(std::function<void()> callback) { parent_resized_.push_back(std::move(callback)); }
+  // 面板在父控件里最多能有多高（上下各留一点）。
+  int room() const { return parentWidget() != nullptr ? parentWidget()->height() - top_ - 8 : 0; }
+
+ protected:
+  bool eventFilter(QObject* watched, QEvent* event) override {
+    if (watched == parentWidget() && event->type() == QEvent::Resize) {
+      for (const auto& resized : parent_resized_) resized();
+      place();
+    }
+    if (watched == header_) {
+      auto* mouse = static_cast<QMouseEvent*>(event);
+      if (event->type() == QEvent::MouseButtonPress && mouse->button() == Qt::LeftButton) {
+        grab_ = mouse->globalPosition().toPoint() - pos();
+        dragging_ = true;
+        return true;
+      }
+      if (event->type() == QEvent::MouseMove && dragging_ && parentWidget() != nullptr) {
+        const QPoint at = mouse->globalPosition().toPoint() - grab_;
+        right_ = parentWidget()->width() - width() - at.x();
+        top_ = at.y();
+        place();
+        return true;
+      }
+      if (event->type() == QEvent::MouseButtonRelease) dragging_ = false;
+    }
+    return QFrame::eventFilter(watched, event);
+  }
+
+ private:
+  // 位置记成离父控件右边、上边的距离，父控件变大小时贴着右上角走。
+  void place() {
+    auto* parent = parentWidget();
+    if (parent == nullptr) return;
+    const int x = std::clamp(parent->width() - width() - right_, 0, std::max(0, parent->width() - width()));
+    const int y = std::clamp(top_, 0, std::max(0, parent->height() - height()));
+    move(x, y);
+    raise();
+  }
+  static QIcon closeIcon() {
+    const qreal ratio = 2.0;
+    QPixmap pixmap(qRound(14 * ratio), qRound(14 * ratio));
+    pixmap.setDevicePixelRatio(ratio);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(QPen(QColor(0xc8, 0xc8, 0xc8), 1.3));
+    painter.drawLine(QPointF(1.5, 1.5), QPointF(12.5, 12.5));
+    painter.drawLine(QPointF(12.5, 1.5), QPointF(1.5, 12.5));
+    painter.end();
+    return QIcon(pixmap);
+  }
+
+  QWidget* header_ = nullptr;
+  QVBoxLayout* body_ = nullptr;
+  std::vector<std::function<void()>> closed_;
+  std::vector<std::function<void()>> parent_resized_;
+  QPoint grab_;
+  bool dragging_ = false;
+  int right_ = 2;
+  int top_ = 2;
+};
+
+// 官方蒙版列表的树：蒙版一行（左边小三角收起/展开子项），子项缩进在下面。QTreeWidget 自带的分支箭头和官方不一样，
+// 这里只换掉分支的画法，用和折叠分组同一个小三角。
+class PixCakeMaskTree final : public QTreeWidget {
+ public:
+  explicit PixCakeMaskTree(QWidget* parent = nullptr) : QTreeWidget(parent) {
+    setHeaderHidden(true);
+    setIndentation(12);
+    setRootIsDecorated(true);
+    setExpandsOnDoubleClick(false);  // 双击是改名
+    setSelectionMode(QAbstractItemView::NoSelection);
+    setFocusPolicy(Qt::ClickFocus);
+    setUniformRowHeights(false);
+    setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    setFrameShape(QFrame::NoFrame);
+    setIconSize(QSize(40, 32));
+  }
+  // 所有看得见的行高之和（行高由每行的 sizeHint 给定）。
+  int contentHeight() const {
+    int total = 0;
+    for (QTreeWidgetItemIterator it(const_cast<PixCakeMaskTree*>(this)); *it != nullptr; ++it) {
+      const QTreeWidgetItem* item = *it;
+      bool shown = !item->isHidden();
+      for (auto* up = item->parent(); up != nullptr && shown; up = up->parent()) shown = up->isExpanded();
+      if (shown) total += std::max(0, item->sizeHint(0).height());
+    }
+    return total;
+  }
+
+ protected:
+  void drawBranches(QPainter* painter, const QRect& rect, const QModelIndex& index) const override {
+    const auto* item = itemFromIndex(index);
+    if (item == nullptr) return;
+    // 行的底色（选中蒙版那一块深色底）也铺到三角这一格，和整行连成一块。
+    if (const QBrush back = item->background(0); back.style() != Qt::NoBrush) painter->fillRect(rect, back);
+    if (item->childCount() == 0) return;
+    const QPixmap triangle = PixCakeFoldSection::triangleIcon(item->isExpanded()).pixmap(QSize(8, 8));
+    const QRect area(rect.right() - indentation() + 1, rect.top(), indentation(), rect.height());
+    painter->drawPixmap(area.left() + (area.width() - 8) / 2, area.top() + (area.height() - 8) / 2, triangle);
+  }
+};
+
 // The refine canvas: shows the latest preview frame fitted into the widget
 // (aspect kept, never enlarged past 1:1 device pixels), or a status line.
 class PixCakeImageView final : public QFrame {
@@ -367,7 +537,10 @@ class PixCakeImageView final : public QFrame {
     image_ = std::move(image);
     status_.clear();
     update();
+    for (const auto& changed : image_changed_) changed();
   }
+  // 换了一帧时回调（蒙版列表“全图”的缩略图跟着换）。
+  void onImageChanged(std::function<void()> callback) { image_changed_.push_back(std::move(callback)); }
   void setStatus(QString status) {
     status_ = std::move(status);
     update();
@@ -486,6 +659,7 @@ class PixCakeImageView final : public QFrame {
   QPointF hover_;
   bool hovering_ = false;
   std::vector<std::function<void(std::optional<QColor>)>> hover_pixel_;
+  std::vector<std::function<void()>> image_changed_;
 };
 
 inline QPixmap loadAssetPixmap(const QString& relative, int size) {

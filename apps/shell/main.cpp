@@ -200,6 +200,8 @@ int smoke(QWidget& window, Page first_page) {
     // Development aid: every module page with all its sections open, full height.
     if (const char* shot = std::getenv("PIXCAKE_SMOKE_SCREENSHOT"); shot != nullptr && *shot != '\0') {
       window.resize(1386, 800);
+      QCoreApplication::processEvents();
+      window.grab().save(QString::fromLocal8Bit(shot));
       for (auto* rail : window.findChildren<QToolButton*>()) {
         if (!rail->objectName().startsWith(QStringLiteral("refine-rail-"))) continue;
         rail->click();
@@ -368,6 +370,31 @@ T* visibleChild(QWidget& window, const char* name) {
     if (candidate->isVisibleTo(&window)) found = candidate;
   }
   return found;
+}
+
+// 局部调色的蒙版列表浮窗（画布上）。行的角色见 refine_page.cpp：Qt::UserRole+1 种类（mask/item/edit/whole），
+// Qt::UserRole+2 是否选中。
+QTreeWidget* mask_tree(QWidget& window) { return visibleChild<QTreeWidget>(window, "refine-mask-tree"); }
+std::vector<QTreeWidgetItem*> mask_rows(QWidget& window) {
+  std::vector<QTreeWidgetItem*> rows;
+  if (auto* tree = mask_tree(window)) {
+    for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+      if (tree->topLevelItem(i)->data(0, Qt::UserRole + 1).toString() == QStringLiteral("mask")) rows.push_back(tree->topLevelItem(i));
+    }
+  }
+  return rows;
+}
+// 选中蒙版的子项行的文字。
+std::optional<QStringList> selected_mask_items(QWidget& window) {
+  for (auto* row : mask_rows(window)) {
+    if (!row->data(0, Qt::UserRole + 2).toBool()) continue;
+    QStringList texts;
+    for (int i = 0; i < row->childCount(); ++i) {
+      if (row->child(i)->data(0, Qt::UserRole + 1).toString() == QStringLiteral("item")) texts << row->child(i)->text(0);
+    }
+    return texts;
+  }
+  return std::nullopt;
 }
 
 // 精修右侧图标栏点开一个模块（面板一次只显示一个模块，别的模块的控件不可见）。
@@ -1523,6 +1550,7 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
       qCritical("local mask panel missing or not empty");
       return 8;
     }
+    screenshot(window, "local-mask-list-empty");
     create->click();
     if (controller.local_masks() != std::vector<int>{1}) {
       qCritical("creating a mask did not add instance 1");
@@ -1530,27 +1558,30 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
     }
     // Rename: a valid name is committed as a step of its own; an empty or too long one goes back to the old name.
     {
-      auto* masks_list = visibleChild<QListWidget>(window, "refine-local-masks");
-      if (masks_list == nullptr || masks_list->count() != 1) {
-        qCritical("the mask list should show the new mask");
+      auto masks = mask_rows(window);
+      if (masks.size() != 1 ||
+          visibleChild<QPushButton>(window, "refine-mask-edit") == nullptr) {
+        qCritical("the floating mask list should show the new mask with its edit button");
         return 8;
       }
       const auto steps = controller.history().size();
-      masks_list->item(0)->setText(QStringLiteral("test-name"));
+      masks.front()->setText(0, QStringLiteral("test-name"));
+      QCoreApplication::processEvents();
       if (controller.parameter_value({"color.local", "m1:name"}) != std::optional<std::string>("test-name") ||
           controller.history().size() != steps + 1) {
         qCritical("renaming the mask did not commit one step");
         return 8;
       }
-      masks_list = visibleChild<QListWidget>(window, "refine-local-masks");
-      if (masks_list == nullptr || masks_list->item(0)->text() != QStringLiteral("test-name")) {
+      masks = mask_rows(window);
+      if (masks.size() != 1 || masks.front()->text(0) != QStringLiteral("test-name")) {
         qCritical("the renamed mask is not shown");
         return 8;
       }
-      masks_list->item(0)->setText(QString(21, QLatin1Char('x')));
-      masks_list = visibleChild<QListWidget>(window, "refine-local-masks");
+      masks.front()->setText(0, QString(21, QLatin1Char('x')));
+      QCoreApplication::processEvents();
+      masks = mask_rows(window);
       if (controller.parameter_value({"color.local", "m1:name"}) != std::optional<std::string>("test-name") ||
-          controller.history().size() != steps + 1 || masks_list->item(0)->text() != QStringLiteral("test-name")) {
+          controller.history().size() != steps + 1 || masks.size() != 1 || masks.front()->text(0) != QStringLiteral("test-name")) {
         qCritical("a too long name should be put back");
         return 8;
       }
@@ -1590,6 +1621,7 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
       qCritical("linear item: red whole %.1f, linear %.1f, before %.1f", whole_red, linear_red, red_before);
       return 8;
     }
+    screenshot(window, "local-mask-list");
     if (!add_item("radial", "subtract")) {
       qCritical("adding the radial subtract item failed");
       return 8;
@@ -1599,9 +1631,9 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
       qCritical("subtracting a radial item changed nothing: %.2f -> %.2f", linear_red, cut_red);
       return 8;
     }
-    auto* items = visibleChild<QListWidget>(window, "refine-local-items");
+    auto items = selected_mask_items(window);
     auto* drop = visibleChild<QPushButton>(window, "refine-local-item-remove");
-    if (items == nullptr || items->count() != 2 || drop == nullptr || !drop->isEnabled()) {
+    if (!items || items->size() != 2 || drop == nullptr || !drop->isEnabled()) {
       qCritical("the item list should show two items");
       return 8;
     }
@@ -1706,8 +1738,8 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
       qCritical("dragging the other way should flip the angle, got %d", number("gradient_angle"));
       return 8;
     }
-    auto* items = visibleChild<QListWidget>(window, "refine-local-items");
-    if (items == nullptr || items->count() != 1) {
+    auto items = selected_mask_items(window);
+    if (!items || items->size() != 1) {
       qCritical("a second drag should edit the item, not add one");
       return 8;
     }
@@ -1770,8 +1802,8 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
         return 8;
       }
     }
-    items = visibleChild<QListWidget>(window, "refine-local-items");
-    if (items == nullptr || items->count() != 1 || visibleChild<QSlider>(window, "refine-local-item-range_adjust") == nullptr) {
+    items = selected_mask_items(window);
+    if (!items || items->size() != 1 || visibleChild<QSlider>(window, "refine-local-item-range_adjust") == nullptr) {
       qCritical("the colour range item or its adjust slider is missing");
       return 8;
     }
@@ -1807,8 +1839,8 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
         qCritical("inverting the item did not commit one step");
         return 8;
       }
-      items = visibleChild<QListWidget>(window, "refine-local-items");
-      if (items == nullptr || items->count() != 1 || !items->item(0)->text().contains(QStringLiteral("反相"))) {
+      items = selected_mask_items(window);
+      if (!items || items->size() != 1 || !items->front().contains(QStringLiteral("反相"))) {
         qCritical("the inverted item is not marked in the list");
         return 8;
       }
@@ -1867,9 +1899,9 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
       qCritical("no frame after the second brush stroke");
       return 8;
     }
-    items = visibleChild<QListWidget>(window, "refine-local-items");
-    if (!pixcake::mask::decode_brush_strokes(text_of("strokes"), painted) || painted.size() != 2 || items == nullptr ||
-        items->count() != 1) {
+    items = selected_mask_items(window);
+    if (!pixcake::mask::decode_brush_strokes(text_of("strokes"), painted) || painted.size() != 2 || !items ||
+        items->size() != 1) {
       qCritical("the second stroke should extend the same item (%zu strokes)", painted.size());
       return 8;
     }
