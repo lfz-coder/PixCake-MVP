@@ -19,6 +19,7 @@ add_executable(pixcake_app_shell
   sync_dialog.cpp
   preset_dialog.cpp
   creative_page.cpp
+  guide_line.hpp
   pixcake_widgets.hpp
 )
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/login-hero.png

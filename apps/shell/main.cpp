@@ -20,6 +20,7 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QShortcut>
+#include <QKeySequence>
 #include <set>
 #include <QSpinBox>
 #include <QToolButton>
@@ -1321,12 +1322,107 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
     qCritical("no preview frame: %s", qPrintable(window.controller().preview_view().status));
     return 8;
   }
-  const auto* view =
-      dynamic_cast<const pixcake::shell::PixCakeImageView*>(window.findChild<QFrame*>(QStringLiteral("refine-canvas-image")));
+  auto* view =
+      dynamic_cast<pixcake::shell::PixCakeImageView*>(window.findChild<QFrame*>(QStringLiteral("refine-canvas-image")));
   const auto* chart =
       dynamic_cast<const pixcake::shell::PixCakeHistogram*>(window.findChild<QFrame*>(QStringLiteral("refine-histogram")));
   if (view == nullptr || view->image().isNull() || chart == nullptr || chart->histogram().peak == 0) {
     qCritical("canvas or histogram is empty");
+    return 8;
+  }
+  // Reference lines are a display overlay: the toolbar opens a three-item menu,
+  // repeated lines can overlap, and the canvas owns selection/deletion gestures.
+  QFrame* guide_tool = nullptr;
+  const QString guide_label = QString::fromStdString(pixcake::ui::shell::page_item("refine-tools", "guides").text);
+  for (auto* tool : window.findChildren<QFrame*>(QStringLiteral("workspace-tool-button"))) {
+    if (tool->accessibleName() == guide_label) guide_tool = tool;
+  }
+  if (guide_tool == nullptr) {
+    qCritical("reference-line toolbar tool is missing");
+    return 8;
+  }
+  for (const auto* shortcut : {"shortcut-guide-horizontal", "shortcut-guide-vertical", "shortcut-guide-toggle"}) {
+    if (window.findChild<QShortcut*>(QString::fromLatin1(shortcut)) == nullptr) {
+      qCritical("reference-line shortcut is missing: %s", shortcut);
+      return 8;
+    }
+  }
+  bool guide_menu_ok = false;
+  QTimer::singleShot(0, [&guide_menu_ok] {
+    auto* popup = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+    if (popup == nullptr || popup->actions().size() != 4) return;
+    const auto actions = popup->actions();
+    const QString horizontal = QString::fromStdString(pixcake::ui::shell::page_text("guides.create-horizontal"));
+    const QString vertical = QString::fromStdString(pixcake::ui::shell::page_text("guides.create-vertical"));
+    const QString hide = QString::fromStdString(pixcake::ui::shell::page_text("guides.hide"));
+    const auto native_key = [](const char* id) {
+      return QKeySequence(QString::fromStdString(pixcake::ui::shell::shortcut_key(id)))
+          .toString(QKeySequence::NativeText);
+    };
+    guide_menu_ok = actions[0]->text().contains(horizontal) &&
+                    actions[0]->text().contains(native_key("guide-horizontal")) &&
+                    actions[1]->text().contains(vertical) &&
+                    actions[1]->text().contains(native_key("guide-vertical")) &&
+                    actions[0]->isEnabled() && actions[1]->isEnabled() && actions[2]->isSeparator() &&
+                    actions[3]->text().contains(hide) && actions[3]->text().contains(native_key("guide-toggle")) &&
+                    actions[3]->isEnabled();
+    popup->close();
+  });
+  const QPointF menu_click(guide_tool->rect().center());
+  QMouseEvent menu_press(QEvent::MouseButtonPress, menu_click, menu_click, Qt::LeftButton, Qt::LeftButton,
+                         Qt::NoModifier);
+  QMouseEvent menu_release(QEvent::MouseButtonRelease, menu_click, menu_click, Qt::LeftButton, Qt::NoButton,
+                           Qt::NoModifier);
+  QCoreApplication::sendEvent(guide_tool, &menu_press);
+  QCoreApplication::sendEvent(guide_tool, &menu_release);
+  if (!guide_menu_ok) {
+    qCritical("reference-line toolbar menu is missing its three labelled actions");
+    return 8;
+  }
+  const std::size_t guide_count = window.controller().guides().size();
+  window.controller().request_create_guide(false);
+  window.controller().request_create_guide(true);
+  window.controller().request_create_guide(false);
+  if (window.controller().guides().size() != guide_count + 3 ||
+      window.controller().guides()[2].position != window.controller().guides()[0].position) {
+    qCritical("reference-line creation did not preserve overlap");
+    return 8;
+  }
+  window.controller().request_move_guide(0, 80.0);
+  if (view->guides().size() != guide_count + 3 || view->guides()[0].position != 80.0) {
+    qCritical("reference-line movement was not published to the canvas");
+    return 8;
+  }
+  const QPointF line_point(view->width() * 0.25, view->height() * 0.8);
+  QMouseEvent line_press(QEvent::MouseButtonPress, line_point, line_point, Qt::LeftButton, Qt::LeftButton,
+                         Qt::NoModifier);
+  QMouseEvent line_release(QEvent::MouseButtonRelease, line_point, line_point, Qt::LeftButton, Qt::NoButton,
+                           Qt::NoModifier);
+  QCoreApplication::sendEvent(view, &line_press);
+  QCoreApplication::sendEvent(view, &line_release);
+  if (!view->selectedGuide() || *view->selectedGuide() != 0) {
+    qCritical("canvas guide click did not select the moved line");
+    return 8;
+  }
+  QKeyEvent delete_press(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
+  QKeyEvent delete_release(QEvent::KeyRelease, Qt::Key_Delete, Qt::NoModifier);
+  QCoreApplication::sendEvent(view, &delete_press);
+  QCoreApplication::sendEvent(view, &delete_release);
+  if (window.controller().guides().size() != guide_count + 2 || view->selectedGuide()) {
+    qCritical("Delete did not remove the selected reference line");
+    return 8;
+  }
+  window.controller().request_toggle_guides();
+  const std::size_t hidden_count = window.controller().guides().size();
+  window.controller().request_create_guide(false);
+  if (view->guidesVisible() || window.controller().guides().size() != hidden_count) {
+    qCritical("hidden reference lines still allowed creation");
+    return 8;
+  }
+  window.controller().request_toggle_guides();
+  window.controller().request_remove_all_guides();
+  if (!window.controller().guides().empty() || !view->guides().empty()) {
+    qCritical("reference-line removal did not clear guides");
     return 8;
   }
   const double before = mean_red(view->image());

@@ -151,6 +151,12 @@ Texts build_texts() {
   t["refine.card.none"] = "无";
   t["refine.portrait.scan"] = "人脸识别";
   t["refine.history.empty.name"] = "暂无已加载照片。关闭软件后再次打开时，先前步骤合并为上一次保存。当前不列出步骤。";
+  t["guides.create-horizontal"] = "创建水平参考线";
+  t["guides.create-vertical"] = "创建垂直参考线";
+  t["guides.hide"] = "隐藏参考线";
+  t["guides.show"] = "显示参考线";
+  t["guides.remove"] = "删除当前参考线";
+  t["guides.remove-all"] = "删除全部参考线";
 
   t["region.creative-tools"] = "手动工具栏";
   t["region.creative-canvas"] = kCanvas;
@@ -612,6 +618,9 @@ const std::vector<ShortcutEntry>& shortcut_table() {
       {"virtual-copy", "Ctrl+'", "创建副本", "project"},
       {"undo", "Ctrl+Z", "单图撤销", "refine"},
       {"redo", "Ctrl+Shift+Z", "单图重做", "refine"},
+      {"guide-horizontal", "Ctrl+R", "创建水平参考线", "refine"},
+      {"guide-vertical", "Shift+R", "创建垂直参考线", "refine"},
+      {"guide-toggle", "Alt+R", "隐藏或显示参考线", "refine"},
       {"preset-list", "Shift+S", "预设列表", "refine"},
       {"module-color", "E", "色彩", "refine"},
       {"module-local", "Ctrl+W", "局部调色", "refine"},

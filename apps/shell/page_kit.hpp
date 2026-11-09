@@ -3,6 +3,7 @@
 // 页面构建的公共部件（代码质量清单 Q-12）：页面文件只画控件，状态变化经 PageActions 交给
 // ShellController。文字来自 ui/shell 的文案表，图标按“组/条目编号”查。
 #include "pixcake/export_session/export_session.hpp"
+#include "guide_line.hpp"
 #include "pixcake/project/records.hpp"
 #include "pixcake/project_session/project_session.hpp"
 #include "pixcake/sync/sync_batch.hpp"
@@ -106,6 +107,16 @@ class PageActions {
   virtual void request_parameters(const std::vector<std::pair<ui::panels::SliderBinding, std::string>>&) {}
   // 画布登记显示回调；owner 删除后不再回调。登记时立即回调一次当前画面。
   virtual void watch_preview(QObject*, std::function<void(const PreviewView&)>) {}
+
+  // Reference lines are workspace overlays, not edit-document parameters.
+  virtual std::vector<GuideLine> guides() const { return {}; }
+  virtual bool guides_visible() const { return true; }
+  virtual void request_create_guide(bool) {}
+  virtual void request_toggle_guides() {}
+  virtual void request_move_guide(std::size_t, double) {}
+  virtual void request_remove_guide(std::size_t) {}
+  virtual void request_remove_all_guides() {}
+  virtual void watch_guides(QObject*, std::function<void(const std::vector<GuideLine>&, bool)>) {}
 
   // 项目（需求 5.2/5.3）。导入：在主页新建项目；在项目里追加到当前项目。
   virtual bool can_import() const { return false; }

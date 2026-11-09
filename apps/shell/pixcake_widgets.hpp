@@ -5,6 +5,7 @@
 #include <QDropEvent>
 #include <QMimeData>
 #include <QMouseEvent>
+#include <QMenu>
 #include <QUrl>
 #include <QFileInfo>
 #include <QFrame>
@@ -23,11 +24,13 @@
 #include <QSvgRenderer>
 #include <QHBoxLayout>
 #include <QImage>
+#include <QKeyEvent>
 #include <QPainterPath>
 #include <QVBoxLayout>
 
 #include "pixcake/ui/panels/histogram.hpp"
 #include "pixcake/ui/shell/page_copy.hpp"
+#include "guide_line.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -116,6 +119,38 @@ class PixCakeToolbar final : public QFrame {
     layout->setSpacing(6);
   }
   QHBoxLayout* row() { return static_cast<QHBoxLayout*>(layout()); }
+};
+
+// Toolbar tools are frames to keep the icon-only layout. A connected tool
+// receives clicks on the whole tile, including its icon.
+class PixCakeWorkspaceTool final : public QFrame {
+ public:
+  explicit PixCakeWorkspaceTool(QWidget* parent = nullptr) : QFrame(parent) {}
+
+  void onClicked(std::function<void(Qt::KeyboardModifiers)> callback) {
+    clicked_ = std::move(callback);
+    setCursor(clicked_ ? Qt::PointingHandCursor : Qt::ArrowCursor);
+  }
+
+ protected:
+  void mousePressEvent(QMouseEvent* event) override {
+    if (clicked_ && event->button() == Qt::LeftButton) {
+      event->accept();
+      return;
+    }
+    QFrame::mousePressEvent(event);
+  }
+  void mouseReleaseEvent(QMouseEvent* event) override {
+    if (clicked_ && event->button() == Qt::LeftButton && rect().contains(event->position().toPoint())) {
+      clicked_(event->modifiers());
+      event->accept();
+      return;
+    }
+    QFrame::mouseReleaseEvent(event);
+  }
+
+ private:
+  std::function<void(Qt::KeyboardModifiers)> clicked_;
 };
 
 class PixCakeStatusStrip final : public QFrame {
@@ -530,6 +565,7 @@ class PixCakeImageView final : public QFrame {
     setAccessibleName(copyText("widget.canvas"));
     setMinimumSize(160, 120);
     setMouseTracking(true);  // 画笔光标圈跟着鼠标
+    setFocusPolicy(Qt::StrongFocus);
   }
 
   void setImage(QImage image) {
@@ -549,6 +585,26 @@ class PixCakeImageView final : public QFrame {
     hooks_ = std::move(hooks);
     update();
   }
+  void setGuides(std::vector<GuideLine> guides, bool visible) {
+    guides_ = std::move(guides);
+    guides_visible_ = visible;
+    if (guide_selected_ && *guide_selected_ >= guides_.size()) guide_selected_.reset();
+    if (guide_drag_index_ && *guide_drag_index_ >= guides_.size()) {
+      guide_drag_index_.reset();
+      guide_dragging_ = false;
+    }
+    update();
+  }
+  const std::vector<GuideLine>& guides() const { return guides_; }
+  bool guidesVisible() const { return guides_visible_; }
+  std::optional<std::size_t> selectedGuide() const { return guide_selected_; }
+  void onGuideMoved(std::function<void(std::size_t, double)> callback) { guide_moved_ = std::move(callback); }
+  void onGuideRemoved(std::function<void(std::size_t)> callback) { guide_removed_ = std::move(callback); }
+  void onGuidesRemoved(std::function<void()> callback) { guides_removed_ = std::move(callback); }
+  void setGuideMenuLabels(QString remove, QString remove_all) {
+    guide_remove_text_ = std::move(remove);
+    guide_remove_all_text_ = std::move(remove_all);
+  }
   // 鼠标在画面上时回调指针下像素的颜色（显示的这一帧），移出画面回调空值。色彩调节、局部调色页的直方图读数用它，
   // 可以登记多个。
   void onHoverPixel(std::function<void(std::optional<QColor>)> callback) { hover_pixel_.push_back(std::move(callback)); }
@@ -563,6 +619,44 @@ class PixCakeImageView final : public QFrame {
 
  protected:
   void mousePressEvent(QMouseEvent* event) override {
+    if (event->button() == Qt::RightButton) {
+      const auto index = guideAt(event->position());
+      if (index) {
+        guide_selected_ = *index;
+        setFocus(Qt::MouseFocusReason);
+        update();
+        QMenu menu(this);
+        QAction* remove = menu.addAction(guide_remove_text_);
+        QAction* remove_all = menu.addAction(guide_remove_all_text_);
+        QObject::connect(remove, &QAction::triggered, this, [this, index] {
+          guide_selected_.reset();
+          if (guide_removed_) guide_removed_(*index);
+        });
+        QObject::connect(remove_all, &QAction::triggered, this, [this] {
+          guide_selected_.reset();
+          if (guides_removed_) guides_removed_();
+        });
+        menu.exec(mapToGlobal(event->position().toPoint()));
+        setFocus(Qt::OtherFocusReason);
+        event->accept();
+        return;
+      }
+    }
+    if (event->button() == Qt::LeftButton) {
+      const auto index = guideAt(event->position());
+      if (index) {
+        guide_selected_ = *index;
+        setFocus(Qt::MouseFocusReason);
+        guide_drag_index_ = *index;
+        guide_dragging_ = true;
+        setCursor(guides_[*index].vertical ? Qt::SizeHorCursor : Qt::SizeVerCursor);
+        update();
+        event->accept();
+        return;
+      }
+      guide_selected_.reset();
+      update();
+    }
     if (takes(event)) {
       dragging_ = true;
       hooks_->drag(0, percent(event->position()));
@@ -574,7 +668,20 @@ class PixCakeImageView final : public QFrame {
     hover_ = event->position();
     hovering_ = true;
     reportPixel();
-    if (dragging_ && hooks_) {
+    if (guide_dragging_ && guide_drag_index_ && guide_moved_) {
+      const auto& guide = guides_[*guide_drag_index_];
+      const QRectF target(0.0, 0.0, width(), height());
+      if (!target.isEmpty()) {
+        const double position = guide.vertical
+                                    ? std::clamp((event->position().x() - target.left()) / target.width() * 100.0,
+                                                 0.0, 100.0)
+                                    : std::clamp((event->position().y() - target.top()) / target.height() * 100.0,
+                                                 0.0, 100.0);
+        guide_moved_(*guide_drag_index_, position);
+      }
+      update();
+      event->accept();
+    } else if (dragging_ && hooks_) {
       hooks_->drag(1, percent(event->position()));
       update();
     } else {
@@ -589,13 +696,29 @@ class PixCakeImageView final : public QFrame {
     QFrame::leaveEvent(event);
   }
   void mouseReleaseEvent(QMouseEvent* event) override {
-    if (dragging_ && hooks_) {
+    if (guide_dragging_) {
+      guide_dragging_ = false;
+      guide_drag_index_.reset();
+      setCursor(Qt::ArrowCursor);
+      event->accept();
+    } else if (dragging_ && hooks_) {
       dragging_ = false;
       hooks_->drag(2, percent(event->position()));
       update();
     } else {
       QFrame::mouseReleaseEvent(event);
     }
+  }
+  void keyPressEvent(QKeyEvent* event) override {
+    if ((event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) && guide_selected_) {
+      const std::size_t index = *guide_selected_;
+      guide_selected_.reset();
+      if (guide_removed_) guide_removed_(index);
+      update();
+      event->accept();
+      return;
+    }
+    QFrame::keyPressEvent(event);
   }
   void paintEvent(QPaintEvent*) override {
     QPainter painter(this);
@@ -607,6 +730,7 @@ class PixCakeImageView final : public QFrame {
         painter.setRenderHint(QPainter::Antialiasing);
         hooks_->paint(painter, target);
       }
+      if (guides_visible_) paintGuides(painter, QRectF(0.0, 0.0, width(), height()));
       if (hovering_ && hooks_ && hooks_->cursor_diameter && target.contains(hover_)) {
         const double diameter = hooks_->cursor_diameter();
         if (diameter > 0) {
@@ -651,6 +775,37 @@ class PixCakeImageView final : public QFrame {
             std::clamp((at.y() - target.top()) / target.height() * 100.0, 0.0, 100.0)};
   }
 
+  std::optional<std::size_t> guideAt(const QPointF& at) const {
+    if (!guides_visible_ || image_.isNull()) return std::nullopt;
+    const QRectF target(0.0, 0.0, width(), height());
+    if (!target.contains(at)) return std::nullopt;
+    constexpr qreal kHitDistance = 8.0;
+    for (std::size_t index = guides_.size(); index-- > 0;) {
+      const qreal line = guides_[index].vertical
+                             ? target.left() + target.width() * guides_[index].position / 100.0
+                             : target.top() + target.height() * guides_[index].position / 100.0;
+      const qreal current = guides_[index].vertical ? std::abs(at.x() - line) : std::abs(at.y() - line);
+      if (current <= kHitDistance) return index;
+    }
+    return std::nullopt;
+  }
+  void paintGuides(QPainter& painter, const QRectF& target) const {
+    for (std::size_t index = 0; index < guides_.size(); ++index) {
+      const auto& guide = guides_[index];
+      const qreal line = guide.vertical
+                             ? target.left() + target.width() * guide.position / 100.0
+                             : target.top() + target.height() * guide.position / 100.0;
+      const bool selected = guide_selected_ && *guide_selected_ == index;
+      painter.setPen(QPen(QColor(0, 0, 0, 200), selected ? 5.0 : 3.0));
+      if (guide.vertical) painter.drawLine(QPointF(line, target.top()), QPointF(line, target.bottom()));
+      else painter.drawLine(QPointF(target.left(), line), QPointF(target.right(), line));
+      painter.setPen(QPen(selected ? QColor(0xff, 0xd2, 0x3d) : QColor(0x55, 0xd8, 0xff, 235),
+                         selected ? 2.0 : 1.0, selected ? Qt::SolidLine : Qt::DashLine));
+      if (guide.vertical) painter.drawLine(QPointF(line, target.top()), QPointF(line, target.bottom()));
+      else painter.drawLine(QPointF(target.left(), line), QPointF(target.right(), line));
+    }
+  }
+
   QImage image_;
   QString status_;
   std::shared_ptr<CanvasHooks> hooks_;
@@ -659,6 +814,16 @@ class PixCakeImageView final : public QFrame {
   bool hovering_ = false;
   std::vector<std::function<void(std::optional<QColor>)>> hover_pixel_;
   std::vector<std::function<void()>> image_changed_;
+  std::vector<GuideLine> guides_;
+  bool guides_visible_ = true;
+  std::optional<std::size_t> guide_selected_;
+  std::optional<std::size_t> guide_drag_index_;
+  bool guide_dragging_ = false;
+  std::function<void(std::size_t, double)> guide_moved_;
+  std::function<void(std::size_t)> guide_removed_;
+  std::function<void()> guides_removed_;
+  QString guide_remove_text_;
+  QString guide_remove_all_text_;
 };
 
 inline QPixmap loadAssetPixmap(const QString& relative, int size) {

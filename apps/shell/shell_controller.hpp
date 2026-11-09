@@ -104,7 +104,18 @@ class ShellController final : public PageActions {
   void watch_thumbnails(QObject* owner, std::function<void(std::int64_t, const QImage&)> show) override;
   std::size_t thumbnails_ready() const { return thumbnail_cache_.size(); }
   bool has_photo() const override { return session_ != nullptr; }
+  std::uint32_t preview_max_edge() const override { return preview_max_edge_; }
+  void request_preview_max_edge(std::uint32_t max_edge) override;
   void request_parameters(const std::vector<std::pair<ui::panels::SliderBinding, std::string>>& values) override;
+  std::vector<GuideLine> guides() const override { return guides_; }
+  bool guides_visible() const override { return guides_visible_; }
+  void request_create_guide(bool vertical) override;
+  void request_toggle_guides() override;
+  void request_move_guide(std::size_t index, double position) override;
+  void request_remove_guide(std::size_t index) override;
+  void request_remove_all_guides() override;
+  void watch_guides(QObject* owner,
+                    std::function<void(const std::vector<GuideLine>&, bool)> changed) override;
   std::vector<int> local_masks() const override;
   void request_remove_local_mask(int instance) override;
   std::optional<std::string> parameter_value(const ui::panels::SliderBinding& binding) const override;
@@ -145,6 +156,7 @@ class ShellController final : public PageActions {
   std::uint64_t frames_shown_ = 0;
   std::unique_ptr<project_session::ProjectSession> projects_;
   preview_channel::PreviewSessionOptions preview_options_;
+  std::uint32_t preview_max_edge_ = 4000;
   std::optional<std::int64_t> current_project_;
   std::optional<std::int64_t> current_photo_;   // opened in the preview session
   std::optional<std::int64_t> selected_photo_;  // selected in the project (the last clicked)
@@ -152,6 +164,10 @@ class ShellController final : public PageActions {
   // (other paths that change selected_photo_ fall back to that one photo).
   std::vector<std::int64_t> selection_;
   std::vector<std::pair<QPointer<QObject>, std::function<void()>>> history_watchers_;
+  std::vector<GuideLine> guides_;
+  bool guides_visible_ = true;
+  std::vector<std::pair<QPointer<QObject>, std::function<void(const std::vector<GuideLine>&, bool)>>> guide_watchers_;
+  void guides_changed();
   void history_changed();
   std::optional<EffectClipboard> clipboard_;
   // 效果搬到别的照片后：缩略图跟着变；打开着的那张先关再开，免得内存里的文档和磁盘不一致。

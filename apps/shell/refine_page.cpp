@@ -25,6 +25,7 @@
 #include <QTreeWidget>
 #include <QSignalBlocker>
 #include <QMenu>
+#include <QKeySequence>
 #include <QPointer>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -47,6 +48,10 @@ namespace pixcake::shell {
 namespace {
 
 namespace panels = ui::panels;
+
+QString nativeShortcut(std::string_view id) {
+  return QKeySequence(qs(ui::shell::shortcut_key(id))).toString(QKeySequence::NativeText);
+}
 
 // 照片打开时可拖动的滑杆：renderd 的参考绘制画得出的参数（reference_drawn）。其余保持禁用，
 // 不让滑杆动了画面却不变。是否可用还要看参数模式的禁用规则，见 EnableRefresh。
@@ -2274,12 +2279,18 @@ QWidget* buildRefinePage(const PageContext& context) {
   auto* toolbar_layout = toolbar->row();
   toolbar_layout->setSpacing(4);
   QFrame* preset_tool = nullptr;
+  QFrame* guides_tool = nullptr;
   for (const auto& entry : ui::shell::page_list("refine-tools")) {
     auto* tool = workspaceTool("refine-tools", entry, toolbar);
     if (entry.id == "preset") preset_tool = tool;
+    if (entry.id == "guides") guides_tool = tool;
     toolbar_layout->addWidget(tool);
   }
   toolbar_layout->addStretch();
+  if (guides_tool != nullptr) {
+    guides_tool->setEnabled(actions->has_photo());
+    if (!actions->has_photo()) guides_tool->setAccessibleDescription(qtext("refine.preview"));
+  }
   outer->addWidget(toolbar);
 
   auto* center = new QHBoxLayout;
@@ -2395,6 +2406,15 @@ QWidget* buildRefinePage(const PageContext& context) {
         if (chart) chart->setHistogram(update.histogram);
       }
     });
+    image_view->setGuideMenuLabels(qtext("guides.remove"), qtext("guides.remove-all"));
+    image_view->onGuideMoved([actions](std::size_t index, double position) {
+      actions->request_move_guide(index, position);
+    });
+    image_view->onGuideRemoved([actions](std::size_t index) { actions->request_remove_guide(index); });
+    image_view->onGuidesRemoved([actions] { actions->request_remove_all_guides(); });
+    actions->watch_guides(image_view, [view](const std::vector<GuideLine>& guides, bool visible) {
+      if (view) view->setGuides(guides, visible);
+    });
   }
   // 面板底部：保存新预设和同步到选中图片（⇧⌘S，需求 §18）。
   auto* side_bottom = new QFrame(panel);
@@ -2432,6 +2452,57 @@ QWidget* buildRefinePage(const PageContext& context) {
     preset_tool->installEventFilter(new ClickFilter(preset_tool, toggle_presets));
   }
   bindShortcut(page, "preset-list", toggle_presets);
+  if (auto* tool = dynamic_cast<PixCakeWorkspaceTool*>(guides_tool)) {
+    tool->onClicked([actions, tool](Qt::KeyboardModifiers) {
+      QMenu menu(tool);
+      menu.setSeparatorsCollapsible(false);
+      menu.setStyleSheet(QStringLiteral(R"QSS(
+        QMenu {
+          background: #3C3C3E;
+          color: #FFFFFF;
+          border: 1px solid #55555A;
+          border-radius: 10px;
+          padding: 7px 0px;
+          font-family: "SF Pro Text", "SF Pro Display", "-apple-system", sans-serif;
+          font-size: 13px;
+        }
+        QMenu::item {
+          min-height: 34px;
+          padding: 0px 18px;
+          margin: 1px 6px;
+          border-radius: 6px;
+          color: #FFFFFF;
+          background: transparent;
+        }
+        QMenu::item:selected { background: #515154; }
+        QMenu::item:disabled { color: #77777D; }
+        QMenu::separator {
+          height: 1px;
+          background: #5A5A60;
+          margin: 7px 12px;
+        }
+      )QSS"));
+      const bool can_create = actions->guides_visible();
+      const auto add_guide_action = [&menu, actions](const char* label_key, const char* shortcut_id,
+                                                      bool vertical, bool enabled) {
+        QAction* item = menu.addAction(qtext(label_key) + QStringLiteral("\t") + nativeShortcut(shortcut_id));
+        item->setEnabled(enabled);
+        QObject::connect(item, &QAction::triggered, &menu, [actions, vertical] {
+          actions->request_create_guide(vertical);
+        });
+      };
+      add_guide_action("guides.create-horizontal", "guide-horizontal", false, can_create);
+      add_guide_action("guides.create-vertical", "guide-vertical", true, can_create);
+      menu.addSeparator();
+      QAction* toggle = menu.addAction(qtext(actions->guides_visible() ? "guides.hide" : "guides.show") +
+                                       QStringLiteral("\t") + nativeShortcut("guide-toggle"));
+      QObject::connect(toggle, &QAction::triggered, &menu, [actions] { actions->request_toggle_guides(); });
+      menu.exec(tool->mapToGlobal(QPoint(0, tool->height())));
+    });
+  }
+  bindShortcut(page, "guide-horizontal", [actions] { actions->request_create_guide(false); });
+  bindShortcut(page, "guide-vertical", [actions] { actions->request_create_guide(true); });
+  bindShortcut(page, "guide-toggle", [actions] { actions->request_toggle_guides(); });
   // 模块快捷键（需求 §8.1）：切到那个模块；还没有的模块（AI 色彩风格）不绑。
   const std::pair<const char*, const char*> modules_keys[] = {
       {"module-color", "color"},     {"module-local", "local"},       {"module-portrait", "portrait"},

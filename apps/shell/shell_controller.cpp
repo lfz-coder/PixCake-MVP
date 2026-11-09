@@ -7,6 +7,7 @@
 #include <QDebug>
 
 #include <algorithm>
+#include <cmath>
 
 namespace pixcake::shell {
 
@@ -102,6 +103,9 @@ void ShellController::close_photo() {
   session_.reset();
   current_photo_.reset();
   view_ = {};
+  guides_.clear();
+  guides_visible_ = true;
+  guides_changed();
 }
 
 void ShellController::close_project() {
@@ -739,6 +743,9 @@ ResultCode ShellController::open_photo(const std::string& photo_path,
   notifier_.reset();
   session_.reset();
   view_ = {};
+  guides_.clear();
+  guides_visible_ = true;
+  guides_changed();
   const ResultCode code = preview_channel::PreviewSession::open(photo_path, options, session_, diagnostic);
   if (code != ResultCode::Ok) {
     view_.status = qtext("refine.preview.failed") + QString::fromStdString(diagnostic);
@@ -785,6 +792,56 @@ void ShellController::request_parameters(const std::vector<std::pair<ui::panels:
   std::string diagnostic;
   const ResultCode code = session_->commit_parameters(capability, items, diagnostic);
   if (code != ResultCode::Ok) qWarning("commit %s: %s", capability.c_str(), diagnostic.c_str());
+}
+
+void ShellController::request_create_guide(bool vertical) {
+  if (!session_ || display_.page() != Page::Refine || !guides_visible_) return;
+  // Every new guide starts at the center of the canvas.  Overlapping guides
+  // are valid; the view selects the topmost one when several share a position.
+  guides_.push_back(GuideLine{vertical, 50.0});
+  guides_visible_ = true;
+  guides_changed();
+}
+
+void ShellController::request_toggle_guides() {
+  if (!session_ || display_.page() != Page::Refine) return;
+  guides_visible_ = !guides_visible_;
+  guides_changed();
+}
+
+void ShellController::request_move_guide(std::size_t index, double position) {
+  if (!session_ || index >= guides_.size() || !std::isfinite(position)) return;
+  guides_[index].position = std::clamp(position, 0.0, 100.0);
+  guides_changed();
+}
+
+void ShellController::request_remove_guide(std::size_t index) {
+  if (!session_ || index >= guides_.size()) return;
+  guides_.erase(guides_.begin() + static_cast<std::ptrdiff_t>(index));
+  guides_changed();
+}
+
+void ShellController::request_remove_all_guides() {
+  if (!session_ || guides_.empty()) return;
+  guides_.clear();
+  guides_changed();
+}
+
+void ShellController::watch_guides(QObject* owner,
+                                   std::function<void(const std::vector<GuideLine>&, bool)> changed) {
+  guide_watchers_.emplace_back(owner, std::move(changed));
+  guide_watchers_.back().second(guides_, guides_visible_);
+}
+
+void ShellController::guides_changed() {
+  for (auto it = guide_watchers_.begin(); it != guide_watchers_.end();) {
+    if (it->first.isNull()) {
+      it = guide_watchers_.erase(it);
+      continue;
+    }
+    it->second(guides_, guides_visible_);
+    ++it;
+  }
 }
 
 void ShellController::watch_preview(QObject* owner, std::function<void(const PreviewView&)> show) {

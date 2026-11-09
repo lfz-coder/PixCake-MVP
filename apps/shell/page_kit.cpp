@@ -70,21 +70,20 @@ void addPageTabs(QHBoxLayout* layout, const PageContext& context) {
 
 QFrame* workspaceTool(std::string_view list, const CopyItem& item, QWidget* parent) {
   const QString label = qs(item.text);
-  auto* frame = new QFrame(parent);
+  auto* frame = new PixCakeWorkspaceTool(parent);
   frame->setObjectName(QStringLiteral("workspace-tool-button"));
   frame->setAccessibleName(label);
   auto* layout = new QVBoxLayout(frame);
-  layout->setContentsMargins(5, 6, 5, 6);
-  layout->setSpacing(4);
+  layout->setContentsMargins(4, 4, 4, 4);
+  layout->setSpacing(0);
+  frame->setToolTip(label);
+  frame->setAttribute(Qt::WA_AlwaysShowToolTips, true);
   const auto asset = iconPath(list, item.id);
   auto* glyph = asset.isEmpty() ? pendingIcon(frame, 20, label + qtext("icon.pending_named"))
                                 : assetIcon(asset, 20, label + qtext("icon.suffix"), frame);
+  glyph->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+  glyph->setToolTip(label);
   layout->addWidget(glyph, 0, Qt::AlignCenter);
-  auto* name = text(label);
-  name->setObjectName(QStringLiteral("workspace-tool-label"));
-  name->setAlignment(Qt::AlignCenter);
-  name->setWordWrap(true);
-  layout->addWidget(name);
   return frame;
 }
 
