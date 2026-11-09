@@ -125,8 +125,22 @@ Texts build_texts() {
   t["region.refine-modules"] = "功能区";
   t["refine.back.button"] = "返回";
   t["refine.preview"] = "预览区域\n暂无已加载照片";
-  t["refine.rgb.name"] = "RGB读数，暂无已加载照片";
-  t["refine.lab.name"] = "Lab读数，暂无已加载照片";
+  // 精修右侧：图标栏选模块，面板一次只显示一个模块。色彩调节页顶部是直方图卡片：下面一行平时是相机参数
+  // （非 RAW 没有，显示“ISO -”“- mm”“F/-”“-秒”和格式），鼠标在画面上时换成指针下像素的 R、G、B。
+  t["refine.rail"] = "功能模块";
+  t["refine.module.pending"] = "该模块暂未接入";
+  t["refine.master-color"] = "大师级色彩";
+  t["refine.ai-calibrate"] = "AI 校准";
+  t["refine.color-unify"] = "多图色彩统一";
+  t["refine.wb.preset"] = kWordWhiteBalance;
+  t["refine.wb.custom"] = "自定义";
+  t["refine.exif.iso"] = "ISO %1";
+  t["refine.exif.focal"] = "%1 mm";
+  t["refine.exif.aperture"] = "F/%1";
+  t["refine.exif.shutter"] = "%1秒";
+  t["refine.exif.none"] = "-";
+  t["refine.readout.name"] = "指针下像素的 RGB 读数";
+  t["refine.section.toggle"] = "展开或收起%1";
   t["refine.clothing.name"] = "衣服调整";
   t["refine.history.empty.name"] = "暂无已加载照片。关闭软件后再次打开时，先前步骤合并为上一次保存。当前不列出步骤。";
 
@@ -416,14 +430,15 @@ Lists build_lists() {
                             item("cull", kCull),     item("star", kStar),       item("flag", kFlag),
                             item("color", kColorTag), item("single", kSingle), item("compare-view", "对比视图"),
                             item("reference", "参考视图")};
-  // 精修功能区模块；说明是无障碍说明。“调色”的说明是色彩面板名，由 ui/panels 提供（见 ShellDisplay 之外的壳层）。
-  lists["refine-modules"] = {item("ai-color", "AI色彩"),
+  // 精修右侧图标栏的模块（顺序同 PixCake 9.3.0：AI色彩、调色、局部 | 人像、图像、衣物、后调色、裁剪、历史、联机）；
+  // 说明是无障碍说明，也是点开后面板的标题。“调色”的说明是色彩面板名“色彩调节”，由 ui/panels 提供。
+  // 9.3.0 的图标栏里没有“宠物”（页面图里有），这里不列。
+  lists["refine-modules"] = {item("ai-color", kWordAiColor),
                              item("color", "调色"),
                              item("local", "局部", {}, {}, "局部调色"),
                              item("portrait", "人像", {}, {}, "人像美化"),
                              item("image", "图像", {}, {}, "图像美化"),
                              item("clothing", "衣物", {}, {}, "衣物美化"),
-                             item("pet", "宠物"),
                              item("post", "后调色", {}, {}, "后期调色"),
                              item("crop", "裁剪", {}, {}, "裁剪、旋转"),
                              item("history", "历史", {}, {}, kHistory),

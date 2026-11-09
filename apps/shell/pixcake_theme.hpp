@@ -142,6 +142,53 @@ struct PixCakeTheme final {
       QSlider::groove:horizontal { height: 4px; background: #4a4a4a; border-radius: 2px; }
       QSlider::sub-page:horizontal { background: #d0d0d0; border-radius: 2px; }
       QSlider::handle:horizontal { width: 14px; height: 14px; margin: -5px 0; background: #d9d9d9; border-radius: 7px; }
+
+      QFrame#refine-rail { background: #1b1d22; border-left: 1px solid #2a2c31; }
+      QFrame#refine-rail-separator { background: #34363b; min-height: 1px; max-height: 1px; margin: 6px 10px; }
+      QToolButton[rail="true"] { background: transparent; border: none; border-radius: 6px; color: #b8b8b8;
+        font-size: 11px; padding: 4px 2px; min-width: 40px; max-width: 40px; min-height: 40px; }
+      QToolButton[rail="true"]:hover { background: #2a2d33; color: #f4f4f4; }
+      QToolButton[rail="true"]:checked { background: #33363d; color: #ffffff; }
+      QFrame#refine-module-panel, QWidget#refine-module-page, QWidget#refine-module-content { background: #1f2126; }
+      QFrame#refine-module-panel { border-left: 1px solid #2a2c31; }
+      QFrame#refine-module-header { background: #1f2126; border-bottom: 1px solid #2a2c31; }
+      QLabel#refine-module-title { color: #f4f4f4; font-size: 15px; font-weight: 600; }
+      QWidget#refine-module-page QScrollArea, QWidget#refine-module-page QScrollArea > QWidget > QWidget { background: #1f2126; }
+      QFrame#refine-preset-column { background: #1f2126; border-left: 1px solid #2a2c31; }
+      QFrame#refine-side-bottom { background: #1f2126; border-top: 1px solid #2a2c31; border-left: 1px solid #2a2c31; }
+      QFrame#refine-histogram-card { background: #16181c; border-radius: 6px; }
+      QFrame#refine-histogram { border-top-left-radius: 6px; border-top-right-radius: 6px; }
+      QLabel#refine-readout { color: #d0d0d0; font-size: 12px; }
+      QLabel#refine-readout-key { color: #8a8d93; font-size: 12px; }
+      QLabel#refine-format-badge { color: #c8c8c8; background: #34373d; border-radius: 3px; padding: 1px 5px; font-size: 10px; }
+      QPushButton#refine-pill { background: #33363d; border: none; border-radius: 14px; min-height: 28px; padding: 0 14px;
+        color: #e0e0e0; }
+      QPushButton#refine-pill:disabled { color: #8a8d93; }
+      QPushButton#refine-master-color { background: #33363d; border: none; border-radius: 4px; min-height: 28px; padding: 0 12px; }
+      QFrame#refine-section-rule { background: #2a2c31; }
+      QFrame#refine-side-bottom QPushButton { background: #33363d; border: none; border-radius: 4px; min-height: 30px; }
+      QFrame#refine-side-bottom QPushButton:hover { background: #3c3f47; }
+      QFrame#refine-side-bottom QPushButton:disabled { color: #6f7277; background: #2a2d33; }
+      QToolButton#refine-section-toggle { spacing: 8px; }
+      QFrame[fold-section="true"] { background: #1f2126; border-bottom: 1px solid #2a2c31; }
+      QFrame#refine-section-header { min-height: 48px; max-height: 48px; }
+      QToolButton#refine-section-toggle { background: transparent; border: none; color: #f4f4f4; font-size: 14px;
+        font-weight: 600; padding: 0; }
+      QToolButton#refine-section-action { background: transparent; border: none; color: #b8b8b8; font-size: 11px; }
+      QToolButton#refine-section-action:disabled { color: #6f7277; }
+      QWidget#refine-section-body QLabel { color: #d0d0d0; }
+      QWidget#refine-section-body QLabel:disabled { color: #6f7277; }
+      QWidget#refine-section-body QSlider::groove:horizontal { height: 2px; background: #5a5d63; border-radius: 1px; }
+      QWidget#refine-section-body QSlider::sub-page:horizontal { background: #5a5d63; border-radius: 1px; }
+      QWidget#refine-section-body QSlider::handle:horizontal { width: 12px; height: 12px; margin: -7px 0;
+        background: #2a2d33; border: 2px solid #e6e6e6; border-radius: 8px; }
+      QWidget#refine-section-body QSlider::handle:horizontal:disabled { border-color: #5a5d63; }
+      QWidget#refine-section-body QSlider[track="temperature"]::groove:horizontal,
+      QWidget#refine-section-body QSlider[track="temperature"]::sub-page:horizontal {
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3b47d4, stop:0.5 #8a8a8a, stop:1 #e6dc3c); }
+      QWidget#refine-section-body QSlider[track="tint"]::groove:horizontal,
+      QWidget#refine-section-body QSlider[track="tint"]::sub-page:horizontal {
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3fae3f, stop:0.5 #8a8a8a, stop:1 #b347b3); }
     )QSS");
   }
 

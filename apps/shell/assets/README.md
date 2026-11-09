@@ -82,3 +82,20 @@
 | `home-nav/trash.svg` | 回收站 |
 
 已经放进本目录的文件直接使用。还没有上传的图标才保持占位，不用 Unicode 或相似图标代替。
+
+### `refine-modules/`（20×20）
+
+精修右侧图标栏。文件放进来后按钮显示「图标 + 文字」；没有文件时只显示文字（官方「自定义图标模式」里也有「图标和文本」）。
+
+| 文件 | 界面名称 |
+| --- | --- |
+| `refine-modules/ai-color.svg` | AI色彩 |
+| `refine-modules/color.svg` | 调色（色彩调节） |
+| `refine-modules/local.svg` | 局部（局部调色） |
+| `refine-modules/portrait.svg` | 人像（人像美化） |
+| `refine-modules/image.svg` | 图像（图像美化） |
+| `refine-modules/clothing.svg` | 衣物（衣物美化） |
+| `refine-modules/post.svg` | 后调色（后期调色） |
+| `refine-modules/crop.svg` | 裁剪（裁剪、旋转） |
+| `refine-modules/history.svg` | 历史（历史记录） |
+| `refine-modules/capture.svg` | 联机（联机拍摄） |

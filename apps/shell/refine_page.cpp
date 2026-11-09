@@ -10,7 +10,14 @@
 #include "pixcake/mask/brush_mask.hpp"
 #include "pixcake/ui/panels/slider_spec.hpp"
 
+#include <QAbstractScrollArea>
 #include <QCheckBox>
+#include <QToolButton>
+#include <QStyle>
+#include <QStackedWidget>
+#include <QGridLayout>
+#include <QFileInfo>
+#include <QButtonGroup>
 #include <QComboBox>
 #include <QListWidget>
 #include <QPointer>
@@ -22,6 +29,9 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <array>
+#include <set>
+#include <string>
 #include <cmath>
 #include <vector>
 #include <memory>
@@ -62,29 +72,61 @@ int tick_of(const panels::SliderSpec& spec, const std::string& display) {
   return std::clamp(static_cast<int>(std::lround((value - spec.minimum) / spec.step)), 0, spec.tick_count);
 }
 
+// 面板能滚动：滚轮经过滑杆时只滚面板，不改值（点过、键盘聚焦的滑杆才吃滚轮）。
+class WheelToScroll final : public QObject {
+ public:
+  using QObject::QObject;
+
+ protected:
+  bool eventFilter(QObject* watched, QEvent* event) override {
+    auto* widget = qobject_cast<QWidget*>(watched);
+    if (event->type() != QEvent::Wheel || widget == nullptr || widget->hasFocus()) return QObject::eventFilter(watched, event);
+    for (QWidget* up = widget->parentWidget(); up != nullptr; up = up->parentWidget()) {
+      if (auto* area = qobject_cast<QAbstractScrollArea*>(up)) {
+        QCoreApplication::sendEvent(area->viewport(), event);
+        return true;
+      }
+    }
+    event->ignore();
+    return true;
+  }
+};
+
+void scrollPastOnWheel(QSlider* slider) {
+  slider->setFocusPolicy(Qt::StrongFocus);
+  slider->installEventFilter(new WheelToScroll(slider));
+}
+
 // 范围、步进、默认值只来自内核参数模式（ui/panels 的 slider_spec）。照片打开时，绑定全图色彩的
 // 滑杆可用：拖动发预览，松手（或键盘改值）经命令入口提交。
 void addDisabledSlider(QWidget* parent, QLayout* layout, const panels::SliderSpec& spec, const QString& object_name,
                        PageActions* actions = nullptr, const std::optional<panels::SliderBinding>& binding = {},
                        const Refresh& refresh = nullptr) {
+  // 官方的滑杆行：上面左边是名字、右边是数值，下面是整行宽的滑杆（白平衡的色温、色调画成色带）。
   auto* row = new QWidget(parent);
-  auto* row_layout = new QHBoxLayout(row);
+  auto* row_layout = new QGridLayout(row);
   row_layout->setContentsMargins(0, 0, 0, 0);
-  row_layout->setSpacing(6);
+  row_layout->setHorizontalSpacing(6);
+  row_layout->setVerticalSpacing(4);
   auto* name = text(qs(spec.label));
   name->setEnabled(false);
   auto* slider = new QSlider(Qt::Horizontal, row);
   if (!object_name.isEmpty()) slider->setObjectName(object_name);
+  if (binding && (binding->parameter_id == "temperature" || binding->parameter_id == "tint")) {
+    slider->setProperty("track", qs(binding->parameter_id));
+  }
   slider->setRange(0, spec.tick_count);
   slider->setSingleStep(1);
   slider->setValue(spec.default_tick);
   slider->setEnabled(false);
   slider->setAccessibleName(qs(spec.accessible_name));
+  scrollPastOnWheel(slider);
   auto* reading = text(qs(spec.default_text));
   reading->setEnabled(false);
-  row_layout->addWidget(name);
-  row_layout->addWidget(slider, 1);
-  row_layout->addWidget(reading);
+  reading->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+  row_layout->addWidget(name, 0, 0);
+  row_layout->addWidget(reading, 0, 1);
+  row_layout->addWidget(slider, 1, 0, 1, 2);
   layout->addWidget(row);
   if (!previewable(actions, spec, binding)) return;
 
@@ -181,30 +223,181 @@ QString moduleDescription(const char* id) {
   return qs(copyItem("refine-modules", id).description);
 }
 
-void addColorPanel(QWidget* modules, QVBoxLayout* modules_layout, PageActions* actions,
-                   PixCakeHistogram** histogram_out) {
-  auto* layout = labelPanel(modules, modules_layout, "refine-color-labels", moduleDescription("color"));
-  auto* histogram = new PixCakeHistogram(modules);
+// 精修右侧界面状态（选中的模块、展开的分组、预设栏开关）。页面每次重画都会重建，状态留在这里，重建后照旧。
+struct RefineUiState {
+  std::string module = "color";
+  std::set<std::string> open_sections;
+  bool presets = true;
+};
+RefineUiState& uiState() {
+  static RefineUiState state;
+  return state;
+}
+
+// 当前照片的格式（扩展名大写，直方图卡片右下角的小标签）；没有照片时为空。
+QString currentFormat(const PageActions* actions) {
+  if (actions == nullptr || !actions->has_photo()) return {};
+  const auto current = actions->current_photo();
+  if (!current) return {};
+  for (const auto& photo : actions->photos()) {
+    if (photo.id == *current) return QFileInfo(qs(photo.file_name)).suffix().toUpper();
+  }
+  return {};
+}
+
+// 直方图卡片：上面是直方图，下面一行平时是相机参数（这一版还读不到 EXIF，和官方打开非 RAW 图时一样显示“ISO -”
+// “- mm”“F/-”“-秒”）加格式标签；鼠标在画面上时这一行换成指针下像素的 R、G、B。
+QFrame* histogramCard(QWidget* parent, PageActions* actions, PixCakeImageView* canvas, PixCakeHistogram** histogram_out) {
+  auto* card = new QFrame(parent);
+  card->setObjectName(QStringLiteral("refine-histogram-card"));
+  auto* column = new QVBoxLayout(card);
+  column->setContentsMargins(0, 0, 0, 0);
+  column->setSpacing(0);
+  auto* histogram = new PixCakeHistogram(card);
+  histogram->setFixedHeight(104);
   *histogram_out = histogram;
-  histogram->setMinimumHeight(PixCakeTheme::kControlHeight * 2);
-  layout->addWidget(histogram);
-  auto* readings = new QHBoxLayout;
-  readings->setContentsMargins(0, 0, 0, 0);
-  readings->setSpacing(6);
-  auto* rgb = disabledLabel(QStringLiteral("RGB"), qtext("refine.rgb.name"));
-  auto* lab = disabledLabel(QStringLiteral("Lab"), qtext("refine.lab.name"));
-  readings->addWidget(rgb);
-  readings->addWidget(lab);
-  readings->addStretch();
-  layout->addLayout(readings);
+  column->addWidget(histogram);
+
+  const QString none = qtext("refine.exif.none");
+  auto* camera = new QWidget(card);
+  camera->setObjectName(QStringLiteral("refine-camera-readout"));
+  auto* camera_row = new QHBoxLayout(camera);
+  camera_row->setContentsMargins(12, 8, 12, 8);
+  for (const QString& value : {qtext("refine.exif.iso").arg(none), qtext("refine.exif.focal").arg(none),
+                               qtext("refine.exif.aperture").arg(none), qtext("refine.exif.shutter").arg(none)}) {
+    auto* label = text(value);
+    label->setObjectName(QStringLiteral("refine-readout"));
+    label->setAccessibleName(value);
+    camera_row->addWidget(label);
+    camera_row->addStretch(1);
+  }
+  auto* badge = text(currentFormat(actions));
+  badge->setObjectName(QStringLiteral("refine-format-badge"));
+  badge->setVisible(!badge->text().isEmpty());
+  camera_row->addWidget(badge);
+  column->addWidget(camera);
+
+  auto* pixel = new QWidget(card);
+  pixel->setObjectName(QStringLiteral("refine-pixel-readout"));
+  pixel->setAccessibleName(qtext("refine.readout.name"));
+  auto* pixel_row = new QHBoxLayout(pixel);
+  pixel_row->setContentsMargins(12, 8, 12, 8);
+  std::array<QPointer<QLabel>, 3> values;
+  int index = 0;
+  for (const char* channel : {"R", "G", "B"}) {
+    auto* key = text(QString::fromLatin1(channel));
+    key->setObjectName(QStringLiteral("refine-readout-key"));
+    auto* value = text(none);
+    value->setObjectName(QStringLiteral("refine-readout"));
+    value->setMinimumWidth(28);
+    values[static_cast<std::size_t>(index++)] = value;
+    pixel_row->addWidget(key);
+    pixel_row->addWidget(value);
+    pixel_row->addStretch(1);
+  }
+  pixel->setVisible(false);
+  column->addWidget(pixel);
+  if (canvas != nullptr) {
+    canvas->onHoverPixel([camera = QPointer<QWidget>(camera), pixel = QPointer<QWidget>(pixel), values](std::optional<QColor> color) {
+      if (!camera || !pixel) return;
+      if (color) {
+        const int channels[3] = {color->red(), color->green(), color->blue()};
+        for (std::size_t i = 0; i < 3; ++i) {
+          if (values[i]) values[i]->setText(QString::number(channels[i]));
+        }
+      }
+      camera->setVisible(!color);
+      pixel->setVisible(color.has_value());
+    });
+  }
+  return card;
+}
+
+// 分组标题栏右侧的小按钮（AI校准白平衡、AI校准曝光）。图标文件还没有，按资源约定画占位；功能没接，禁用。
+QWidget* sectionAction(QWidget* parent, const QString& label) {
+  auto* icon = pendingIcon(parent, 18, label);
+  icon->setToolTip(label);
+  icon->setEnabled(false);
+  return icon;
+}
+
+// 白平衡分组里的“白平衡 [自定义 ▾] [吸管]”一行：预设和吸管还没接，禁用。
+QWidget* whiteBalancePicker(QWidget* parent, const QString& picker_label) {
+  auto* line = new QWidget(parent);
+  auto* row = new QHBoxLayout(line);
+  row->setContentsMargins(0, 0, 0, 0);
+  row->setSpacing(8);
+  auto* name = text(qtext("refine.wb.preset"));
+  name->setEnabled(false);
+  auto* box = new QComboBox(line);
+  box->setObjectName(QStringLiteral("refine-wb-preset"));
+  box->setAccessibleName(qtext("refine.wb.preset"));
+  box->addItem(qtext("refine.wb.custom"));
+  box->setEnabled(false);
+  row->addWidget(name);
+  row->addStretch(1);
+  row->addWidget(box, 2);
+  auto* picker = pendingIcon(line, 20, picker_label);
+  picker->setToolTip(picker_label);
+  picker->setEnabled(false);
+  row->addWidget(picker);
+  return line;
+}
+
+// 色彩调节页（右侧图标栏“调色”）：直方图卡片、“AI 校准”“多图色彩统一”两个按钮，然后是一列可折叠分组。
+// 分组默认收起，点标题才展开里面的控件；展开状态在页面重建后保留。
+void addColorPanel(QWidget* parent, QVBoxLayout* parent_layout, PageActions* actions, PixCakeImageView* canvas,
+                   PixCakeHistogram** histogram_out) {
+  QFrame* frame = nullptr;
+  auto* layout = labelPanel(parent, parent_layout, "refine-color-labels", moduleDescription("color"), &frame);
+  layout->setSpacing(0);
+  auto* top = new QWidget(frame);
+  auto* top_layout = new QVBoxLayout(top);
+  top_layout->setContentsMargins(12, 12, 12, 12);
+  top_layout->setSpacing(12);
+  top_layout->addWidget(histogramCard(top, actions, canvas, histogram_out));
+  auto* pills = new QHBoxLayout;
+  pills->setSpacing(8);
+  for (const char* key : {"refine.ai-calibrate", "refine.color-unify"}) {
+    auto* pill = action(qtext(key), top, false);
+    pill->setObjectName(QStringLiteral("refine-pill"));
+    pills->addWidget(pill);
+  }
+  pills->addStretch(1);
+  top_layout->addLayout(pills);
+  layout->addWidget(top);
+  auto* rule = new QFrame(frame);
+  rule->setObjectName(QStringLiteral("refine-section-rule"));
+  rule->setFixedHeight(1);
+  layout->addWidget(rule);
+
   const Refresh refresh = std::make_shared<EnableRefresh>();
+  PixCakeFoldSection* section = nullptr;
   for (const auto& row : panels::refine_color_rows()) {
-    if (row.kind == panels::PanelRowKind::Title) {
-      layout->addWidget(disabledLabel(qs(row.label)));
+    if (row.kind == panels::PanelRowKind::Section) {
+      const std::string id = row.label;
+      section = new PixCakeFoldSection(qs(row.label), QStringLiteral("refine-section"), frame);
+      section->toggle()->setAccessibleDescription(qtext("refine.section.toggle").arg(qs(row.label)));
+      section->setExpanded(uiState().open_sections.count(id) != 0);
+      section->onToggled([id](bool open) {
+        if (open) uiState().open_sections.insert(id); else uiState().open_sections.erase(id);
+      });
+      layout->addWidget(section);
+      continue;
+    }
+    if (section == nullptr) continue;  // 表里每一行都在某个分组下（test_slider_spec 检查）
+    QWidget* body = section->bodyWidget();
+    QVBoxLayout* body_layout = section->body();
+    if (row.kind == panels::PanelRowKind::HeaderAction) {
+      section->actions()->addWidget(sectionAction(section, qs(row.label)));
+    } else if (row.kind == panels::PanelRowKind::Picker) {
+      body_layout->addWidget(whiteBalancePicker(body, qs(row.label)));
+    } else if (row.kind == panels::PanelRowKind::Title) {
+      body_layout->addWidget(disabledLabel(qs(row.label)));
     } else if (row.kind == panels::PanelRowKind::Choice) {
-      addChoice(modules, layout, row, actions, refresh);
+      addChoice(body, body_layout, row, actions, refresh);
     } else {
-      addDisabledSlider(modules, layout, panels::slider_spec(row.label, row.binding), qs(row.object_name), actions,
+      addDisabledSlider(body, body_layout, panels::slider_spec(row.label, row.binding), qs(row.object_name), actions,
                         row.binding, refresh);
     }
   }
@@ -615,6 +808,7 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
         slider->setAccessibleName(label);
         slider->setRange(low, high);
         slider->setValue(*value);
+        scrollPastOnWheel(slider);
         auto* reading = text(QString::number(*value));
         line_layout->addWidget(text(label));
         line_layout->addWidget(slider, 1);
@@ -966,26 +1160,24 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
   return hooks;
 }
 
-void addModules(QWidget* modules, QVBoxLayout* modules_layout, PageActions* actions, PixCakeHistogram** histogram,
-                PixCakeImageView* canvas) {
-  for (const auto& entry : ui::shell::page_list("refine-modules")) {
-    auto* button = action(qs(entry.text), modules);
-    const QString description = moduleDescription(entry.id.c_str());
-    if (!description.isEmpty()) button->setAccessibleDescription(description);
-    modules_layout->addWidget(button);
+// 一个模块的内容（图标栏点开后面板里显示的东西）。
+void addModuleContent(const std::string& id, QWidget* content, QVBoxLayout* layout, PageActions* actions,
+                      PixCakeHistogram** histogram, PixCakeImageView* canvas) {
+  if (id == "color") {
+    addColorPanel(content, layout, actions, canvas, histogram);
+    return;
   }
-  if (actions->has_photo()) modules_layout->addWidget(buildPresetList(modules, actions));
-  addColorPanel(modules, modules_layout, actions, histogram);
-
-  auto* local = labelPanel(modules, modules_layout, "refine-local-labels", moduleDescription("local"));
-  addLabelList(local, "refine-local");
-  addLocalPanel(modules, local, actions, canvas);
-  const char* feather = panels::refine_local_feather_label();
-  addDisabledSlider(modules, local, panels::slider_spec(feather, panels::refine_local_binding(feather)), QString());
-
-  auto* post = labelPanel(modules, modules_layout, "refine-post-color-labels", moduleDescription("post"));
-  // 后期调色：全图调整是十四支白平衡、影调滑杆（照片打开时可调）；局部调整要蒙版，还没有。
-  {
+  layout->setContentsMargins(12, 12, 12, 12);
+  layout->setSpacing(8);
+  if (id == "local") {
+    auto* local = labelPanel(content, layout, "refine-local-labels", moduleDescription("local"));
+    addLabelList(local, "refine-local");
+    addLocalPanel(content, local, actions, canvas);
+    const char* feather = panels::refine_local_feather_label();
+    addDisabledSlider(content, local, panels::slider_spec(feather, panels::refine_local_binding(feather)), QString());
+  } else if (id == "post") {
+    auto* post = labelPanel(content, layout, "refine-post-color-labels", moduleDescription("post"));
+    // 后期调色：全图调整是十四支白平衡、影调滑杆（照片打开时可调）；局部调整要蒙版，还没有。
     const Refresh refresh = std::make_shared<EnableRefresh>();
     const auto titles = panels::refine_post_color_titles();
     post->addWidget(disabledLabel(qs(titles.front())));
@@ -993,51 +1185,116 @@ void addModules(QWidget* modules, QVBoxLayout* modules_layout, PageActions* acti
       if (row.kind == panels::PanelRowKind::Title) {
         post->addWidget(disabledLabel(qs(row.label)));
       } else {
-        addDisabledSlider(modules, post, panels::slider_spec(row.label, row.binding), qs(row.object_name), actions,
+        addDisabledSlider(content, post, panels::slider_spec(row.label, row.binding), qs(row.object_name), actions,
                           row.binding, refresh);
       }
     }
     post->addWidget(disabledLabel(qs(titles[1])));
-  }
-
-  addLabelList(labelPanel(modules, modules_layout, "refine-clothing-labels", qtext("refine.clothing.name")),
-               "refine-clothing");
-  addLabelList(labelPanel(modules, modules_layout, "refine-portrait-labels", moduleDescription("portrait")),
-               "refine-portrait", true);
-  addLabelList(labelPanel(modules, modules_layout, "refine-image-labels", moduleDescription("image")), "refine-image",
-               true);
-  addLabelList(labelPanel(modules, modules_layout, "refine-pet-labels", qs(copyItem("refine-modules", "pet").text)),
-               "refine-pet", true);
-
-  auto* crop = labelPanel(modules, modules_layout, "refine-crop-labels", moduleDescription("crop"));
-  addCropPanel(modules, crop, actions);
-
-  auto* history = labelPanel(modules, modules_layout, "refine-history-labels", moduleDescription("history"));
-  history->addWidget(disabledLabel(qs(copyItem("refine-history", "title").text)));
-  if (actions->has_photo()) {
-    // 本次打开以来的步骤，点某一步回到那一步；提交和撤销时刷新。
-    auto* steps = new QListWidget(modules);
-    steps->setObjectName(QStringLiteral("refine-history-list"));
-    steps->setAccessibleName(moduleDescription("history"));
-    const auto fill = [steps, actions] {
-      const QSignalBlocker block(steps);
-      steps->clear();
-      for (const auto& row : actions->history()) {
-        steps->addItem(row.text);
-        if (row.current) steps->setCurrentRow(steps->count() - 1);
-      }
-    };
-    fill();
-    actions->watch_history(steps, fill);
-    QObject::connect(steps, &QListWidget::itemClicked, steps,
-                     [steps, actions](QListWidgetItem*) { actions->request_history_step(static_cast<std::size_t>(steps->currentRow())); });
-    history->addWidget(steps);
+  } else if (id == "clothing") {
+    addLabelList(labelPanel(content, layout, "refine-clothing-labels", qtext("refine.clothing.name")), "refine-clothing");
+  } else if (id == "portrait") {
+    addLabelList(labelPanel(content, layout, "refine-portrait-labels", moduleDescription("portrait")), "refine-portrait", true);
+  } else if (id == "image") {
+    addLabelList(labelPanel(content, layout, "refine-image-labels", moduleDescription("image")), "refine-image", true);
+  } else if (id == "crop") {
+    addCropPanel(content, labelPanel(content, layout, "refine-crop-labels", moduleDescription("crop")), actions);
+  } else if (id == "history") {
+    auto* history = labelPanel(content, layout, "refine-history-labels", moduleDescription("history"));
+    history->addWidget(disabledLabel(qs(copyItem("refine-history", "title").text)));
+    if (actions->has_photo()) {
+      // 本次打开以来的步骤，点某一步回到那一步；提交和撤销时刷新。
+      auto* steps = new QListWidget(content);
+      steps->setObjectName(QStringLiteral("refine-history-list"));
+      steps->setAccessibleName(moduleDescription("history"));
+      const auto fill = [steps, actions] {
+        const QSignalBlocker block(steps);
+        steps->clear();
+        for (const auto& row : actions->history()) {
+          steps->addItem(row.text);
+          if (row.current) steps->setCurrentRow(steps->count() - 1);
+        }
+      };
+      fill();
+      actions->watch_history(steps, fill);
+      QObject::connect(steps, &QListWidget::itemClicked, steps,
+                       [steps, actions](QListWidgetItem*) { actions->request_history_step(static_cast<std::size_t>(steps->currentRow())); });
+      history->addWidget(steps);
+    } else {
+      auto* history_empty = text(qs(copyItem("refine-history", "empty").text), true);
+      history_empty->setEnabled(false);
+      history_empty->setAccessibleName(qtext("refine.history.empty.name"));
+      history->addWidget(history_empty);
+    }
   } else {
-    auto* history_empty = text(qs(copyItem("refine-history", "empty").text), true);
-    history_empty->setEnabled(false);
-    history_empty->setAccessibleName(qtext("refine.history.empty.name"));
-    history->addWidget(history_empty);
+    // AI色彩、联机：还没有接入。
+    auto* pending = text(qtext("refine.module.pending"), true);
+    pending->setEnabled(false);
+    layout->addWidget(pending);
   }
+}
+
+// 一个模块的面板页：顶部标题（色彩调节页右侧还有“大师级色彩”），下面是可滚动的内容。
+QWidget* modulePage(const CopyItem& entry, PageActions* actions, PixCakeHistogram** histogram, PixCakeImageView* canvas) {
+  auto* page = new QWidget;
+  page->setObjectName(QStringLiteral("refine-module-page"));
+  page->setProperty("module", qs(entry.id));
+  auto* column = new QVBoxLayout(page);
+  column->setContentsMargins(0, 0, 0, 0);
+  column->setSpacing(0);
+  auto* header = new QFrame(page);
+  header->setObjectName(QStringLiteral("refine-module-header"));
+  header->setFixedHeight(PixCakeTheme::kToolbarHeight - 12);
+  auto* header_row = new QHBoxLayout(header);
+  header_row->setContentsMargins(16, 0, 12, 0);
+  QString title = moduleDescription(entry.id.c_str());
+  if (title.isEmpty()) title = qs(entry.text);
+  auto* name = text(title);
+  name->setObjectName(QStringLiteral("refine-module-title"));
+  header_row->addWidget(name);
+  header_row->addStretch(1);
+  if (entry.id == "color") {
+    auto* master = action(qtext("refine.master-color"), header, false);
+    master->setObjectName(QStringLiteral("refine-master-color"));
+    header_row->addWidget(master);
+  }
+  column->addWidget(header);
+  auto* scroll = new QScrollArea(page);
+  scroll->setObjectName(QStringLiteral("refine-module-scroll"));
+  scroll->setWidgetResizable(true);
+  scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  auto* content = new QWidget(scroll);
+  content->setObjectName(QStringLiteral("refine-module-content"));
+  auto* layout = new QVBoxLayout(content);
+  layout->setContentsMargins(0, 0, 0, 0);
+  layout->setSpacing(0);
+  addModuleContent(entry.id, content, layout, actions, histogram, canvas);
+  layout->addStretch(1);
+  scroll->setWidget(content);
+  column->addWidget(scroll, 1);
+  return page;
+}
+
+// 点一下就调用的过滤器（工具栏“预设”是 QFrame 拼的，没有 clicked 信号）。
+class ClickFilter final : public QObject {
+ public:
+  ClickFilter(QObject* parent, std::function<void()> run) : QObject(parent), run_(std::move(run)) {}
+
+ protected:
+  bool eventFilter(QObject* watched, QEvent* event) override {
+    if (event->type() == QEvent::MouseButtonRelease && static_cast<QMouseEvent*>(event)->button() == Qt::LeftButton) {
+      run_();
+      return true;
+    }
+    return QObject::eventFilter(watched, event);
+  }
+
+ private:
+  std::function<void()> run_;
+};
+
+void repolish(QWidget* widget) {
+  widget->style()->unpolish(widget);
+  widget->style()->polish(widget);
 }
 
 }  // namespace
@@ -1084,14 +1341,17 @@ QWidget* buildRefinePage(const PageContext& context) {
   auto* toolbar = new PixCakeToolbar(QStringLiteral("workspace-tools"), page);
   auto* toolbar_layout = toolbar->row();
   toolbar_layout->setSpacing(4);
+  QFrame* preset_tool = nullptr;
   for (const auto& entry : ui::shell::page_list("refine-tools")) {
-    toolbar_layout->addWidget(workspaceTool("refine-tools", entry, toolbar));
+    auto* tool = workspaceTool("refine-tools", entry, toolbar);
+    if (entry.id == "preset") preset_tool = tool;
+    toolbar_layout->addWidget(tool);
   }
   toolbar_layout->addStretch();
   outer->addWidget(toolbar);
 
   auto* center = new QHBoxLayout;
-  center->setSpacing(4);
+  center->setSpacing(0);
   auto* canvas = new QFrame(page);
   canvas->setObjectName(QStringLiteral("workspace-canvas"));
   auto* canvas_layout = new QVBoxLayout(canvas);
@@ -1107,15 +1367,94 @@ QWidget* buildRefinePage(const PageContext& context) {
   canvas_layout->addWidget(action(qs(copyItem("refine-canvas", "compare").text), canvas), 0, Qt::AlignRight);
   center->addWidget(canvas, 1);
 
-  auto* modules = new QFrame(page);
-  modules->setObjectName(QStringLiteral("workspace-side"));
-  modules->setMinimumWidth(PixCakeTheme::kWorkspaceSideWidth);
-  modules->setAccessibleName(qtext("region.refine-modules"));
-  auto* modules_layout = new QVBoxLayout(modules);
-  modules_layout->setContentsMargins(14, 12, 14, 12);
-  modules_layout->addWidget(text(qtext("region.refine-modules")));
+  // 右侧（官方 9.3.0 的层级）：预设栏 | 模块面板 | 图标栏。图标栏选一个模块，面板只显示这一个模块；色彩调节页里
+  // 各分组默认收起。预设栏由工具栏的“预设”开关。
+  auto* preset_column = new QFrame(page);
+  preset_column->setObjectName(QStringLiteral("refine-preset-column"));
+  preset_column->setFixedWidth(220);
+  auto* preset_layout = new QVBoxLayout(preset_column);
+  preset_layout->setContentsMargins(12, 12, 12, 12);
+  if (actions->has_photo()) {
+    preset_layout->addWidget(buildPresetList(preset_column, actions));
+    // 预设栏占满整列高度，列表不再限高。
+    if (auto* list = preset_column->findChild<QListWidget*>(QStringLiteral("refine-preset-list"))) {
+      list->setMaximumHeight(QWIDGETSIZE_MAX);
+    }
+  } else {
+    auto* title = text(qtext("preset.title"));
+    title->setEnabled(false);
+    preset_layout->addWidget(title);
+  }
+  preset_layout->addStretch(1);
+  preset_column->setVisible(uiState().presets);
+  center->addWidget(preset_column);
+
+  auto* panel = new QFrame(page);
+  panel->setObjectName(QStringLiteral("refine-module-panel"));
+  panel->setAccessibleName(qtext("region.refine-modules"));
+  panel->setFixedWidth(PixCakeTheme::kWorkspaceSideWidth + 14);
+  auto* panel_layout = new QVBoxLayout(panel);
+  panel_layout->setContentsMargins(0, 0, 0, 0);
+  panel_layout->setSpacing(0);
+  auto* stack = new QStackedWidget(panel);
+  stack->setObjectName(QStringLiteral("refine-module-stack"));
+  panel_layout->addWidget(stack, 1);
+
+  auto* rail = new QFrame(page);
+  rail->setObjectName(QStringLiteral("refine-rail"));
+  rail->setAccessibleName(qtext("refine.rail"));
+  rail->setFixedWidth(52);
+  auto* rail_layout = new QVBoxLayout(rail);
+  rail_layout->setContentsMargins(6, 8, 6, 8);
+  rail_layout->setSpacing(4);
+  auto* rail_group = new QButtonGroup(rail);
+  rail_group->setExclusive(true);
+
   PixCakeHistogram* histogram = nullptr;
-  addModules(modules, modules_layout, actions, &histogram, image_view);
+  const auto& entries = ui::shell::page_list("refine-modules");
+  if (std::none_of(entries.begin(), entries.end(), [](const CopyItem& e) { return e.id == uiState().module; })) {
+    uiState().module = "color";
+  }
+  for (const auto& entry : entries) {
+    const int index = stack->addWidget(modulePage(entry, actions, &histogram, image_view));
+    auto* button = new QToolButton(rail);
+    button->setObjectName(QStringLiteral("refine-rail-") + qs(entry.id));
+    button->setProperty("rail", true);
+    button->setCheckable(true);
+    button->setText(qs(entry.text));
+    button->setAccessibleName(qs(entry.text));
+    const QString description = moduleDescription(entry.id.c_str());
+    if (!description.isEmpty()) {
+      button->setAccessibleDescription(description);
+      button->setToolTip(description);
+    }
+    // 图标文件放在 assets/refine-modules/<编号>.svg；还没有时只显示文字（官方“图标和文本”模式也带文字）。
+    const QString asset = QStringLiteral("refine-modules/") + qs(entry.id) + QStringLiteral(".svg");
+    if (!shellAssetFile(asset).isEmpty()) {
+      applyAssetIcon(button, asset, 20);
+      button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    }
+    button->setCursor(Qt::PointingHandCursor);
+    rail_group->addButton(button, index);
+    rail_layout->addWidget(button, 0, Qt::AlignHCenter);
+    if (entry.id == "local") {
+      auto* separator = new QFrame(rail);
+      separator->setObjectName(QStringLiteral("refine-rail-separator"));
+      rail_layout->addWidget(separator);
+    }
+    const std::string id = entry.id;
+    QObject::connect(button, &QToolButton::toggled, stack, [stack, index, id](bool on) {
+      if (!on) return;
+      stack->setCurrentIndex(index);
+      uiState().module = id;
+    });
+    if (entry.id == uiState().module) {
+      button->setChecked(true);
+      stack->setCurrentIndex(index);
+    }
+  }
+  rail_layout->addStretch(1);
+
   if (image_view != nullptr) {
     QPointer<PixCakeImageView> view(image_view);
     QPointer<PixCakeHistogram> chart(histogram);
@@ -1127,56 +1466,52 @@ QWidget* buildRefinePage(const PageContext& context) {
       if (chart) chart->setHistogram(update.histogram);
     });
   }
-  modules_layout->addStretch();
-  // The module panels are taller than the window: scroll them instead of
-  // squeezing every row (the colour panel's histogram and sliders included).
-  auto* side_scroll = new QScrollArea(page);
-  side_scroll->setObjectName(QStringLiteral("workspace-side-scroll"));
-  side_scroll->setWidget(modules);
-  side_scroll->setWidgetResizable(true);
-  side_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-  side_scroll->setMinimumWidth(PixCakeTheme::kWorkspaceSideWidth + side_scroll->verticalScrollBar()->sizeHint().width());
-  // 功能区底部：保存新预设（预设还没接）和同步到选中图片（⇧⌘S，需求 §18）。
-  auto* side_column = new QVBoxLayout;
-  side_column->setSpacing(4);
-  side_column->addWidget(side_scroll, 1);
-  auto* side_bottom = new QHBoxLayout;
-  auto* sync = action(qtext("sync.title"), page, actions->has_photo());
-  sync->setObjectName(QStringLiteral("refine-sync"));
-  QObject::connect(sync, &QPushButton::clicked, sync, [sync, actions] { openSyncDialog(sync, actions); });
-  auto* save_preset = action(qtext("preset.save"), page, actions->has_photo());
+  // 面板底部：保存新预设和同步到选中图片（⇧⌘S，需求 §18）。
+  auto* side_bottom = new QFrame(panel);
+  side_bottom->setObjectName(QStringLiteral("refine-side-bottom"));
+  auto* bottom_row = new QHBoxLayout(side_bottom);
+  bottom_row->setContentsMargins(12, 8, 12, 8);
+  bottom_row->setSpacing(8);
+  auto* save_preset = action(qtext("preset.save"), side_bottom, actions->has_photo());
   save_preset->setObjectName(QStringLiteral("refine-save-preset"));
   QObject::connect(save_preset, &QPushButton::clicked, save_preset, [save_preset, actions] { openSavePresetDialog(save_preset, actions); });
-  side_bottom->addStretch();
-  side_bottom->addWidget(save_preset);
-  side_bottom->addWidget(sync);
-  side_column->addLayout(side_bottom);
-  center->addLayout(side_column);
+  auto* sync = action(qtext("sync.title"), side_bottom, actions->has_photo());
+  sync->setObjectName(QStringLiteral("refine-sync"));
+  QObject::connect(sync, &QPushButton::clicked, sync, [sync, actions] { openSyncDialog(sync, actions); });
+  bottom_row->addWidget(save_preset, 1);
+  bottom_row->addWidget(sync, 1);
+  panel_layout->addWidget(side_bottom);
+  center->addWidget(panel);
+  center->addWidget(rail);
   bindShortcut(page, "sync-effect", [sync, actions] {
     if (actions->has_photo()) openSyncDialog(sync, actions);
   });
-  // 模块快捷键（需求 §8.1）：把功能区滚到那个模块；还没有的模块（AI 色彩风格）不绑。
-  const std::pair<const char*, const char*> modules_keys[] = {
-      {"module-color", "refine-color-labels"},         {"module-local", "refine-local-labels"},
-      {"module-portrait", "refine-portrait-labels"},   {"module-image", "refine-image-labels"},
-      {"module-clothing", "refine-clothing-labels"},   {"module-post", "refine-post-color-labels"},
-      {"module-crop", "refine-crop-labels"},           {"module-history", "refine-history-labels"},
-      {"preset-list", "refine-preset-labels"}};
-  for (const auto& [id, panel_name] : modules_keys) {
-    const QString name = QString::fromLatin1(panel_name);
-    bindShortcut(page, id, [side_scroll = QPointer<QScrollArea>(side_scroll), name] {
-      if (!side_scroll) return;
-      if (auto* panel = side_scroll->widget()->findChild<QWidget*>(name)) {
-        side_scroll->verticalScrollBar()->setValue(panel->mapTo(side_scroll->widget(), QPoint(0, 0)).y() - 8);
-      }
-    });
+
+  // 工具栏“预设”开关预设栏；快捷键同。
+  const auto toggle_presets = [preset_column = QPointer<QFrame>(preset_column), preset_tool = QPointer<QFrame>(preset_tool)] {
+    uiState().presets = !uiState().presets;
+    if (preset_column) preset_column->setVisible(uiState().presets);
+    if (preset_tool) {
+      preset_tool->setProperty("emphasis", uiState().presets);
+      repolish(preset_tool);
+    }
+  };
+  if (preset_tool != nullptr) {
+    preset_tool->setProperty("emphasis", uiState().presets);
+    preset_tool->setCursor(Qt::PointingHandCursor);
+    preset_tool->installEventFilter(new ClickFilter(preset_tool, toggle_presets));
   }
-  if (histogram != nullptr && context.actions.has_photo()) {
-    // With a photo open, start at the colour panel (histogram and sliders).
-    QPointer<QScrollArea> scroll(side_scroll);
-    QPointer<PixCakeHistogram> chart(histogram);
-    QTimer::singleShot(0, side_scroll, [scroll, chart] {
-      if (scroll && chart) scroll->verticalScrollBar()->setValue(chart->mapTo(scroll->widget(), QPoint(0, 0)).y() - 40);
+  bindShortcut(page, "preset-list", toggle_presets);
+  // 模块快捷键（需求 §8.1）：切到那个模块；还没有的模块（AI 色彩风格）不绑。
+  const std::pair<const char*, const char*> modules_keys[] = {
+      {"module-color", "color"},     {"module-local", "local"},       {"module-portrait", "portrait"},
+      {"module-image", "image"},     {"module-clothing", "clothing"}, {"module-post", "post"},
+      {"module-crop", "crop"},       {"module-history", "history"}};
+  for (const auto& [shortcut, module] : modules_keys) {
+    const QString name = QStringLiteral("refine-rail-") + QString::fromLatin1(module);
+    bindShortcut(page, shortcut, [rail = QPointer<QFrame>(rail), name] {
+      if (!rail) return;
+      if (auto* button = rail->findChild<QToolButton*>(name)) button->setChecked(true);
     });
   }
   outer->addLayout(center, 1);

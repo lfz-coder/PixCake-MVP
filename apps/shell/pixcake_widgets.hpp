@@ -15,6 +15,8 @@
 #include <QPaintEvent>
 #include <QPixmap>
 #include <QPushButton>
+#include <QToolButton>
+#include <QLinearGradient>
 #include <QStringList>
 #include <QSvgRenderer>
 #include <QHBoxLayout>
@@ -28,6 +30,7 @@
 #include <algorithm>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -187,13 +190,14 @@ inline QString shellAssetFile(const QString& relative) {
   return {};
 }
 
-// RGB line histogram: three QPainter polylines over the 0..255 axis.  Counts
-// come from ui/panels::rgb_histogram; without data only the axis is drawn.
+// 色彩调节页顶部的 RGB 直方图（官方样式）：深色渐变底，三个通道各画一块半透明填充、叠加处相加变亮，再描一条细线。
+// 计数来自 ui/panels::rgb_histogram；没有数据时只画底。Qt 控件画不出这种图，用 QPainter 自绘。
 class PixCakeHistogram final : public QFrame {
  public:
   explicit PixCakeHistogram(QWidget* parent = nullptr) : QFrame(parent) {
     setObjectName(QStringLiteral("refine-histogram"));
     setAccessibleName(copyText("widget.histogram"));
+    setMinimumHeight(96);
   }
 
   void setHistogram(const ui::panels::RgbHistogram& histogram) {
@@ -205,34 +209,127 @@ class PixCakeHistogram final : public QFrame {
  protected:
   void paintEvent(QPaintEvent*) override {
     QPainter painter(this);
-    painter.setPen(palette().color(QPalette::Mid));
-    const int baseline = height() - 18;
-    painter.drawLine(8, baseline, width() - 8, baseline);
-    painter.drawText(8, height() - 2, QStringLiteral("0"));
-    const QString end = QStringLiteral("255");
-    painter.drawText(width() - 8 - painter.fontMetrics().horizontalAdvance(end), height() - 2, end);
-    if (histogram_.peak == 0) return;
     painter.setRenderHint(QPainter::Antialiasing);
-    const qreal left = 8;
-    const qreal span = width() - 16;
-    const qreal top = 4;
-    const qreal tall = baseline - top;
-    const auto line = [&](const std::array<std::uint32_t, 256>& bins, const QColor& color) {
+    QLinearGradient ground(0, 0, 0, height());
+    ground.setColorAt(0.0, QColor(0, 0, 0));
+    ground.setColorAt(1.0, QColor(36, 39, 46));
+    painter.fillRect(rect(), ground);
+    if (histogram_.peak == 0) return;
+    const qreal span = width();
+    const qreal bottom = height();
+    const qreal tall = height() - 2;
+    const auto path_of = [&](const std::array<std::uint32_t, 256>& bins, bool closed) {
       QPainterPath path;
+      path.moveTo(0, bottom);
       for (int i = 0; i < 256; ++i) {
-        const QPointF point(left + span * i / 255.0, baseline - tall * bins[static_cast<std::size_t>(i)] / histogram_.peak);
-        if (i == 0) path.moveTo(point); else path.lineTo(point);
+        const qreal y = bottom - tall * bins[static_cast<std::size_t>(i)] / histogram_.peak;
+        path.lineTo(span * i / 255.0, y);
       }
-      painter.setPen(QPen(color, 1.2));
-      painter.drawPath(path);
+      path.lineTo(span, bottom);
+      if (closed) path.closeSubpath();
+      return path;
     };
-    line(histogram_.red, QColor(230, 70, 70, 220));
-    line(histogram_.green, QColor(70, 200, 90, 220));
-    line(histogram_.blue, QColor(80, 130, 240, 220));
+    const std::array<std::pair<const std::array<std::uint32_t, 256>*, QColor>, 3> channels = {
+        {{&histogram_.red, QColor(220, 60, 60)}, {&histogram_.green, QColor(60, 190, 80)}, {&histogram_.blue, QColor(50, 130, 235)}}};
+    painter.setPen(Qt::NoPen);
+    painter.setCompositionMode(QPainter::CompositionMode_Plus);
+    for (const auto& [bins, color] : channels) {
+      QColor fill = color;
+      fill.setAlpha(110);
+      painter.setBrush(fill);
+      painter.drawPath(path_of(*bins, true));
+    }
+    painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+    painter.setBrush(Qt::NoBrush);
+    for (const auto& [bins, color] : channels) {
+      painter.setPen(QPen(color, 1.0));
+      painter.drawPath(path_of(*bins, false));
+    }
   }
 
  private:
   ui::panels::RgbHistogram histogram_;
+};
+
+// 可折叠分组（色彩调节页的“白平衡”“影调”等）：标题栏是一个可勾选的 QToolButton（左边三角箭头 + 分组名），右侧
+// 可以放分组自己的按钮；点标题展开或收起下面的内容。默认收起。
+class PixCakeFoldSection final : public QFrame {
+ public:
+  PixCakeFoldSection(const QString& title, const QString& object_name, QWidget* parent = nullptr) : QFrame(parent) {
+    setObjectName(object_name);
+    setProperty("fold-section", true);
+    setAccessibleName(title);
+    auto* column = new QVBoxLayout(this);
+    column->setContentsMargins(0, 0, 0, 0);
+    column->setSpacing(0);
+    auto* header = new QFrame(this);
+    header->setObjectName(QStringLiteral("refine-section-header"));
+    auto* header_row = new QHBoxLayout(header);
+    header_row->setContentsMargins(12, 0, 12, 0);
+    header_row->setSpacing(8);
+    toggle_ = new QToolButton(header);
+    toggle_->setObjectName(QStringLiteral("refine-section-toggle"));
+    toggle_->setText(title);
+    toggle_->setAccessibleName(title);
+    toggle_->setCheckable(true);
+    toggle_->setIcon(triangle(false));
+    toggle_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    toggle_->setIconSize(QSize(8, 8));
+    toggle_->setCursor(Qt::PointingHandCursor);
+    header_row->addWidget(toggle_);
+    header_row->addStretch(1);
+    actions_ = new QHBoxLayout;
+    actions_->setContentsMargins(0, 0, 0, 0);
+    actions_->setSpacing(10);
+    header_row->addLayout(actions_);
+    column->addWidget(header);
+    body_ = new QWidget(this);
+    body_->setObjectName(QStringLiteral("refine-section-body"));
+    auto* body_layout = new QVBoxLayout(body_);
+    body_layout->setContentsMargins(12, 2, 12, 12);
+    body_layout->setSpacing(10);
+    body_->setVisible(false);
+    column->addWidget(body_);
+    QObject::connect(toggle_, &QToolButton::toggled, this, [this](bool open) {
+      toggle_->setIcon(triangle(open));
+      body_->setVisible(open);
+      if (on_toggled_) on_toggled_(open);
+    });
+  }
+  QVBoxLayout* body() { return static_cast<QVBoxLayout*>(body_->layout()); }
+  QWidget* bodyWidget() { return body_; }
+  QHBoxLayout* actions() { return actions_; }
+  QToolButton* toggle() { return toggle_; }
+  bool expanded() const { return toggle_->isChecked(); }
+  void setExpanded(bool open) { toggle_->setChecked(open); }
+  void onToggled(std::function<void(bool)> callback) { on_toggled_ = std::move(callback); }
+
+ private:
+  // 标题左边的实心小三角（收起朝右、展开朝下）。系统箭头在 macOS 上是折线，和官方不一样，这里自己画。
+  static QIcon triangle(bool down) {
+    const qreal ratio = 2.0;
+    QPixmap pixmap(qRound(8 * ratio), qRound(8 * ratio));
+    pixmap.setDevicePixelRatio(ratio);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(0xe6, 0xe6, 0xe6));
+    QPolygonF shape;
+    if (down) {
+      shape << QPointF(0.5, 2) << QPointF(7.5, 2) << QPointF(4, 6.5);
+    } else {
+      shape << QPointF(2, 0.5) << QPointF(6.5, 4) << QPointF(2, 7.5);
+    }
+    painter.drawPolygon(shape);
+    painter.end();
+    return QIcon(pixmap);
+  }
+
+  QToolButton* toggle_ = nullptr;
+  QHBoxLayout* actions_ = nullptr;
+  QWidget* body_ = nullptr;
+  std::function<void(bool)> on_toggled_;
 };
 
 // 画布上的交互叠加（局部调色的渐变手柄）：画在图像上的内容、是否接管鼠标、拖动（阶段 0 按下、1 移动、2 松开；
@@ -269,6 +366,8 @@ class PixCakeImageView final : public QFrame {
     hooks_ = std::move(hooks);
     update();
   }
+  // 鼠标在画面上时回调指针下像素的颜色（显示的这一帧），移出画面回调空值。色彩调节页的直方图读数用它。
+  void onHoverPixel(std::function<void(std::optional<QColor>)> callback) { hover_pixel_ = std::move(callback); }
   // 图像在控件里显示的矩形；没有图像时为空。
   QRectF imageRect() const {
     if (image_.isNull()) return {};
@@ -290,6 +389,7 @@ class PixCakeImageView final : public QFrame {
   void mouseMoveEvent(QMouseEvent* event) override {
     hover_ = event->position();
     hovering_ = true;
+    reportPixel();
     if (dragging_ && hooks_) {
       hooks_->drag(1, percent(event->position()));
       update();
@@ -300,6 +400,7 @@ class PixCakeImageView final : public QFrame {
   }
   void leaveEvent(QEvent* event) override {
     hovering_ = false;
+    if (hover_pixel_) hover_pixel_(std::nullopt);
     update();
     QFrame::leaveEvent(event);
   }
@@ -341,6 +442,19 @@ class PixCakeImageView final : public QFrame {
   }
 
  private:
+  void reportPixel() {
+    if (!hover_pixel_) return;
+    const QRectF target = imageRect();
+    if (image_.isNull() || !target.contains(hover_)) {
+      hover_pixel_(std::nullopt);
+      return;
+    }
+    const int x = std::clamp(static_cast<int>((hover_.x() - target.left()) / target.width() * image_.width()), 0,
+                             image_.width() - 1);
+    const int y = std::clamp(static_cast<int>((hover_.y() - target.top()) / target.height() * image_.height()), 0,
+                             image_.height() - 1);
+    hover_pixel_(image_.pixelColor(x, y));
+  }
   bool takes(const QMouseEvent* event) const {
     return hooks_ && hooks_->accepts && hooks_->accepts() && hooks_->drag && event->button() == Qt::LeftButton &&
            imageRect().contains(event->position());
@@ -358,6 +472,7 @@ class PixCakeImageView final : public QFrame {
   bool dragging_ = false;
   QPointF hover_;
   bool hovering_ = false;
+  std::function<void(std::optional<QColor>)> hover_pixel_;
 };
 
 inline QPixmap loadAssetPixmap(const QString& relative, int size) {
@@ -389,7 +504,7 @@ inline QLabel* assetIcon(const QString& relative, int size, const QString& acces
   return icon;
 }
 
-inline void applyAssetIcon(QPushButton* button, const QString& relative, int size) {
+inline void applyAssetIcon(QAbstractButton* button, const QString& relative, int size) {
   const auto pixmap = loadAssetPixmap(relative, size);
   if (pixmap.isNull() || button == nullptr) return;
   QIcon icon;

@@ -1,5 +1,7 @@
 # 精修调色只读名称 Implementation Plan
 
+> **2026-11-08 更正：** 本计划依据的读取记录把预设栏和色彩面板混排，并把名称全部平铺成同一级；「不加入 ISO -、- mm、F/-、-秒」也是误判（那是官方直方图下的相机参数行）。正确层级是右侧图标栏选模块、色彩调节面板里是可折叠分组，见 `docs/superpowers/evidence/2026-11-08-refine-right-panel-hierarchy.md`。9.3.0 的图标栏里没有「宠物」，已从精修图标栏移除。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 把 9.3.0 现场读到的调色名称放进精修侧栏，不放任何滑杆数值。
@@ -16,7 +18,7 @@
 - 不调用 `setValue`、`setRange`、`setChecked`。
 - 不把现场滑杆文字 70、102、-1、4650 或内核 `ParameterMode` 写进界面。
 - 不加入「宠物」的新描述，不删除已有「宠物」按钮。
-- 不加入「ISO -」「- mm」「F/-」「-秒」和文字为 test 的控件。
+- ~~不加入「ISO -」「- mm」「F/-」「-秒」~~（已更正：要加入，是相机参数行）；文字为 test 的控件不加入。
 - 登录、导入、渲染、AI、导出和滑杆交互不在本计划。
 
 ---

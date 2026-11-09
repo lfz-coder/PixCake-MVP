@@ -40,8 +40,9 @@ std::optional<SliderBinding> refine_local_binding(std::string_view label);
 // 裁剪面板角度滑杆的参数（crop/angle）。
 SliderBinding refine_crop_angle_binding();
 
-// 精修色彩面板的行（显示顺序、显示名、绑定都来自同一张表，代码质量清单 Q-11）。
-enum class PanelRowKind { Title, Slider, Choice };
+// 精修色彩面板的行（显示顺序、显示名、绑定都来自同一张表，代码质量清单 Q-11）。Section 开始一个可折叠分组，
+// 其后的行属于它，直到下一个 Section；HeaderAction 画在分组标题栏右侧；Picker 是白平衡的“预设 + 吸管”一行。
+enum class PanelRowKind { Title, Section, HeaderAction, Picker, Slider, Choice };
 struct PanelRow {
   PanelRowKind kind = PanelRowKind::Title;
   std::string label;

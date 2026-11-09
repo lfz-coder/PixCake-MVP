@@ -38,7 +38,7 @@ std::string format_value(double value, int decimals) {
   return buffer;
 }
 
-enum class Def { Title, Section, TopSlider, SubSlider, HslGrid, BwGrid, SelectiveGrid, Choice };
+enum class Def { Title, Section, HeaderAction, Picker, TopSlider, SubSlider, HslGrid, BwGrid, SelectiveGrid, Choice };
 
 struct RowDef {
   Def def;
@@ -54,15 +54,18 @@ struct LabelBinding {
 };
 
 // 精修色彩面板的唯一来源（代码质量清单 Q-11）：显示顺序、显示名和参数绑定都在这张表里。
-// 顺序来自 PixCake 9.3.0 的 Jarvis 页面图。Section 是分组标题，后期调色面板复用它们。
+// 色彩面板是右侧图标栏“调色”打开的一页，标题“色彩调节”；页内是可折叠的分组（Section），点开才显示分组里的控件。
+// 分组顺序来自 PixCake 9.3.0 的辅助功能树（2026-11-08 复核）：AI色彩、配置文件、滤镜、白平衡、影调、色阶、曲线、HSL、
+// 色彩编辑器、颜色分级、可选颜色、细节、颗粒、镜头调整、透视矫正、校准、创意色彩。HeaderAction 是分组标题栏右侧的
+// 按钮（AI校准白平衡、AI校准曝光），Picker 是白平衡分组里“白平衡 [自定义] [吸管]”那一行。后期调色面板复用分组标题。
 // 没有参数的滑杆还没有参数模式，只显示“范围待确认”。颜色分级的“平衡”只用滑杆读到过范围，没有登记。
 constexpr RowDef kColorPanel[] = {
-    {Def::Title, "开启 AI 色彩风格"}, {Def::Choice, "配置文件", "profile"}, {Def::Title, kColorAdjust}, {Def::Title, ui::shell::kWordPreset},
-    {Def::Section, "滤镜"}, {Def::Title, "推荐"}, {Def::Title, "我的"}, {Def::Title, "AI 校准"},
-    {Def::TopSlider, "程度"},
-    {Def::Section, "白平衡"}, {Def::Title, "AI校准白平衡"}, {Def::Title, "白平衡选择器"},
+    {Def::Section, ui::shell::kWordAiColor}, {Def::Title, "开启 AI 色彩风格"},
+    {Def::Section, "配置文件"}, {Def::Choice, "配置文件", "profile"},
+    {Def::Section, "滤镜"}, {Def::TopSlider, "程度"},
+    {Def::Section, ui::shell::kWordWhiteBalance}, {Def::HeaderAction, "AI校准白平衡"}, {Def::Picker, "白平衡选择器"},
     {Def::TopSlider, "色温", "temperature"}, {Def::TopSlider, "色调", "tint"},
-    {Def::Section, "影调"}, {Def::Title, "AI校准曝光"},
+    {Def::Section, "影调"}, {Def::HeaderAction, "AI校准曝光"},
     {Def::TopSlider, "曝光", "exposure"}, {Def::TopSlider, "对比度", "contrast"},
     {Def::TopSlider, "亮度", "brightness"}, {Def::TopSlider, "高光", "highlights"},
     {Def::TopSlider, "阴影", "shadows"}, {Def::TopSlider, "白色", "whites"}, {Def::TopSlider, "黑色", "blacks"},
@@ -238,6 +241,9 @@ std::vector<PanelRow> refine_color_rows() {
     PanelRow row;
     row.label = std::string(def.label);
     row.object_name = std::string(def.object_name);
+    if (def.def == Def::Section) row.kind = PanelRowKind::Section;
+    if (def.def == Def::HeaderAction) row.kind = PanelRowKind::HeaderAction;
+    if (def.def == Def::Picker) row.kind = PanelRowKind::Picker;
     if (def.def == Def::Choice) {
       row.kind = PanelRowKind::Choice;
       row.binding = SliderBinding{std::string(def.capability), std::string(def.parameter)};
@@ -257,7 +263,7 @@ std::vector<PanelRow> refine_post_color_rows() {
   std::vector<PanelRow> rows;
   bool top = false;  // 只取白平衡、影调（滤镜和色阶之后的分组后期调色没有登记）
   for (const auto& def : kColorPanel) {
-    if (def.def == Def::Section) top = def.label == "白平衡" || def.label == "影调";
+    if (def.def == Def::Section) top = def.label == ui::shell::kWordWhiteBalance || def.label == "影调";
     if (!top) continue;
     PanelRow row;
     row.label = std::string(def.label);

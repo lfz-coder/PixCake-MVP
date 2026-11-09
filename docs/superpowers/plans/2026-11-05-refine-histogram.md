@@ -1,5 +1,7 @@
 # 精修 RGB 分布直方图 Implementation Plan
 
+> **2026-11-08 更正：** 本计划里「直方图下方保留 RGB 和 Lab 两个读数位」是误读。官方直方图卡片下方一行平时是相机参数（非 RAW 显示「ISO -」「- mm」「F/-」「-秒」和格式标签），鼠标在画面上时换成指针下像素的 R、G、B；RGB 还是 LAB 由菜单「视图 → 色彩读数」选，不是两个并排的读数位。直方图本身是三通道半透明填充加描线，没有 0/255 刻度文字。现状见 `docs/superpowers/evidence/2026-11-08-refine-right-panel-hierarchy.md`。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 在精修调色区顶部放上手册描述的直方图空框，横轴 0 到 255，不编造像素分布。
@@ -31,7 +33,7 @@
 
 - [x] **Step 2: 放在色彩调节组的第一项**
 
-下面加两个禁用读数位，可见文字是 RGB、Lab。无障碍名分别是「RGB读数，暂无已加载照片」「Lab读数，暂无已加载照片」。
+~~下面加两个禁用读数位，可见文字是 RGB、Lab。~~（已作废，见文首更正：下面是相机参数行，悬停画面时换成 R、G、B 读数。）
 
 - [x] **Step 3: 跑精修 smoke**
 

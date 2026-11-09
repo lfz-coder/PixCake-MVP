@@ -323,6 +323,18 @@ T* visibleChild(QWidget& window, const char* name) {
   return found;
 }
 
+// 精修右侧图标栏点开一个模块（面板一次只显示一个模块，别的模块的控件不可见）。
+bool show_refine_module(QWidget& window, const char* id) {
+  const std::string name = std::string("refine-rail-") + id;
+  auto* button = visibleChild<QToolButton>(window, name.c_str());
+  if (button == nullptr) {
+    qCritical("missing refine rail button %s", id);
+    return false;
+  }
+  button->click();
+  return button->isChecked();
+}
+
 // 导出进程写出成品，导出列表显示成功；成品带着精修的曝光（和画面一样偏红亮）。
 int smoke_export(pixcake::shell::ShellWindow& window, const QString& folder) {
   auto& controller = window.controller();
@@ -1323,6 +1335,8 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
     qCritical("grain amount did not draw or unblock its sliders");
     return 8;
   }
+  // The colour panel's sections start folded; the sliders are there but hidden until a section header is clicked.
+  if (!show_refine_module(window, "crop")) return 8;
   // Crop and rotate: the live controls change the frame (rotate swaps width and height, a ratio crops, straightening
   // shrinks it); everything is put back before the next step.
   {
@@ -1401,6 +1415,7 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
     }
     (void)controller;
   }
+  if (!show_refine_module(window, "post")) return 8;
   // Post colour: its exposure slider draws and commits to color.post (a step of its own in the history).
   {
     auto& controller = window.controller();
@@ -1428,6 +1443,7 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
       return 8;
     }
   }
+  if (!show_refine_module(window, "local")) return 8;
   // Local colour (mask list): create a mask, brighten it, give it a linear gradient item (only part of the picture keeps the
   // brightening), cut a radial item out of it, then remove the items and the mask.  Gradients need no segmentation.
   {
@@ -1922,6 +1938,7 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
       return 8;
     }
   }
+  if (!show_refine_module(window, "history")) return 8;
   // History: original, exposure, profile, grain; the list shows them; undo, redo and a click walk the document.
   {
     auto& controller = window.controller();

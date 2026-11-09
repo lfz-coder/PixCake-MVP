@@ -214,12 +214,42 @@ void test_q11_color_panel_rows_come_from_one_table() {
   }
   EXPECT(post_sliders == 14 && post_titles == 2);
   const auto titles = pixcake::ui::panels::refine_post_color_titles();
-  EXPECT(titles.size() == 17 && titles.front() == "全图调整" && titles.back() == "创意色彩");
+  EXPECT(titles.size() == 19 && titles.front() == "全图调整" && titles.back() == "创意色彩");
   EXPECT(std::string(pixcake::ui::panels::refine_color_panel_name()) == "色彩调节");
+}
+
+// 色彩调节页是一列可折叠分组（官方 9.3.0 辅助功能树的顺序）；每个滑杆、选择都在某个分组里。面板名“色彩调节”、
+// 预设栏的“预设/推荐/我的”、直方图下的“AI 校准”不是色彩面板的行。
+void test_color_panel_is_a_list_of_folding_sections() {
+  using pixcake::ui::panels::PanelRowKind;
+  std::vector<std::string> sections;
+  bool before_first_section = false;
+  for (const auto& row : pixcake::ui::panels::refine_color_rows()) {
+    if (row.kind == PanelRowKind::Section) {
+      sections.push_back(row.label);
+      continue;
+    }
+    if (sections.empty()) before_first_section = true;
+    EXPECT(row.label != "色彩调节" && row.label != "预设" && row.label != "推荐" && row.label != "我的" &&
+           row.label != "AI 校准");
+  }
+  EXPECT(!before_first_section);
+  const std::vector<std::string> expected = {"AI色彩", "配置文件", "滤镜",     "白平衡",   "影调",     "色阶",
+                                             "曲线",   "HSL",      "色彩编辑器", "颜色分级", "可选颜色", "细节",
+                                             "颗粒",   "镜头调整", "透视矫正", "校准",     "创意色彩"};
+  EXPECT(sections == expected);
+  int header_actions = 0;
+  int pickers = 0;
+  for (const auto& row : pixcake::ui::panels::refine_color_rows()) {
+    if (row.kind == PanelRowKind::HeaderAction) ++header_actions;
+    if (row.kind == PanelRowKind::Picker) ++pickers;
+  }
+  EXPECT(header_actions == 2 && pickers == 1);
 }
 
 int main() {
   test_q11_color_panel_rows_come_from_one_table();
+  test_color_panel_is_a_list_of_folding_sections();
   test_c46_subgroup_labels_bind_to_kernel_modes();
   test_c38_b27_exposure_spec_comes_from_parameter_mode();
   test_c36_temperature_spec();
