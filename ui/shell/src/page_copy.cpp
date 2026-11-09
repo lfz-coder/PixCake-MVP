@@ -1020,6 +1020,17 @@ const std::vector<ShortcutEntry>& shortcut_table() {
       {"module-post", "Ctrl+Shift+E", "后期调色", "refine"},
       {"module-crop", "C", "裁剪", "refine"},
       {"module-history", "Shift+V", "历史", "refine"},
+      // 局部调色里的画笔（需求 §23.1）：K 选画笔，其余调当前画笔的设置，只在画笔设置显示时起作用。官方切到擦除是
+      // Shift+E，和“导出设置”同键（官方按上下文分流），这里没有做；X 已是旗标排除。
+      {"brush-tool", "K", kWordBrush, "refine"},
+      {"brush-size-down", "[", std::string(kWordBrush) + "大小减小", "refine"},
+      {"brush-size-up", "]", std::string(kWordBrush) + "大小增大", "refine"},
+      {"brush-feather-down", "Shift+[", std::string(kWordBrush) + "羽化减小", "refine"},
+      {"brush-feather-up", "Shift+]", std::string(kWordBrush) + "羽化增大", "refine"},
+      {"brush-flow-down", ",", std::string(kWordBrush) + "流畅度减小", "refine"},
+      {"brush-flow-up", ".", std::string(kWordBrush) + "流畅度增大", "refine"},
+      {"brush-density-down", "Shift+,", std::string(kWordBrush) + "密度减小", "refine"},
+      {"brush-density-up", "Shift+.", std::string(kWordBrush) + "密度增大", "refine"},
       {"rating-0", "0", "星级取消", "project"},
       {"rating-1", "1", "星级 1", "project"},
       {"rating-2", "2", "星级 2", "project"},

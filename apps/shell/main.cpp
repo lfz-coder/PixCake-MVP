@@ -1712,6 +1712,49 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
       qCritical("the history step carries the stroke text");
       return 8;
     }
+    // Brush shortcuts from the table: ] and [ change the size by 10, the others change their slider; K selects the brush.
+    {
+      const auto fire_brush = [&window](const char* id) {
+        QShortcut* found = nullptr;
+        for (auto* candidate : window.findChildren<QShortcut*>(QStringLiteral("shortcut-") + QString::fromLatin1(id))) {
+          const auto* owner = qobject_cast<QWidget*>(candidate->parent());
+          if (owner != nullptr && owner->isVisibleTo(&window)) found = candidate;
+        }
+        if (found == nullptr) return false;
+        emit found->activated();
+        return true;
+      };
+      const auto value_of = [&](const char* name) {
+        auto* slider = visibleChild<QSlider>(window, name);
+        return slider != nullptr ? slider->value() : -1;
+      };
+      const int size_before = value_of("refine-local-brush-size");
+      const int feather_before = value_of("refine-local-brush-feather");
+      const int flow_before = value_of("refine-local-brush-flow");
+      const int density_before = value_of("refine-local-brush-density");
+      if (!fire_brush("brush-size-up") || !fire_brush("brush-feather-up") || !fire_brush("brush-flow-down") ||
+          !fire_brush("brush-density-down") || value_of("refine-local-brush-size") != size_before + 10 ||
+          value_of("refine-local-brush-feather") != feather_before + 10 || value_of("refine-local-brush-flow") != flow_before - 10 ||
+          value_of("refine-local-brush-density") != density_before - 10) {
+        qCritical("the brush setting shortcuts did not move the sliders");
+        return 8;
+      }
+      fire_brush("brush-size-down");
+      if (value_of("refine-local-brush-size") != size_before) {
+        qCritical("the size-down shortcut did not undo the size-up");
+        return 8;
+      }
+      // K selects the brush in the part list and turns the canvas drag on.
+      region_box = visibleChild<QComboBox>(window, "refine-local-item-region");
+      region_box->setCurrentIndex(region_box->findData(QStringLiteral("radial")));
+      draw = visibleChild<QPushButton>(window, "refine-local-draw");
+      draw->setChecked(false);
+      if (!fire_brush("brush-tool") || region_box->currentData().toString() != QStringLiteral("brush") ||
+          !visibleChild<QPushButton>(window, "refine-local-draw")->isChecked()) {
+        qCritical("the brush tool shortcut did not select the brush");
+        return 8;
+      }
+    }
     // Clean up: delete the mask.
     auto* remove = visibleChild<QPushButton>(window, "refine-local-delete");
     if (remove == nullptr) {

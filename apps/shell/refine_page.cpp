@@ -319,6 +319,7 @@ struct LocalState {
   int brush_density = 100;
   bool brush_erase = false;
   bool drag_brush = false;
+  bool brush_on = false;  // 画笔设置显示着（选中画笔子项，或部位下拉选了画笔）
   std::vector<std::pair<int, int>> stroke_points;  // 正在画的一笔，位置是图像百分比的百倍（0..10000）
   QString signature;
 };
@@ -629,9 +630,11 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
       setting(qtext("local.brush.flow"), "refine-local-brush-flow", 0, 100, &state->brush_flow);
       setting(qtext("local.brush.density"), "refine-local-brush-density", 0, 100, &state->brush_density);
       body_layout->addWidget(brush_box);
-      const auto show = [brush_box = QPointer<QWidget>(brush_box), region_box = QPointer<QComboBox>(region_box), item_region] {
+      const auto show = [state, brush_box = QPointer<QWidget>(brush_box), region_box = QPointer<QComboBox>(region_box), item_region] {
         if (!brush_box) return;
-        brush_box->setVisible(item_region == "brush" || (region_box && region_box->currentData().toString() == QStringLiteral("brush")));
+        const bool on = item_region == "brush" || (region_box && region_box->currentData().toString() == QStringLiteral("brush"));
+        brush_box->setVisible(on);
+        state->brush_on = on;
       };
       show();
       QObject::connect(region_box, &QComboBox::currentIndexChanged, brush_box, [show](int) { show(); });
@@ -881,6 +884,35 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
       }
     }
   };
+  hooks->cursor_diameter = [=]() -> double {
+    // 画笔设置显示着且“在画布上拖动”打开：光标圈是笔的大小（硬边直径，图像像素按显示比例换算）。
+    if (!view || !state->draw || !state->brush_on || state->mask < 0 || view->image().isNull()) return 0.0;
+    const QRectF shown = view->imageRect();
+    return shown.isEmpty() ? 0.0 : state->brush_size * shown.width() / view->image().width();
+  };
+  // 画笔快捷键：K 选画笔并打开“在画布上拖动”；其余调当前画笔设置的滑杆（每次 10），只在画笔设置显示时起作用。
+  bindShortcut(modules, "brush-tool", [=] {
+    if (state->mask < 0) return;
+    for (auto* box : body->findChildren<QComboBox*>(QStringLiteral("refine-local-item-region"))) {
+      const int index = box->findData(QStringLiteral("brush"));
+      if (index >= 0) box->setCurrentIndex(index);
+    }
+    for (auto* button : body->findChildren<QPushButton*>(QStringLiteral("refine-local-draw"))) button->setChecked(true);
+  });
+  const auto nudge = [=](const char* slider_name, int delta) {
+    if (!state->brush_on) return;
+    for (auto* slider : body->findChildren<QSlider*>(QString::fromLatin1(slider_name))) {
+      slider->setValue(std::clamp(slider->value() + delta, slider->minimum(), slider->maximum()));
+    }
+  };
+  bindShortcut(modules, "brush-size-down", [=] { nudge("refine-local-brush-size", -10); });
+  bindShortcut(modules, "brush-size-up", [=] { nudge("refine-local-brush-size", 10); });
+  bindShortcut(modules, "brush-feather-down", [=] { nudge("refine-local-brush-feather", -10); });
+  bindShortcut(modules, "brush-feather-up", [=] { nudge("refine-local-brush-feather", 10); });
+  bindShortcut(modules, "brush-flow-down", [=] { nudge("refine-local-brush-flow", -10); });
+  bindShortcut(modules, "brush-flow-up", [=] { nudge("refine-local-brush-flow", 10); });
+  bindShortcut(modules, "brush-density-down", [=] { nudge("refine-local-brush-density", -10); });
+  bindShortcut(modules, "brush-density-up", [=] { nudge("refine-local-brush-density", 10); });
   hooks->paint = [=](QPainter& painter, const QRectF& rect) {
     if (state->drag_brush && !state->stroke_points.empty() && view && !view->image().isNull()) {
       // 正在画的一笔：按笔的大小（图像像素）换算成显示像素，半透明红色，圆头。

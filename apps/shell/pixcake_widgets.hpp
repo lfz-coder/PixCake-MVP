@@ -241,6 +241,7 @@ struct CanvasHooks {
   std::function<void(QPainter&, const QRectF&)> paint;
   std::function<bool()> accepts;
   std::function<void(int, const QPointF&)> drag;
+  std::function<double()> cursor_diameter;  // 画笔光标圈的直径（控件里的点）；<= 0 或没有就不画
 };
 
 // The refine canvas: shows the latest preview frame fitted into the widget
@@ -251,6 +252,7 @@ class PixCakeImageView final : public QFrame {
     setObjectName(QStringLiteral("refine-canvas-image"));
     setAccessibleName(copyText("widget.canvas"));
     setMinimumSize(160, 120);
+    setMouseTracking(true);  // 画笔光标圈跟着鼠标
   }
 
   void setImage(QImage image) {
@@ -286,12 +288,20 @@ class PixCakeImageView final : public QFrame {
     }
   }
   void mouseMoveEvent(QMouseEvent* event) override {
+    hover_ = event->position();
+    hovering_ = true;
     if (dragging_ && hooks_) {
       hooks_->drag(1, percent(event->position()));
       update();
     } else {
+      if (hooks_ && hooks_->cursor_diameter && hooks_->cursor_diameter() > 0) update();
       QFrame::mouseMoveEvent(event);
     }
+  }
+  void leaveEvent(QEvent* event) override {
+    hovering_ = false;
+    update();
+    QFrame::leaveEvent(event);
   }
   void mouseReleaseEvent(QMouseEvent* event) override {
     if (dragging_ && hooks_) {
@@ -311,6 +321,17 @@ class PixCakeImageView final : public QFrame {
       if (hooks_ && hooks_->paint) {
         painter.setRenderHint(QPainter::Antialiasing);
         hooks_->paint(painter, target);
+      }
+      if (hovering_ && hooks_ && hooks_->cursor_diameter && target.contains(hover_)) {
+        const double diameter = hooks_->cursor_diameter();
+        if (diameter > 0) {
+          painter.setRenderHint(QPainter::Antialiasing);
+          painter.setBrush(Qt::NoBrush);
+          painter.setPen(QPen(QColor(0, 0, 0, 160), 2.0));
+          painter.drawEllipse(hover_, diameter / 2 + 0.5, diameter / 2 + 0.5);
+          painter.setPen(QPen(QColor(255, 255, 255, 230), 1.0));
+          painter.drawEllipse(hover_, diameter / 2, diameter / 2);
+        }
       }
     }
     if (!status_.isEmpty()) {
@@ -335,6 +356,8 @@ class PixCakeImageView final : public QFrame {
   QString status_;
   std::shared_ptr<CanvasHooks> hooks_;
   bool dragging_ = false;
+  QPointF hover_;
+  bool hovering_ = false;
 };
 
 inline QPixmap loadAssetPixmap(const QString& relative, int size) {
