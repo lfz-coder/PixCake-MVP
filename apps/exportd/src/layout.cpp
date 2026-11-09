@@ -121,26 +121,18 @@ ResultCode compose_layout(const ExportLayout& layout, RgbaSource& image, std::st
     const std::uint32_t sw = std::min(dw, width), sh = std::min(dh, height);
     blit(page, scaled, sw, sh, (static_cast<std::int64_t>(width) - sw) / 2, (static_cast<std::int64_t>(height) - sh) / 2, window);
   } else {
-    const std::int64_t gaps_x = static_cast<std::int64_t>(layout.gap_px) * (layout.cols - 1);
-    const std::int64_t gaps_y = static_cast<std::int64_t>(layout.gap_px) * (layout.rows - 1);
-    const std::int64_t cell_w = (static_cast<std::int64_t>(width) - gaps_x) / layout.cols;
-    const std::int64_t cell_h = (static_cast<std::int64_t>(height) - gaps_y) / layout.rows;
-    if (cell_w < 1 || cell_h < 1) {
-      diagnostic = "行列太多，格子放不下";
-      return ResultCode::StateConflict;
-    }
+    // 官方的做法（2026-11-08 实测归纳）：把 rows×cols 张原始大小的照片（格间 gap_px）拼成一整块画布，
+    // 画布中心对准相纸中心，相纸是这块画布上的一个窗口。画布比相纸大就裁（2 行时缝正好落在纸中间，
+    // 上格是照片下部、下格是照片上部；奇数行时中心落在中间那张照片里，只看到一张），小就留白。
+    const std::int64_t iw = image.width, ih = image.height, gap = layout.gap_px;
+    const std::int64_t canvas_w = layout.cols * iw + (layout.cols - 1) * gap;
+    const std::int64_t canvas_h = layout.rows * ih + (layout.rows - 1) * gap;
+    const auto floor_half = [](std::int64_t v) { return v >= 0 ? v / 2 : -((-v + 1) / 2); };
+    const std::int64_t origin_x = floor_half(static_cast<std::int64_t>(width) - canvas_w);
+    const std::int64_t origin_y = floor_half(static_cast<std::int64_t>(height) - canvas_h);
     for (int row = 0; row < layout.rows; ++row) {
       for (int col = 0; col < layout.cols; ++col) {
-        const std::int64_t cx = col * (cell_w + layout.gap_px);
-        const std::int64_t cy = row * (cell_h + layout.gap_px);
-        // 照片相对格子的位置：水平居中；垂直 1 行居中，多行时首行贴底、末行贴顶。
-        const std::int64_t left = cx + (cell_w - static_cast<std::int64_t>(image.width)) / 2;
-        std::int64_t top = cy + (cell_h - static_cast<std::int64_t>(image.height)) / 2;
-        if (layout.rows > 1 && row == 0) top = cy + cell_h - static_cast<std::int64_t>(image.height);
-        if (layout.rows > 1 && row == layout.rows - 1) top = cy;
-        const Rect cell{std::max(cx, window.left), std::max(cy, window.top), std::min(cx + cell_w, window.right),
-                        std::min(cy + cell_h, window.bottom)};
-        blit(page, photo, image.width, image.height, left, top, cell);
+        blit(page, photo, image.width, image.height, origin_x + col * (iw + gap), origin_y + row * (ih + gap), window);
       }
     }
   }

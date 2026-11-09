@@ -108,8 +108,8 @@ int main() {
     // The window starts at photo row (1536 - 1205) / 2 = 165.
     assert(at(image, 800, 0)[0] == 165 * 255 / 1535);
   }
-  // Id layout 2 rows x 1: gap 10, cells 1795 x 597 (measured ~598); the top cell shows the photo's bottom, the
-  // bottom cell its top.
+  // Id layout 2 rows x 1: the 3082-high canvas is centred on the page (origin -939), so the seam falls mid-page:
+  // the top half shows the photo's bottom, the bottom half its top.
   {
     auto image = ramp(1024, 1536);
     layout.rows = 2;
@@ -129,7 +129,24 @@ int main() {
     assert(white(image, 896, 600));  // the 10 px gap between the cells (x 892..901)
     layout.cols = 1;
   }
-  // A transparent photo is laid over white; a page that is too small for the grid is refused.
+  // Even row counts put the seam mid-page, so 4 rows look like 2; odd counts centre on the middle photo: one photo.
+  {
+    auto two = ramp(1024, 1536);
+    layout.rows = 2;
+    assert(compose_layout(layout, two, why) == ResultCode::Ok);
+    auto four = ramp(1024, 1536);
+    layout.rows = 4;
+    assert(compose_layout(layout, four, why) == ResultCode::Ok);
+    assert(two.rgba == four.rgba);
+    auto three = ramp(1024, 1536);
+    layout.rows = 3;
+    assert(compose_layout(layout, three, why) == ResultCode::Ok);
+    auto one = ramp(1024, 1536);
+    layout.rows = 1;
+    assert(compose_layout(layout, one, why) == ResultCode::Ok);
+    assert(three.rgba == one.rgba);
+  }
+  // A transparent photo is laid over white.
   {
     RgbaSource clear;
     clear.width = clear.height = 4;
@@ -137,11 +154,6 @@ int main() {
     clear.rgba.assign(64, 0);
     layout.id_photo = false;
     assert(compose_layout(layout, clear, why) == ResultCode::Ok && white(clear, 900, 600));
-    auto image = ramp(8, 8);
-    layout.id_photo = true;
-    layout.rows = 20;
-    layout.gap_px = 200;
-    assert(compose_layout(layout, image, why) == ResultCode::StateConflict);
   }
   std::puts("layout ok");
   return 0;
