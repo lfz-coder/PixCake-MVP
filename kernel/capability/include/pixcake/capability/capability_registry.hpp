@@ -78,6 +78,9 @@ struct ParameterMode {
   // 需求或契约没有写明步进、默认值时为假：校验只查范围，界面标“待确认”。
   bool step_confirmed = true;
   bool default_confirmed = true;
+  // 文本参数（局部调色的蒙版名称）：不是绘制通道，值是 1 到 max_length 个字符（按字符数，不按字节）的文本。
+  bool text = false;
+  std::uint32_t max_length = 0;
   std::vector<ParameterDisableRule> disable_rules;
 };
 

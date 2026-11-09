@@ -376,7 +376,40 @@ void test_remove_local_mask() {
   EXPECT(!reloaded.committed_parameter("color.local", "exposure") && reloaded.committed_parameter("color.local", "m2:contrast"));
 }
 
+// 多个参数一次提交：一个修订号；任何一个不合格整次拒绝、文档和文件都不变。
+void test_commit_parameters_is_one_revision() {
+  const auto limits = pixcake::phase_one_version_limits();
+  auto document = *pixcake::EditDocument::create("batch");
+  pixcake::test::FakeFileSystem files;
+  EXPECT(document.write_snapshot(files, "docs/b.pxedit") == pixcake::ResultCode::Ok);
+  EXPECT(document.set_preview("color.local", "m1:region", "linear") == pixcake::ResultCode::Ok);
+  EXPECT(document.set_preview("color.local", "m1:gradient_x", "30") == pixcake::ResultCode::Ok);
+  EXPECT(document.set_preview("color.local", "m1:gradient_angle", "90") == pixcake::ResultCode::Ok);
+  const auto before = document.revision();
+  EXPECT(document.commit_parameters(before, "color.local", {"m1:region", "m1:gradient_x", "m1:gradient_angle"}, limits,
+                                    files, "docs/b.pxedit") == pixcake::ResultCode::Ok);
+  EXPECT(document.revision() == before + 1);
+  EXPECT(document.committed_parameter("color.local", "m1:gradient_x") == std::optional<std::string>("30") &&
+         document.committed_parameter("color.local", "m1:gradient_angle") == std::optional<std::string>("90") &&
+         document.fragment("color.local")->version == 2);
+  const auto saved = files.files["docs/b.pxedit"];
+  EXPECT(document.set_preview("color.local", "m1:gradient_x", "60") == pixcake::ResultCode::Ok);
+  EXPECT(document.set_preview("color.local", "m1:gradient_size", "500") == pixcake::ResultCode::Ok);  // out of range
+  EXPECT(document.commit_parameters(document.revision(), "color.local", {"m1:gradient_x", "m1:gradient_size"}, limits, files,
+                                    "docs/b.pxedit") == pixcake::ResultCode::StateConflict);
+  EXPECT(document.revision() == before + 1 && files.files["docs/b.pxedit"] == saved &&
+         document.committed_parameter("color.local", "m1:gradient_x") == std::optional<std::string>("30"));
+  // A parameter with no preview, a stale revision and an empty list are refused too.
+  EXPECT(document.commit_parameters(document.revision(), "color.local", {"m1:gradient_y"}, limits, files, "docs/b.pxedit") ==
+         pixcake::ResultCode::StateConflict);
+  EXPECT(document.commit_parameters(before, "color.local", {"m1:gradient_x"}, limits, files, "docs/b.pxedit") ==
+         pixcake::ResultCode::StateConflict);
+  EXPECT(document.commit_parameters(document.revision(), "color.local", {}, limits, files, "docs/b.pxedit") ==
+         pixcake::ResultCode::StateConflict);
+}
+
 int main() {
+  test_commit_parameters_is_one_revision();
   test_remove_local_mask();
   test_local_instances_persist_and_paste();
   test_c31_sync_and_paste_validate_through_capability_modules();

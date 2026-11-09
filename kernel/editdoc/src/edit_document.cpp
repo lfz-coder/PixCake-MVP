@@ -955,6 +955,61 @@ bool in_instance(const std::string& id, const std::string& prefix) {
 }
 }  // namespace
 
+ResultCode EditDocument::commit_parameters(std::uint64_t expected_revision, const std::string& capability_id,
+                                           const std::vector<std::string>& parameter_ids,
+                                           const std::vector<VersionLimit>& limits, FileSystem& files,
+                                           const std::string& path) {
+  WriteScope scope(files, path);
+  if (!scope) return scope.code();
+  if (expected_revision != revision() || capability_id.empty() || parameter_ids.empty()) return ResultCode::StateConflict;
+  if (CapabilityRegistry::phase_one().find(capability_id) == nullptr) return ResultCode::StateConflict;
+  const auto existing = fragment(capability_id);
+  const std::uint32_t version = existing ? existing->version : 1;
+  bool too_new = false;
+  if (!known_capability(limits, capability_id, too_new, version)) return ResultCode::StateConflict;
+  if (too_new || (existing && existing->version > max_known_version(capability_id))) return ResultCode::CapabilityTooNew;
+  std::vector<InnerRecord> inner_records;
+  if (existing && !existing->inner.empty() && !parse_tlv(existing->inner, inner_records)) return ResultCode::StateConflict;
+  const auto& toggle = match_writeback_switch();
+  const bool precise_on = committed_parameter(toggle.capability_id, toggle.parameter_id) ==
+                          std::optional<std::string>(toggle.on_value);
+  for (const auto& parameter_id : parameter_ids) {
+    if (parameter_id.empty() || parameter_disabled_in(*this, capability_id, parameter_id)) return ResultCode::StateConflict;
+    const auto value = preview(capability_id, parameter_id);
+    if (!value || !validate_parameter_display_value(capability_id, parameter_id, *value)) return ResultCode::StateConflict;
+    const std::uint32_t target_type =
+        precise_on && match_written_parameter(capability_id, parameter_id) ? kFragmentMatchWritebackRecord : kInnerParameter;
+    bool updated = false;
+    for (auto& record : inner_records) {
+      if (record.type != target_type) continue;
+      std::string id;
+      std::string old_value;
+      if (!parse_parameter(record.payload, id, old_value)) return ResultCode::StateConflict;
+      if (id == parameter_id) {
+        record.payload = serialize_parameter(parameter_id, *value);
+        updated = true;
+        break;
+      }
+    }
+    if (!updated) {
+      InnerRecord created;
+      created.type = target_type;
+      created.payload = serialize_parameter(parameter_id, *value);
+      inner_records.push_back(std::move(created));
+    }
+  }
+  const ResultCode durable = check_durable_revision(files, path, expected_revision, durable_document_revision);
+  if (durable != ResultCode::Ok) return durable;
+  EditDocument next = *this;
+  next.clear_recovered_flag();
+  next.store_fragment(capability_id, std::max(version, max_known_version(capability_id)), serialize_tlv(inner_records));
+  next.set_revision(revision() + 1);
+  const ResultCode saved = atomic_replace(files, path, next.encode(), log_);
+  if (saved != ResultCode::Ok) return saved;
+  *this = std::move(next);
+  return ResultCode::Ok;
+}
+
 void EditDocument::clear_preview_prefix(const std::string& capability_id, const std::string& prefix) {
   for (auto it = preview_.begin(); it != preview_.end();) {
     if (it->first.first == capability_id && in_instance(it->first.second, prefix)) {

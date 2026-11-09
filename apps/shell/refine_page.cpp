@@ -304,6 +304,9 @@ struct LocalState {
   int drag_item = -1;    // 正在拖动的子项
   bool drag_radial = false;
   QPointF drag_start;    // 拖动起点（图像百分比）
+  bool drag_new = false;  // 这次拖动要新建子项（区域和叠加方式到第一次有效移动时才写预览）
+  std::string drag_mode;  // 新建子项的叠加方式
+  std::vector<std::pair<panels::SliderBinding, std::string>> drag_values;  // 松开时一次提交的全部参数
   QString signature;
 };
 
@@ -398,8 +401,11 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
     masks_list->setAccessibleName(qtext("local.mask.new"));
     masks_list->setMaximumHeight(110);
     for (const int mask : masks) {
-      auto* row = new QListWidgetItem(qtext("local.mask.name").arg(mask), masks_list);
+      // 名称是蒙版自己的文本参数；没有就显示“自定义-N”。双击改名。
+      const auto name = actions->parameter_value(binding_of(mask, 0, "name"));
+      auto* row = new QListWidgetItem(name ? qs(*name) : qtext("local.mask.name").arg(mask), masks_list);
       row->setData(Qt::UserRole, mask);
+      row->setFlags(row->flags() | Qt::ItemIsEditable);
       if (mask == state->mask) masks_list->setCurrentItem(row);
     }
     body_layout->addWidget(masks_list);
@@ -417,6 +423,17 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
       state->signature = signature();
       if (const auto run = weak.lock()) (*run)();
     };
+    QObject::connect(masks_list, &QListWidget::itemChanged, masks_list, [=](QListWidgetItem* row) {
+      const int mask = row->data(Qt::UserRole).toInt();
+      const std::string text = row->text().trimmed().toStdString();
+      // 不合格的名称（空、超过 20 个字符）还原成现在的名字；合格的提交成一步历史。
+      if (!text.empty() && validate_parameter_display_value("color.local", "m1:name", text)) {
+        if (actions->parameter_value(binding_of(mask, 0, "name")) != std::optional<std::string>(text)) {
+          actions->request_parameter(binding_of(mask, 0, "name"), text, true);
+        }
+      }
+      again();
+    });
     QObject::connect(masks_list, &QListWidget::itemClicked, masks_list, [state, again](QListWidgetItem* row) {
       state->mask = row->data(Qt::UserRole).toInt();
       state->item = -1;
@@ -508,12 +525,12 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
         if (std::none_of(items.begin(), items.end(), [&](const auto& pair) { return pair.first == item; })) free_item = item;
       }
       if (free_item < 0 || region_box->currentIndex() < 0) return;
+      std::vector<std::pair<panels::SliderBinding, std::string>> values;  // 一步历史
       if (free_item > 0) {
-        actions->request_parameter(binding_of(state->mask, free_item, "mode"), mode_box->currentData().toString().toStdString(),
-                                   true);
+        values.emplace_back(binding_of(state->mask, free_item, "mode"), mode_box->currentData().toString().toStdString());
       }
-      actions->request_parameter(binding_of(state->mask, free_item, "region"),
-                                 region_box->currentData().toString().toStdString(), true);
+      values.emplace_back(binding_of(state->mask, free_item, "region"), region_box->currentData().toString().toStdString());
+      actions->request_parameters(values);
       state->item = free_item;
       again();
     });
@@ -571,6 +588,7 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
       if (found != items.end() && (found->second == "linear" || found->second == "radial")) {
         state->drag_item = found->first;
         state->drag_radial = found->second == "radial";
+        state->drag_new = false;
       } else {
         // 新建：部位下拉选了径向就是径向，否则线性；叠加方式取下拉。
         bool radial = false;
@@ -587,29 +605,46 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
           state->drag_item = -1;
           return;
         }
-        if (free_item > 0) actions->request_parameter(binding_of(state->mask, free_item, "mode"), how.toStdString(), true);
-        actions->request_parameter(binding_of(state->mask, free_item, "region"), radial ? "radial" : "linear", true);
         state->drag_item = free_item;
         state->drag_radial = radial;
+        state->drag_new = true;
+        state->drag_mode = how.toStdString();
       }
       state->item = state->drag_item;
       state->drag_start = at;
+      state->drag_values.clear();
       return;
     }
     if (state->drag_item < 0) return;
     const auto params = gradient_from_drag(state->drag_radial, state->drag_start, at, view->image().size());
     if (!params.valid) return;
-    const bool commit = phase == 2;
+    // 拖动中只写预览；新建的子项到第一次有效移动才写区域和叠加方式的预览。松开时一次提交全部（一步历史）。
+    state->drag_values.clear();
     const auto write = [&](const char* name, int value) {
-      actions->request_parameter(binding_of(state->mask, state->drag_item, name), std::to_string(value), commit);
+      const auto binding = binding_of(state->mask, state->drag_item, name);
+      state->drag_values.emplace_back(binding, std::to_string(value));
+      actions->request_parameter(binding, std::to_string(value), false);
     };
+    if (state->drag_new) {
+      if (state->drag_item > 0) {
+        const auto binding = binding_of(state->mask, state->drag_item, "mode");
+        state->drag_values.emplace_back(binding, state->drag_mode);
+        actions->request_parameter(binding, state->drag_mode, false);
+      }
+      const auto binding = binding_of(state->mask, state->drag_item, "region");
+      const std::string region = state->drag_radial ? "radial" : "linear";
+      state->drag_values.emplace_back(binding, region);
+      actions->request_parameter(binding, region, false);
+    }
     write("gradient_x", params.x);
     write("gradient_y", params.y);
     if (!state->drag_radial) write("gradient_angle", params.angle);
     write("gradient_size", params.size);
     if (state->drag_radial) write("gradient_ratio", params.ratio);
-    if (commit) {
+    if (phase == 2) {
+      actions->request_parameters(state->drag_values);
       state->drag_item = -1;
+      state->drag_new = false;
       if (const auto run = std::weak_ptr<std::function<void()>>(rebuild).lock()) {
         state->signature = signature();
         (*run)();

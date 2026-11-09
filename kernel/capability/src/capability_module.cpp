@@ -178,6 +178,7 @@ ModuleCompile ParameterBackedModule::compile_modes(const ParameterReader& reader
   std::set<std::string> channels;
   for (const auto* mode : modes) {
     if (!only.empty() && mode->parameter_id != only) continue;
+    if (mode->text) continue;  // 文本参数（蒙版名称）不是绘制通道
     const auto value = reader.value(descriptor_.id, prefix + mode->parameter_id);
     if (!value) continue;
     double numeric = 0.0;
@@ -310,7 +311,7 @@ ModuleCompile ParameterBackedModule::compile_interactive(const ParameterReader& 
 
 std::optional<DisplayScale> ParameterBackedModule::display_scale(const std::string& parameter_id) const {
   const ParameterMode* mode = find_parameter_mode(descriptor_.id, parameter_id);
-  if (mode == nullptr || !mode->choices.empty()) return std::nullopt;
+  if (mode == nullptr || !mode->choices.empty() || mode->text) return std::nullopt;
   DisplayScale scale;
   scale.minimum = mode->minimum;
   scale.maximum = mode->maximum;

@@ -104,6 +104,7 @@ class ShellController final : public PageActions {
   void watch_thumbnails(QObject* owner, std::function<void(std::int64_t, const QImage&)> show) override;
   std::size_t thumbnails_ready() const { return thumbnail_cache_.size(); }
   bool has_photo() const override { return session_ != nullptr; }
+  void request_parameters(const std::vector<std::pair<ui::panels::SliderBinding, std::string>>& values) override;
   std::vector<int> local_masks() const override;
   void request_remove_local_mask(int instance) override;
   std::optional<std::string> parameter_value(const ui::panels::SliderBinding& binding) const override;

@@ -359,6 +359,7 @@ QString history_text(const preview_channel::PreviewSession::HistoryEntry& entry)
       std::string_view leaf = base;
       int item = 0;
       split_local_item(base, item, leaf);
+      if (leaf == "name") name = qtext("local.mask.rename");
       for (const auto& row : ui::panels::refine_local_rows()) {
         if (row.binding && row.binding->parameter_id == leaf) {
           name = qtext("local.mask.name").arg(instance) + QLatin1Char(' ') + QString::fromStdString(row.label);
@@ -767,6 +768,19 @@ void ShellController::request_parameter(const ui::panels::SliderBinding& binding
     qWarning("preview %s/%s=%s: %s", binding.capability_id.c_str(), binding.parameter_id.c_str(),
              display_value.c_str(), diagnostic.c_str());
   }
+}
+
+void ShellController::request_parameters(const std::vector<std::pair<ui::panels::SliderBinding, std::string>>& values) {
+  if (!session_ || values.empty()) return;
+  const std::string capability = values.front().first.capability_id;
+  std::vector<std::pair<std::string, std::string>> items;
+  for (const auto& [binding, value] : values) {
+    if (binding.capability_id != capability) return;  // 一次只提交一个能力
+    items.emplace_back(binding.parameter_id, value);
+  }
+  std::string diagnostic;
+  const ResultCode code = session_->commit_parameters(capability, items, diagnostic);
+  if (code != ResultCode::Ok) qWarning("commit %s: %s", capability.c_str(), diagnostic.c_str());
 }
 
 void ShellController::watch_preview(QObject* owner, std::function<void(const PreviewView&)> show) {

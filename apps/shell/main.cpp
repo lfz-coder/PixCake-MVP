@@ -1348,6 +1348,33 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
       qCritical("creating a mask did not add instance 1");
       return 8;
     }
+    // Rename: a valid name is committed as a step of its own; an empty or too long one goes back to the old name.
+    {
+      auto* masks_list = visibleChild<QListWidget>(window, "refine-local-masks");
+      if (masks_list == nullptr || masks_list->count() != 1) {
+        qCritical("the mask list should show the new mask");
+        return 8;
+      }
+      const auto steps = controller.history().size();
+      masks_list->item(0)->setText(QStringLiteral("test-name"));
+      if (controller.parameter_value({"color.local", "m1:name"}) != std::optional<std::string>("test-name") ||
+          controller.history().size() != steps + 1) {
+        qCritical("renaming the mask did not commit one step");
+        return 8;
+      }
+      masks_list = visibleChild<QListWidget>(window, "refine-local-masks");
+      if (masks_list == nullptr || masks_list->item(0)->text() != QStringLiteral("test-name")) {
+        qCritical("the renamed mask is not shown");
+        return 8;
+      }
+      masks_list->item(0)->setText(QString(21, QLatin1Char('x')));
+      masks_list = visibleChild<QListWidget>(window, "refine-local-masks");
+      if (controller.parameter_value({"color.local", "m1:name"}) != std::optional<std::string>("test-name") ||
+          controller.history().size() != steps + 1 || masks_list->item(0)->text() != QStringLiteral("test-name")) {
+        qCritical("a too long name should be put back");
+        return 8;
+      }
+    }
     auto* exposure = visibleChild<QSlider>(window, "refine-local-exposure");
     if (exposure == nullptr || !exposure->isEnabled()) {
       qCritical("the new mask has no exposure slider");
@@ -1457,8 +1484,13 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
     exposure->setValue(std::min(exposure->maximum(), exposure->value() + 20));
     wait_current(window, 30'000);
     const double whole_red = mean_red(view->image());
+    const auto steps_before_drag = controller.history().size();
     if (!drag(40, 30, 40, 70)) {
       qCritical("no frame after the linear drag");
+      return 8;
+    }
+    if (controller.history().size() != steps_before_drag + 1) {  // creating the item and its shape is one step
+      qCritical("a drag should be one history step, got %zu", controller.history().size() - steps_before_drag);
       return 8;
     }
     const auto number = [&](const char* name) {
@@ -1480,9 +1512,14 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
       qCritical("the dragged linear gradient did not limit the brightening: %.2f vs %.2f", mean_red(view->image()), whole_red);
       return 8;
     }
-    // Drag again: it edits the same item (flipped direction = 270 degrees... start at the bottom).
+    // Drag again: it edits the same item, again as one step (flipped direction = 270 degrees... start at the bottom).
+    const auto steps_before_second = controller.history().size();
     if (!drag(40, 70, 40, 30)) {
       qCritical("no frame after the second drag");
+      return 8;
+    }
+    if (controller.history().size() != steps_before_second + 1) {
+      qCritical("the second drag should be one history step too");
       return 8;
     }
     if (std::abs(std::abs(number("gradient_angle")) - 90) > 1 || number("gradient_angle") == 90) {

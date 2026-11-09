@@ -325,6 +325,24 @@ ResultCode PreviewSession::paste(const EffectClipboard& clipboard, std::string& 
   return redraw({{last_capability_, last_parameter_}}, diagnostic);
 }
 
+ResultCode PreviewSession::commit_parameters(const std::string& capability_id,
+                                             const std::vector<std::pair<std::string, std::string>>& values,
+                                             std::string& diagnostic) {
+  if (values.empty()) return ResultCode::StateConflict;
+  const CommandResult result = gate_->commit_parameters(capability_id, values, document_.revision());
+  if (result.code != ResultCode::Ok) {
+    diagnostic = std::string("commit refused: ") + result_code_label(result.code);
+    return result.code;
+  }
+  const auto& last = values.back();
+  history_.record_committed(document_.image_id(), document_, capability_id, last.first, last.second, false);
+  last_capability_ = capability_id;
+  last_parameter_ = last.first;
+  if (committed_) committed_();
+  if (const ResultCode code = send_source(diagnostic); code != ResultCode::Ok) return code;
+  return send_request(capability_id, last.first, last.second, diagnostic);
+}
+
 ResultCode PreviewSession::remove_local_mask(int instance, std::string& diagnostic) {
   const CommandResult result = gate_->remove_local_mask(instance, document_.revision());
   if (result.code != ResultCode::Ok) {

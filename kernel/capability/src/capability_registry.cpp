@@ -117,6 +117,12 @@ std::vector<ParameterMode> make_parameter_modes() {
     combine.choices = {"add", "subtract"};
     combine.default_choice = "add";
   }
+  // 蒙版名称（只有蒙版本身有，子项没有）：1 到 20 个字符的文本，默认没有（界面显示“自定义-N”）。
+  {
+    ParameterMode& name = add("color.local", "name", 0.0, 0.0, 1.0, 0.0, "color", "pixcake.color.local", "name", 21);
+    name.text = true;
+    name.max_length = 20;
+  }
   // 局部调色允许多个蒙版（参数编号带 m<N>: 前缀），旧版本程序读到这个片段要整体跳过，所以版本升到 2。
   for (auto& mode : modes) {
     if (mode.capability_id == "color.local") mode.schema_version = 2;
@@ -513,6 +519,16 @@ bool validate_parameter_display_value(std::string_view capability_id, std::strin
                                       std::string_view display_value) {
   const ParameterMode* mode = find_parameter_mode(capability_id, parameter_id);
   if (mode == nullptr) return false;
+  if (mode->text) {
+    // 按字符数（UTF-8 起始字节）计，不含控制字符。
+    std::uint32_t characters = 0;
+    for (const char c : display_value) {
+      const auto byte = static_cast<unsigned char>(c);
+      if (byte < 0x20 || byte == 0x7f) return false;
+      if ((byte & 0xC0) != 0x80) ++characters;
+    }
+    return characters >= 1 && characters <= mode->max_length;
+  }
   if (!mode->choices.empty()) {
     for (const auto& choice : mode->choices) {
       if (choice == display_value) return true;

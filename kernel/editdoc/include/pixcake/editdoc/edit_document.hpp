@@ -124,6 +124,11 @@ class EditDocument {
                             const std::string& parameter_id, const std::vector<VersionLimit>& limits,
                             FileSystem& files, const std::string& path);
 
+  // 把同一个能力的多个预览值一次提交：全部校验通过才写，一次写盘、修订号只加一（一次拖动是一步历史）。
+  // 每个参数都要先有预览值（set_preview）；任何一个不合格整次拒绝、文档不变。
+  ResultCode commit_parameters(std::uint64_t expected_revision, const std::string& capability_id,
+                               const std::vector<std::string>& parameter_ids, const std::vector<VersionLimit>& limits,
+                               FileSystem& files, const std::string& path);
   // 删掉能力片段里属于 prefix 的全部参数（局部调色删除一个蒙版）：prefix 是 "m<N>:"，空串是没有前缀的那一组；
   // 没有这样的参数返回状态冲突。修订号加一。
   ResultCode commit_parameter_prefix_removal(std::uint64_t expected_revision, const std::string& capability_id,

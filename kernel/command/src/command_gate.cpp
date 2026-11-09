@@ -181,6 +181,20 @@ CommandResult CommandGate::paste(const EffectClipboard& clipboard, std::uint64_t
   });
 }
 
+CommandResult CommandGate::commit_parameters(const std::string& capability_id,
+                                             const std::vector<std::pair<std::string, std::string>>& values,
+                                             std::uint64_t revision) {
+  return run_document_command("commit.batch", revision, [&] {
+    std::vector<std::string> ids;
+    for (const auto& [id, value] : values) {
+      const ResultCode previewed = document_.set_preview(capability_id, id, value);
+      if (previewed != ResultCode::Ok) return previewed;
+      ids.push_back(id);
+    }
+    return document_.commit_parameters(revision, capability_id, ids, limits_, files_, path_);
+  });
+}
+
 CommandResult CommandGate::remove_local_mask(int instance, std::uint64_t revision) {
   return run_document_command("local.remove_mask", revision, [&] {
     if (instance < 0 || instance > kMaxLocalInstances) return ResultCode::StateConflict;

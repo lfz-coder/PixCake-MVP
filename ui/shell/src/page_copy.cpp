@@ -200,6 +200,7 @@ Texts build_texts() {
   t["local.item.mode.subtract"] = "减去";
   t["local.item.text"] = "%1 · %2";
   t["history.local.remove"] = "删除蒙版";
+  t["local.mask.rename"] = "重命名蒙版";
   // 历史（需求 §8.3）。
   t["history.step"] = "%1 %2";
   t["history.post"] = "后期调色·%1";

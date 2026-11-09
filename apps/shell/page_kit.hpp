@@ -99,6 +99,8 @@ class PageActions {
   virtual std::optional<std::string> parameter_value(const ui::panels::SliderBinding&) const { return std::nullopt; }
   // 拖动中 commit 为假（只预览）；松手或键盘改值 commit 为真（经命令入口提交）。
   virtual void request_parameter(const ui::panels::SliderBinding&, const std::string&, bool) {}
+  // 同一个能力的多个参数一次提交（一步历史）：画布上拖一次渐变、添加一个子项。
+  virtual void request_parameters(const std::vector<std::pair<ui::panels::SliderBinding, std::string>>&) {}
   // 画布登记显示回调；owner 删除后不再回调。登记时立即回调一次当前画面。
   virtual void watch_preview(QObject*, std::function<void(const PreviewView&)>) {}
 

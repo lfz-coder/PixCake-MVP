@@ -208,6 +208,24 @@ void test_local_instances_compile_in_order() {
   result = pixcake::render::compile(one);
   EXPECT(result.description.operations.size() == 1 &&
          result.description.operations[0].mask_ids == std::vector<std::string>{"semantic:person.hair"});
+  // The mask name is a text parameter: 1..20 characters (not bytes), never a draw channel, only on the mask itself.
+  EXPECT(pixcake::validate_parameter_display_value("color.local", "m2:name", "人像"));
+  EXPECT(pixcake::validate_parameter_display_value("color.local", "m2:name", "一二三四五六七八九十一二三四五六七八九十"));  // 20 characters, 60 bytes
+  EXPECT(!pixcake::validate_parameter_display_value("color.local", "m2:name", "一二三四五六七八九十一二三四五六七八九十甲"));  // 21
+  EXPECT(!pixcake::validate_parameter_display_value("color.local", "m2:name", ""));
+  EXPECT(!pixcake::validate_parameter_display_value("color.local", "m2:name", "a\nb"));
+  EXPECT(find_parameter_mode("color.local", "m2:s1:name") == nullptr);
+  auto named = *pixcake::EditDocument::create("img-named");
+  EXPECT(named.set_preview("color.local", "m1:name", "肤色") == pixcake::ResultCode::Ok);
+  EXPECT(named.set_preview("color.local", "m1:exposure", "1") == pixcake::ResultCode::Ok);
+  result = pixcake::render::compile(named);
+  EXPECT(result.description.operations.size() == 1 && result.description.operations[0].values.size() == 1 &&
+         result.description.operations[0].values[0].parameter_id == "m1:exposure");
+  bool named_only = true;
+  auto only_name = *pixcake::EditDocument::create("img-name-only");
+  EXPECT(only_name.set_preview("color.local", "m1:name", "肤色") == pixcake::ResultCode::Ok);
+  named_only = pixcake::render::compile(only_name).description.operations.empty();
+  EXPECT(named_only);  // a name alone draws nothing and is no error
   // Local colour fragments are version 2 now; the readable limit follows the registry.
   bool found = false;
   for (const auto& limit : pixcake::phase_one_version_limits()) {

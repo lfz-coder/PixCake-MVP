@@ -100,6 +100,9 @@ class PreviewSession {
   // 局部调色删除第 instance 个蒙版：写盘、进历史（步骤名 kRemoveMaskStep）、重画。
   static constexpr char kRemoveMaskStep[] = "local.remove";
   ResultCode remove_local_mask(int instance, std::string& diagnostic);
+  // 同一个能力的多个参数一次提交：一个修订号、一步历史（步骤名取最后一个参数）。
+  ResultCode commit_parameters(const std::string& capability_id,
+                               const std::vector<std::pair<std::string, std::string>>& values, std::string& diagnostic);
   // 局部调色现有的蒙版（实例）编号，升序；文档里已提交的和预览中的参数都算。实例 0 是没有前缀的那一组。
   std::vector<int> local_mask_instances() const;
   // 套用预设（需求 §9）：同类型替换，经命令入口提交，历史多一步，步骤的显示值是预设名。
