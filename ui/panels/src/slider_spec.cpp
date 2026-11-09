@@ -4,6 +4,7 @@
 #include "pixcake/mask/semantic_parts.hpp"
 #include "pixcake/ui/shell/shared_words.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -258,6 +259,40 @@ std::vector<PanelRow> refine_color_rows() {
   }
   return rows;
 }
+
+std::vector<PanelRow> color_section_rows(std::string_view capability, const std::vector<std::string>& sections,
+                                         std::string_view object_prefix) {
+  std::vector<PanelRow> rows;
+  bool keep = false;
+  for (auto row : refine_color_rows()) {
+    if (row.kind == PanelRowKind::Section) {
+      keep = std::find(sections.begin(), sections.end(), row.label) != sections.end();
+      if (keep) rows.push_back(std::move(row));
+      continue;
+    }
+    if (!keep || row.kind == PanelRowKind::HeaderAction || row.kind == PanelRowKind::Picker) continue;
+    if (row.binding && row.binding->parameter_id.rfind("bw_", 0) == 0) continue;
+    if (row.binding) {
+      const std::string parameter = row.binding->parameter_id;
+      if (find_parameter_mode(std::string(capability), parameter) != nullptr) {
+        row.binding = SliderBinding{std::string(capability), parameter};
+        row.object_name = std::string(object_prefix) + parameter;
+      } else {
+        row.binding.reset();
+        row.object_name.clear();
+      }
+    }
+    if (row.kind == PanelRowKind::Choice && !row.binding) continue;
+    rows.push_back(std::move(row));
+  }
+  return rows;
+}
+
+std::vector<std::string> refine_local_sections() {
+  return {ui::shell::kWordWhiteBalance, "影调", "色阶", "曲线", "HSL", "色彩编辑器", "颜色分级", "可选颜色", "细节", "创意色彩"};
+}
+
+std::vector<std::string> refine_post_sections() { return {ui::shell::kWordWhiteBalance, "影调"}; }
 
 std::vector<PanelRow> refine_post_color_rows() {
   std::vector<PanelRow> rows;

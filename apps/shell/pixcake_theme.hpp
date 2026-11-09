@@ -166,6 +166,18 @@ struct PixCakeTheme final {
       QPushButton#refine-pill:disabled { color: #8a8d93; }
       QPushButton#refine-master-color { background: #33363d; border: none; border-radius: 4px; min-height: 28px; padding: 0 12px; }
       QFrame#refine-section-rule { background: #2a2c31; }
+      QPushButton#refine-local-tab { background: #33363d; border: 1px solid transparent; border-radius: 3px;
+        min-height: 26px; padding: 0 12px; color: #d0d0d0; }
+      QPushButton#refine-local-tab:checked { background: #1f2126; border-color: #e6e6e6; color: #ffffff; }
+      QPushButton#refine-local-part { background: #33363d; border: 1px solid transparent; border-radius: 3px;
+        min-height: 28px; padding: 0 10px; text-align: left; color: #e0e0e0; }
+      QPushButton#refine-local-part:hover { background: #3c3f47; }
+      QPushButton#refine-local-part:checked { background: #2a2d33; border-color: #e6e6e6; }
+      QPushButton#refine-local-part:disabled { background: #2a2d33; color: #6f7277; }
+      QPushButton#refine-local-new { background: #33363d; border: none; border-radius: 3px; min-height: 32px; }
+      QPushButton#refine-local-new:hover { background: #3c3f47; }
+      QLabel#refine-local-common, QLabel#refine-local-list-title { color: #f4f4f4; font-size: 14px; font-weight: 600; }
+      QFrame#refine-local-labels QListWidget { background: #16181c; border: 1px solid #2a2c31; border-radius: 3px; }
       QFrame#refine-side-bottom QPushButton { background: #33363d; border: none; border-radius: 4px; min-height: 30px; }
       QFrame#refine-side-bottom QPushButton:hover { background: #3c3f47; }
       QFrame#refine-side-bottom QPushButton:disabled { color: #6f7277; background: #2a2d33; }

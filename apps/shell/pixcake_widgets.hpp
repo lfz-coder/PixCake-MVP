@@ -366,8 +366,9 @@ class PixCakeImageView final : public QFrame {
     hooks_ = std::move(hooks);
     update();
   }
-  // 鼠标在画面上时回调指针下像素的颜色（显示的这一帧），移出画面回调空值。色彩调节页的直方图读数用它。
-  void onHoverPixel(std::function<void(std::optional<QColor>)> callback) { hover_pixel_ = std::move(callback); }
+  // 鼠标在画面上时回调指针下像素的颜色（显示的这一帧），移出画面回调空值。色彩调节、局部调色页的直方图读数用它，
+  // 可以登记多个。
+  void onHoverPixel(std::function<void(std::optional<QColor>)> callback) { hover_pixel_.push_back(std::move(callback)); }
   // 图像在控件里显示的矩形；没有图像时为空。
   QRectF imageRect() const {
     if (image_.isNull()) return {};
@@ -400,7 +401,7 @@ class PixCakeImageView final : public QFrame {
   }
   void leaveEvent(QEvent* event) override {
     hovering_ = false;
-    if (hover_pixel_) hover_pixel_(std::nullopt);
+    for (const auto& report : hover_pixel_) report(std::nullopt);
     update();
     QFrame::leaveEvent(event);
   }
@@ -443,17 +444,18 @@ class PixCakeImageView final : public QFrame {
 
  private:
   void reportPixel() {
-    if (!hover_pixel_) return;
+    if (hover_pixel_.empty()) return;
     const QRectF target = imageRect();
     if (image_.isNull() || !target.contains(hover_)) {
-      hover_pixel_(std::nullopt);
+      for (const auto& report : hover_pixel_) report(std::nullopt);
       return;
     }
     const int x = std::clamp(static_cast<int>((hover_.x() - target.left()) / target.width() * image_.width()), 0,
                              image_.width() - 1);
     const int y = std::clamp(static_cast<int>((hover_.y() - target.top()) / target.height() * image_.height()), 0,
                              image_.height() - 1);
-    hover_pixel_(image_.pixelColor(x, y));
+    const QColor color = image_.pixelColor(x, y);
+    for (const auto& report : hover_pixel_) report(color);
   }
   bool takes(const QMouseEvent* event) const {
     return hooks_ && hooks_->accepts && hooks_->accepts() && hooks_->drag && event->button() == Qt::LeftButton &&
@@ -472,7 +474,7 @@ class PixCakeImageView final : public QFrame {
   bool dragging_ = false;
   QPointF hover_;
   bool hovering_ = false;
-  std::function<void(std::optional<QColor>)> hover_pixel_;
+  std::vector<std::function<void(std::optional<QColor>)>> hover_pixel_;
 };
 
 inline QPixmap loadAssetPixmap(const QString& relative, int size) {

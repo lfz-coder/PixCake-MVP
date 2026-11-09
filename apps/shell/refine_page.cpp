@@ -8,6 +8,7 @@
 
 #include "pixcake/capability/capability_registry.hpp"
 #include "pixcake/mask/brush_mask.hpp"
+#include "pixcake/mask/semantic_parts.hpp"
 #include "pixcake/ui/panels/slider_spec.hpp"
 
 #include <QAbstractScrollArea>
@@ -226,7 +227,8 @@ QString moduleDescription(const char* id) {
 // 精修右侧界面状态（选中的模块、展开的分组、预设栏开关）。页面每次重画都会重建，状态留在这里，重建后照旧。
 struct RefineUiState {
   std::string module = "color";
-  std::set<std::string> open_sections;
+  std::set<std::string> open_sections;  // “<页>/<分组名>”
+  std::string local_tab = "subject";    // 局部调色的蒙版页签
   bool presets = true;
 };
 RefineUiState& uiState() {
@@ -344,18 +346,17 @@ QWidget* whiteBalancePicker(QWidget* parent, const QString& picker_label) {
   return line;
 }
 
-// 色彩调节页（右侧图标栏“调色”）：直方图卡片、“AI 校准”“多图色彩统一”两个按钮，然后是一列可折叠分组。
-// 分组默认收起，点标题才展开里面的控件；展开状态在页面重建后保留。
-void addColorPanel(QWidget* parent, QVBoxLayout* parent_layout, PageActions* actions, PixCakeImageView* canvas,
-                   PixCakeHistogram** histogram_out) {
-  QFrame* frame = nullptr;
-  auto* layout = labelPanel(parent, parent_layout, "refine-color-labels", moduleDescription("color"), &frame);
-  layout->setSpacing(0);
-  auto* top = new QWidget(frame);
+// 色彩类页面（色彩调节、局部调色）的顶部：直方图卡片和“AI 校准”“多图色彩统一”两个按钮，下面一条分隔线。
+void addColorPageTop(QWidget* parent, QVBoxLayout* layout, PageActions* actions, PixCakeImageView* canvas,
+                     std::vector<PixCakeHistogram*>* histograms) {
+  auto* top = new QWidget(parent);
+  top->setObjectName(QStringLiteral("refine-color-top"));
   auto* top_layout = new QVBoxLayout(top);
   top_layout->setContentsMargins(12, 12, 12, 12);
   top_layout->setSpacing(12);
-  top_layout->addWidget(histogramCard(top, actions, canvas, histogram_out));
+  PixCakeHistogram* histogram = nullptr;
+  top_layout->addWidget(histogramCard(top, actions, canvas, &histogram));
+  if (histograms != nullptr) histograms->push_back(histogram);
   auto* pills = new QHBoxLayout;
   pills->setSpacing(8);
   for (const char* key : {"refine.ai-calibrate", "refine.color-unify"}) {
@@ -366,21 +367,29 @@ void addColorPanel(QWidget* parent, QVBoxLayout* parent_layout, PageActions* act
   pills->addStretch(1);
   top_layout->addLayout(pills);
   layout->addWidget(top);
-  auto* rule = new QFrame(frame);
+  auto* rule = new QFrame(parent);
   rule->setObjectName(QStringLiteral("refine-section-rule"));
   rule->setFixedHeight(1);
   layout->addWidget(rule);
+}
 
+// 一列可折叠分组（色彩调节、局部调色、后期调色共用）。行来自 ui/panels 的同一张表；page 区分各页的展开状态
+// （“<page>/<分组名>”）。rebind 把行里的绑定换成实际要写的参数（局部调色是带蒙版前缀的参数）；actions 为空时
+// 控件全部禁用（例如局部调色还没有选中蒙版）。
+using Rebind = std::function<panels::SliderBinding(const panels::SliderBinding&)>;
+void addSections(QWidget* parent, QVBoxLayout* layout, const std::vector<panels::PanelRow>& rows, PageActions* actions,
+                 const std::string& page, const Rebind& rebind = {}) {
   const Refresh refresh = std::make_shared<EnableRefresh>();
   PixCakeFoldSection* section = nullptr;
-  for (const auto& row : panels::refine_color_rows()) {
+  for (const auto& row : rows) {
     if (row.kind == panels::PanelRowKind::Section) {
-      const std::string id = row.label;
-      section = new PixCakeFoldSection(qs(row.label), QStringLiteral("refine-section"), frame);
+      const std::string key = page + "/" + row.label;
+      section = new PixCakeFoldSection(qs(row.label), QStringLiteral("refine-section"), parent);
+      section->setProperty("page", qs(page));
       section->toggle()->setAccessibleDescription(qtext("refine.section.toggle").arg(qs(row.label)));
-      section->setExpanded(uiState().open_sections.count(id) != 0);
-      section->onToggled([id](bool open) {
-        if (open) uiState().open_sections.insert(id); else uiState().open_sections.erase(id);
+      section->setExpanded(uiState().open_sections.count(key) != 0);
+      section->onToggled([key](bool open) {
+        if (open) uiState().open_sections.insert(key); else uiState().open_sections.erase(key);
       });
       layout->addWidget(section);
       continue;
@@ -388,6 +397,8 @@ void addColorPanel(QWidget* parent, QVBoxLayout* parent_layout, PageActions* act
     if (section == nullptr) continue;  // 表里每一行都在某个分组下（test_slider_spec 检查）
     QWidget* body = section->bodyWidget();
     QVBoxLayout* body_layout = section->body();
+    std::optional<panels::SliderBinding> binding = row.binding;
+    if (binding && rebind) binding = rebind(*binding);
     if (row.kind == panels::PanelRowKind::HeaderAction) {
       section->actions()->addWidget(sectionAction(section, qs(row.label)));
     } else if (row.kind == panels::PanelRowKind::Picker) {
@@ -395,12 +406,24 @@ void addColorPanel(QWidget* parent, QVBoxLayout* parent_layout, PageActions* act
     } else if (row.kind == panels::PanelRowKind::Title) {
       body_layout->addWidget(disabledLabel(qs(row.label)));
     } else if (row.kind == panels::PanelRowKind::Choice) {
-      addChoice(body, body_layout, row, actions, refresh);
+      panels::PanelRow bound = row;
+      bound.binding = binding;
+      addChoice(body, body_layout, bound, actions, refresh);
     } else {
-      addDisabledSlider(body, body_layout, panels::slider_spec(row.label, row.binding), qs(row.object_name), actions,
-                        row.binding, refresh);
+      addDisabledSlider(body, body_layout, panels::slider_spec(row.label, binding), qs(row.object_name), actions, binding,
+                        refresh);
     }
   }
+}
+
+// 色彩调节页（右侧图标栏“调色”）：公共的顶部，然后是色彩面板的全部分组。
+void addColorPanel(QWidget* parent, QVBoxLayout* parent_layout, PageActions* actions, PixCakeImageView* canvas,
+                   std::vector<PixCakeHistogram*>* histograms) {
+  QFrame* frame = nullptr;
+  auto* layout = labelPanel(parent, parent_layout, "refine-color-labels", moduleDescription("color"), &frame);
+  layout->setSpacing(0);
+  addColorPageTop(frame, layout, actions, canvas, histograms);
+  addSections(frame, layout, panels::refine_color_rows(), actions, "color");
 }
 
 void addLabelList(QVBoxLayout* layout, std::string_view list, bool accessible_is_text = false) {
@@ -514,8 +537,25 @@ struct LocalState {
   bool drag_brush = false;
   bool brush_on = false;  // 画笔设置显示着（选中画笔子项，或部位下拉选了画笔）
   std::vector<std::pair<int, int>> stroke_points;  // 正在画的一笔，位置是图像百分比的百倍（0..10000）
+  std::string pending_region;  // 自定义页签点了画笔、渐变、取样：下一次在画布上拖动按它新建子项
   QString signature;
 };
+
+// 主体页签的“常用蒙版”（官方 9.3.0 的顺序）。名字来自 kernel/mask 的部位表；其余部位在蒙版列表的部位下拉里。
+constexpr const char* kCommonParts[] = {"person.all",       "clothes.all",     "person.skin.all", "person.face_skin",
+                                        "person.body_skin", "person.hair",     "person.eyebrow",  "person.eye_white",
+                                        "person.iris",      "person.lips",     "person.teeth",    "person.oral_cavity",
+                                        "clothes.other_objects"};
+// 自定义页签里已经接上的选区（作用部位的参数值）；智能、自由、快速选区还没有。
+bool customRegionLive(const std::string& id) {
+  return id == "brush" || id == "linear" || id == "radial" || id == "color_range" || id == "luminance_range";
+}
+QString partLabel(const std::string& id) {
+  for (const auto& part : mask::semantic_parts()) {
+    if (id == part.id) return QString::fromUtf8(part.label);
+  }
+  return qs(id);
+}
 
 // 在画布上拖出渐变（官方的做法）：线性从起点拖到终点，起点一侧强度 1，终点一侧 0；径向从中心拖到外缘一个角，得到
 // 椭圆。位置按图像百分比，换算到参数：线性的中心取两点中点、角度取方向、范围取两点距离占对角线的百分比；径向的
@@ -559,8 +599,13 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
   body->setObjectName(QStringLiteral("refine-local-body"));
   auto* body_layout = new QVBoxLayout(body);
   body_layout->setContentsMargins(0, 0, 0, 0);
+  body_layout->setSpacing(0);
   layout->addWidget(body);
-  if (actions == nullptr || !actions->has_photo()) return nullptr;
+  const auto local_rows = panels::color_section_rows("color.local", panels::refine_local_sections(), "refine-local-");
+  if (actions == nullptr || !actions->has_photo()) {
+    addSections(body, body_layout, local_rows, nullptr, "local");
+    return nullptr;
+  }
   const auto state = std::make_shared<LocalState>();
   const auto rebuild = std::make_shared<std::function<void()>>();
   const auto binding_of = [](int mask, int item, const std::string& parameter) {
@@ -602,6 +647,165 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
       return qs(id);
     };
 
+    auto* area_widget = new QWidget(body);
+    area_widget->setObjectName(QStringLiteral("refine-local-masks-area"));
+    auto* area = new QVBoxLayout(area_widget);
+    area->setContentsMargins(12, 12, 12, 12);
+    area->setSpacing(8);
+    body_layout->addWidget(area_widget);
+    const auto again = [state, weak, signature] {
+      state->signature = signature();
+      if (const auto run = weak.lock()) (*run)();
+    };
+    // 调整分组：和色彩调节同一套（ui/panels 的同一张表），写到选中蒙版自己的参数（m<N>: 前缀）；没有蒙版时禁用。
+    const auto add_adjustments = [=] {
+      const bool live = state->mask >= 0;
+      const int mask = state->mask;
+      addSections(body, body_layout, local_rows, live ? actions : nullptr, "local",
+                  [binding_of, mask, live](const panels::SliderBinding& binding) {
+                    return live ? binding_of(mask, 0, binding.parameter_id) : binding;
+                  });
+    };
+    const auto fresh_mask = [actions] {
+      const auto existing = actions->local_masks();
+      int fresh = 1;
+      while (fresh <= kMaxLocalInstances && std::find(existing.begin(), existing.end(), fresh) != existing.end()) ++fresh;
+      return fresh > kMaxLocalInstances ? -1 : fresh;
+    };
+    const auto lone_region = [items_of](int mask) {
+      const auto items = items_of(mask);
+      return items.size() == 1 && items.front().first == 0 ? items.front().second : std::string();
+    };
+
+    // 蒙版区（官方顺序）：主体/宠物/背景/自定义页签、创建蒙版、常用蒙版、羽化。
+    auto* tabs = new QWidget(body);
+    auto* tabs_layout = new QHBoxLayout(tabs);
+    tabs_layout->setContentsMargins(0, 0, 0, 0);
+    tabs_layout->setSpacing(8);
+    auto* tab_group = new QButtonGroup(tabs);
+    auto* pages = new QStackedWidget(body);
+    pages->setObjectName(QStringLiteral("refine-local-parts"));
+    const auto grid_page = [pages] {
+      auto* page = new QWidget(pages);
+      auto* grid = new QGridLayout(page);
+      grid->setContentsMargins(0, 0, 0, 0);
+      grid->setHorizontalSpacing(8);
+      grid->setVerticalSpacing(8);
+      pages->addWidget(page);
+      return grid;
+    };
+    const auto part_button = [](QGridLayout* grid, const QString& label, const QString& id, bool live, bool checked) {
+      auto* button = new QPushButton(label, grid->parentWidget());
+      button->setObjectName(QStringLiteral("refine-local-part"));
+      button->setProperty("part", id);
+      button->setAccessibleName(label);
+      button->setCheckable(true);
+      button->setChecked(checked);
+      button->setEnabled(live);
+      if (!live) button->setToolTip(qtext("local.part.pending"));
+      const int index = grid->count();
+      grid->addWidget(button, index / 2, index % 2);
+      return button;
+    };
+    const std::string lone_selected = state->mask >= 0 ? lone_region(state->mask) : std::string();
+    int tab_index = 0;
+    for (const auto& tab : ui::shell::page_list("refine-local-tabs")) {
+      auto* tab_button = new QPushButton(qs(tab.text), tabs);
+      tab_button->setObjectName(QStringLiteral("refine-local-tab"));
+      tab_button->setCheckable(true);
+      tab_group->addButton(tab_button, tab_index);
+      tabs_layout->addWidget(tab_button);
+      auto* grid = grid_page();
+      if (tab.id == "subject") {
+        for (const char* id : kCommonParts) {
+          auto* button = part_button(grid, partLabel(id), QString::fromLatin1(id), true, lone_selected == id);
+          const std::string part = id;
+          QObject::connect(button, &QPushButton::clicked, button, [=] {
+            // 已有只含这个部位的蒙版就选中它，否则新建一个（名字是部位名，一步历史）。
+            for (const int mask : actions->local_masks()) {
+              if (lone_region(mask) == part) {
+                state->mask = mask;
+                state->item = 0;
+                again();
+                return;
+              }
+            }
+            const int fresh = fresh_mask();
+            if (fresh < 0) return;
+            actions->request_parameters({{binding_of(fresh, 0, "name"), partLabel(part).toStdString()},
+                                         {binding_of(fresh, 0, "region"), part}});
+            state->mask = fresh;
+            state->item = 0;
+            again();
+          });
+        }
+      } else {
+        for (const auto& entry : ui::shell::page_list("refine-local-" + tab.id)) {
+          const bool live = tab.id == "custom" && customRegionLive(entry.id);
+          auto* button = part_button(grid, qs(entry.text), qs(entry.id), live,
+                                     live && (state->pending_region == entry.id || lone_selected == entry.id));
+          if (!live) continue;
+          const std::string region = entry.id;
+          QObject::connect(button, &QPushButton::clicked, button, [=] {
+            // 画笔、渐变、取样要在画布上拖：没有蒙版先建一个空蒙版，然后打开“在画布上拖动”，下一次拖动新建这个子项。
+            if (state->mask < 0) {
+              const int fresh = fresh_mask();
+              if (fresh < 0) return;
+              actions->request_parameter(binding_of(fresh, 0, "region"), "all", true);
+              state->mask = fresh;
+            }
+            state->item = -1;
+            state->pending_region = region;
+            state->draw = true;
+            again();
+          });
+        }
+      }
+      if (tab.id == uiState().local_tab) {
+        tab_button->setChecked(true);
+        pages->setCurrentIndex(tab_index);
+      }
+      const std::string tab_id = tab.id;
+      QObject::connect(tab_button, &QPushButton::toggled, pages, [pages, tab_index, tab_id](bool on) {
+        if (!on) return;
+        pages->setCurrentIndex(tab_index);
+        uiState().local_tab = tab_id;
+      });
+      ++tab_index;
+    }
+    tabs_layout->addStretch(1);
+    area->addWidget(tabs);
+    auto* create = action(qtext("local.mask.new"), body, true);
+    create->setObjectName(QStringLiteral("refine-local-new"));
+    area->addWidget(create);
+    auto* common = new QWidget(body);
+    auto* common_layout = new QHBoxLayout(common);
+    common_layout->setContentsMargins(0, 4, 0, 0);
+    auto* common_title = text(qtext("local.common"));
+    common_title->setObjectName(QStringLiteral("refine-local-common"));
+    common_layout->addWidget(common_title);
+    common_layout->addStretch(1);
+    for (const char* key : {"local.manage", "local.linked"}) {
+      auto* link = text(qtext(key));
+      link->setEnabled(false);
+      common_layout->addWidget(link);
+    }
+    area->addWidget(common);
+    area->addWidget(pages);
+    const char* feather = panels::refine_local_feather_label();
+    addDisabledSlider(body, area, panels::slider_spec(feather, panels::refine_local_binding(feather)), QString());
+    QObject::connect(create, &QPushButton::clicked, create, [=] {
+      const int fresh = fresh_mask();
+      if (fresh < 0) return;
+      actions->request_parameter(binding_of(fresh, 0, "region"), "all", true);
+      state->mask = fresh;
+      state->item = -1;
+      again();
+    });
+    auto* list_title = text(qtext("local.mask.list"));
+    list_title->setObjectName(QStringLiteral("refine-local-list-title"));
+    area->addWidget(list_title);
+
     // 蒙版列表。
     auto* masks_list = new QListWidget(body);
     masks_list->setObjectName(QStringLiteral("refine-local-masks"));
@@ -615,21 +819,14 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
       row->setFlags(row->flags() | Qt::ItemIsEditable);
       if (mask == state->mask) masks_list->setCurrentItem(row);
     }
-    body_layout->addWidget(masks_list);
+    area->addWidget(masks_list);
     auto* buttons = new QWidget(body);
     auto* buttons_layout = new QHBoxLayout(buttons);
     buttons_layout->setContentsMargins(0, 0, 0, 0);
-    auto* create = action(qtext("local.mask.new"), buttons, true);
-    create->setObjectName(QStringLiteral("refine-local-new"));
     auto* remove = action(qtext("local.mask.remove"), buttons, state->mask >= 0);
     remove->setObjectName(QStringLiteral("refine-local-delete"));
-    buttons_layout->addWidget(create);
     buttons_layout->addWidget(remove);
-    body_layout->addWidget(buttons);
-    const auto again = [state, weak, signature] {
-      state->signature = signature();
-      if (const auto run = weak.lock()) (*run)();
-    };
+    area->addWidget(buttons);
     QObject::connect(masks_list, &QListWidget::itemChanged, masks_list, [=](QListWidgetItem* row) {
       const int mask = row->data(Qt::UserRole).toInt();
       const std::string text = row->text().trimmed().toStdString();
@@ -646,16 +843,6 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
       state->item = -1;
       again();
     });
-    QObject::connect(create, &QPushButton::clicked, create, [=] {
-      const auto existing = actions->local_masks();
-      int fresh = 1;
-      while (fresh <= kMaxLocalInstances && std::find(existing.begin(), existing.end(), fresh) != existing.end()) ++fresh;
-      if (fresh > kMaxLocalInstances) return;
-      actions->request_parameter(binding_of(fresh, 0, "region"), "all", true);
-      state->mask = fresh;
-      state->item = -1;
-      again();
-    });
     QObject::connect(remove, &QPushButton::clicked, remove, [=] {
       if (state->mask < 0) return;
       actions->request_remove_local_mask(state->mask);
@@ -664,7 +851,8 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
       again();
     });
     if (state->mask < 0) {
-      body_layout->addWidget(disabledLabel(qtext("local.mask.none")));
+      area->addWidget(disabledLabel(qtext("local.mask.none")));
+      add_adjustments();
       state->signature = signature();
       return;
     }
@@ -672,7 +860,8 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
     // 选中蒙版的子项。
     const auto items = items_of(state->mask);
     if (std::none_of(items.begin(), items.end(), [&](const auto& pair) { return pair.first == state->item; })) {
-      state->item = items.empty() ? -1 : items.front().first;
+      // 自定义页签点了画笔、渐变、取样：不选已有子项，下一次拖动新建。
+      state->item = items.empty() || !state->pending_region.empty() ? -1 : items.front().first;
     }
     auto* items_list = new QListWidget(body);
     items_list->setObjectName(QStringLiteral("refine-local-items"));
@@ -691,9 +880,10 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
       row->setData(Qt::UserRole, item);
       if (item == state->item) items_list->setCurrentItem(row);
     }
-    body_layout->addWidget(items_list);
+    area->addWidget(items_list);
     QObject::connect(items_list, &QListWidget::itemClicked, items_list, [state, again](QListWidgetItem* row) {
       state->item = row->data(Qt::UserRole).toInt();
+      state->pending_region.clear();
       again();
     });
     auto* add_row = new QWidget(body);
@@ -705,13 +895,14 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
     for (const auto& option : panels::choice_options({"color.local", "region"})) {
       if (option.id != "all") region_box->addItem(qs(option.label), qs(option.id));
     }
+    if (!state->pending_region.empty()) region_box->setCurrentIndex(region_box->findData(qs(state->pending_region)));
     auto* mode_box = new QComboBox(add_row);
     mode_box->setObjectName(QStringLiteral("refine-local-item-mode"));
     mode_box->addItem(qtext("local.item.mode.add"), QStringLiteral("add"));
     mode_box->addItem(qtext("local.item.mode.subtract"), QStringLiteral("subtract"));
     add_layout->addWidget(region_box, 1);
     add_layout->addWidget(mode_box);
-    body_layout->addWidget(add_row);
+    area->addWidget(add_row);
     auto* item_buttons = new QWidget(body);
     auto* item_buttons_layout = new QHBoxLayout(item_buttons);
     item_buttons_layout->setContentsMargins(0, 0, 0, 0);
@@ -727,7 +918,7 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
     remove_item->setObjectName(QStringLiteral("refine-local-item-remove"));
     item_buttons_layout->addWidget(add_item);
     item_buttons_layout->addWidget(remove_item);
-    body_layout->addWidget(item_buttons);
+    area->addWidget(item_buttons);
     QObject::connect(add_item, &QPushButton::clicked, add_item, [=] {
       int free_item = -1;
       for (int item = 0; item <= kMaxLocalItems && free_item < 0; ++item) {
@@ -757,7 +948,7 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
       invert->setAccessibleName(qtext("local.item.invert"));
       const auto invert_binding = binding_of(state->mask, state->item, "invert");
       invert->setChecked(actions->parameter_value(invert_binding) == std::optional<std::string>("on"));
-      body_layout->addWidget(invert);
+      area->addWidget(invert);
       QObject::connect(invert, &QCheckBox::toggled, invert, [=](bool on) {
         actions->request_parameter(invert_binding, on ? "on" : "off", true);
         again();
@@ -772,9 +963,6 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
                                     : item_region == "color_range"                      ? "range_"
                                     : item_region == "luminance_range"                  ? "lum_"
                                                                                         : "";
-    const auto own_parameter = [](const std::string& id) {
-      return id.rfind("gradient_", 0) == 0 || id.rfind("range_", 0) == 0 || id.rfind("lum_", 0) == 0;
-    };
     // 画笔设置：选中的子项是画笔，或者“添加子项”的部位下拉选了画笔时显示。设置只存在界面里，每一笔画下时带进笔触。
     {
       auto* brush_box = new QWidget(body);
@@ -823,7 +1011,7 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
       setting(qs(panels::refine_local_feather_label()), "refine-local-brush-feather", 0, 100, &state->brush_feather);
       setting(qtext("local.brush.flow"), "refine-local-brush-flow", 0, 100, &state->brush_flow);
       setting(qtext("local.brush.density"), "refine-local-brush-density", 0, 100, &state->brush_density);
-      body_layout->addWidget(brush_box);
+      area->addWidget(brush_box);
       const auto show = [state, brush_box = QPointer<QWidget>(brush_box), region_box = QPointer<QComboBox>(region_box), item_region] {
         if (!brush_box) return;
         const bool on = item_region == "brush" || (region_box && region_box->currentData().toString() == QStringLiteral("brush"));
@@ -843,17 +1031,8 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
                           qs("refine-local-item-" + row.binding->parameter_id), actions, bound, refresh);
       }
     }
-    // 整个蒙版的十四支调整滑杆。
-    for (const auto& row : rows) {
-      if (row.kind == panels::PanelRowKind::Choice || (row.binding && own_parameter(row.binding->parameter_id))) continue;
-      if (row.kind == panels::PanelRowKind::Title) {
-        body_layout->addWidget(disabledLabel(qs(row.label)));
-      } else {
-        const auto bound = binding_of(state->mask, 0, row.binding->parameter_id);
-        addDisabledSlider(modules, body_layout, panels::slider_spec(row.label, bound), qs(row.object_name), actions, bound,
-                          refresh);
-      }
-    }
+    // 整个蒙版的调整：和色彩调节同一套折叠分组。
+    add_adjustments();
     state->signature = signature();
   };
   (*rebuild)();
@@ -901,6 +1080,7 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
           radial = picked == QStringLiteral("radial");
         }
         for (auto* box : body->findChildren<QComboBox*>(QStringLiteral("refine-local-item-mode"))) how = box->currentData().toString();
+        state->pending_region.clear();
         int free_item = -1;
         for (int item = 0; item <= kMaxLocalItems && free_item < 0; ++item) {
           if (std::none_of(items.begin(), items.end(), [&](const auto& pair) { return pair.first == item; })) free_item = item;
@@ -1162,35 +1342,39 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
 
 // 一个模块的内容（图标栏点开后面板里显示的东西）。
 void addModuleContent(const std::string& id, QWidget* content, QVBoxLayout* layout, PageActions* actions,
-                      PixCakeHistogram** histogram, PixCakeImageView* canvas) {
+                      std::vector<PixCakeHistogram*>* histograms, PixCakeImageView* canvas) {
   if (id == "color") {
-    addColorPanel(content, layout, actions, canvas, histogram);
+    addColorPanel(content, layout, actions, canvas, histograms);
+    return;
+  }
+  if (id == "local") {
+    // 局部调色：和色彩调节同一个顶部（直方图卡片、AI 校准），下面是蒙版区和同一套调整分组。
+    QFrame* frame = nullptr;
+    auto* local = labelPanel(content, layout, "refine-local-labels", moduleDescription("local"), &frame);
+    local->setSpacing(0);
+    addColorPageTop(frame, local, actions, canvas, histograms);
+    addLocalPanel(frame, local, actions, canvas);
+    return;
+  }
+  if (id == "post") {
+    // 后期调色：“全图调整”下是和色彩调节同一套的分组（color.post 登记了白平衡、影调）；“局部调整”要蒙版，还没有。
+    QFrame* frame = nullptr;
+    auto* post = labelPanel(content, layout, "refine-post-color-labels", moduleDescription("post"), &frame);
+    post->setSpacing(0);
+    const auto titles = panels::refine_post_color_titles();
+    auto* whole = disabledLabel(qs(titles.front()));
+    whole->setContentsMargins(12, 12, 12, 8);
+    post->addWidget(whole);
+    addSections(frame, post, panels::color_section_rows("color.post", panels::refine_post_sections(), "refine-post-"),
+                actions, "post");
+    auto* partial = disabledLabel(qs(titles[1]));
+    partial->setContentsMargins(12, 12, 12, 8);
+    post->addWidget(partial);
     return;
   }
   layout->setContentsMargins(12, 12, 12, 12);
   layout->setSpacing(8);
-  if (id == "local") {
-    auto* local = labelPanel(content, layout, "refine-local-labels", moduleDescription("local"));
-    addLabelList(local, "refine-local");
-    addLocalPanel(content, local, actions, canvas);
-    const char* feather = panels::refine_local_feather_label();
-    addDisabledSlider(content, local, panels::slider_spec(feather, panels::refine_local_binding(feather)), QString());
-  } else if (id == "post") {
-    auto* post = labelPanel(content, layout, "refine-post-color-labels", moduleDescription("post"));
-    // 后期调色：全图调整是十四支白平衡、影调滑杆（照片打开时可调）；局部调整要蒙版，还没有。
-    const Refresh refresh = std::make_shared<EnableRefresh>();
-    const auto titles = panels::refine_post_color_titles();
-    post->addWidget(disabledLabel(qs(titles.front())));
-    for (const auto& row : panels::refine_post_color_rows()) {
-      if (row.kind == panels::PanelRowKind::Title) {
-        post->addWidget(disabledLabel(qs(row.label)));
-      } else {
-        addDisabledSlider(content, post, panels::slider_spec(row.label, row.binding), qs(row.object_name), actions,
-                          row.binding, refresh);
-      }
-    }
-    post->addWidget(disabledLabel(qs(titles[1])));
-  } else if (id == "clothing") {
+  if (id == "clothing") {
     addLabelList(labelPanel(content, layout, "refine-clothing-labels", qtext("refine.clothing.name")), "refine-clothing");
   } else if (id == "portrait") {
     addLabelList(labelPanel(content, layout, "refine-portrait-labels", moduleDescription("portrait")), "refine-portrait", true);
@@ -1234,7 +1418,8 @@ void addModuleContent(const std::string& id, QWidget* content, QVBoxLayout* layo
 }
 
 // 一个模块的面板页：顶部标题（色彩调节页右侧还有“大师级色彩”），下面是可滚动的内容。
-QWidget* modulePage(const CopyItem& entry, PageActions* actions, PixCakeHistogram** histogram, PixCakeImageView* canvas) {
+QWidget* modulePage(const CopyItem& entry, PageActions* actions, std::vector<PixCakeHistogram*>* histograms,
+                    PixCakeImageView* canvas) {
   auto* page = new QWidget;
   page->setObjectName(QStringLiteral("refine-module-page"));
   page->setProperty("module", qs(entry.id));
@@ -1256,6 +1441,12 @@ QWidget* modulePage(const CopyItem& entry, PageActions* actions, PixCakeHistogra
     auto* master = action(qtext("refine.master-color"), header, false);
     master->setObjectName(QStringLiteral("refine-master-color"));
     header_row->addWidget(master);
+  } else if (entry.id == "local") {
+    // 显示蒙版叠加（还没有接，图标文件也还没有）。
+    auto* overlay = pendingIcon(header, 28, qtext("local.overlay"));
+    overlay->setToolTip(qtext("local.overlay"));
+    overlay->setEnabled(false);
+    header_row->addWidget(overlay);
   }
   column->addWidget(header);
   auto* scroll = new QScrollArea(page);
@@ -1267,7 +1458,7 @@ QWidget* modulePage(const CopyItem& entry, PageActions* actions, PixCakeHistogra
   auto* layout = new QVBoxLayout(content);
   layout->setContentsMargins(0, 0, 0, 0);
   layout->setSpacing(0);
-  addModuleContent(entry.id, content, layout, actions, histogram, canvas);
+  addModuleContent(entry.id, content, layout, actions, histograms, canvas);
   layout->addStretch(1);
   scroll->setWidget(content);
   column->addWidget(scroll, 1);
@@ -1410,13 +1601,13 @@ QWidget* buildRefinePage(const PageContext& context) {
   auto* rail_group = new QButtonGroup(rail);
   rail_group->setExclusive(true);
 
-  PixCakeHistogram* histogram = nullptr;
+  std::vector<PixCakeHistogram*> histograms;
   const auto& entries = ui::shell::page_list("refine-modules");
   if (std::none_of(entries.begin(), entries.end(), [](const CopyItem& e) { return e.id == uiState().module; })) {
     uiState().module = "color";
   }
   for (const auto& entry : entries) {
-    const int index = stack->addWidget(modulePage(entry, actions, &histogram, image_view));
+    const int index = stack->addWidget(modulePage(entry, actions, &histograms, image_view));
     auto* button = new QToolButton(rail);
     button->setObjectName(QStringLiteral("refine-rail-") + qs(entry.id));
     button->setProperty("rail", true);
@@ -1457,13 +1648,15 @@ QWidget* buildRefinePage(const PageContext& context) {
 
   if (image_view != nullptr) {
     QPointer<PixCakeImageView> view(image_view);
-    QPointer<PixCakeHistogram> chart(histogram);
-    actions->watch_preview(image_view, [view, chart](const PreviewView& update) {
+    std::vector<QPointer<PixCakeHistogram>> charts(histograms.begin(), histograms.end());
+    actions->watch_preview(image_view, [view, charts](const PreviewView& update) {
       if (view) {
         if (!update.image.isNull()) view->setImage(update.image);
         view->setStatus(update.status);
       }
-      if (chart) chart->setHistogram(update.histogram);
+      for (const auto& chart : charts) {
+        if (chart) chart->setHistogram(update.histogram);
+      }
     });
   }
   // 面板底部：保存新预设和同步到选中图片（⇧⌘S，需求 §18）。

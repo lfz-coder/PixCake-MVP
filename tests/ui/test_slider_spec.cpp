@@ -247,7 +247,43 @@ void test_color_panel_is_a_list_of_folding_sections() {
   EXPECT(header_actions == 2 && pickers == 1);
 }
 
+// 局部调色、后期调色复用色彩面板的分组：同一张表取出，绑定改到自己的能力；没登记的参数不绑定（范围待确认）。
+void test_local_and_post_reuse_the_colour_sections() {
+  using pixcake::ui::panels::PanelRowKind;
+  const auto local = pixcake::ui::panels::color_section_rows("color.local", pixcake::ui::panels::refine_local_sections(),
+                                                             "refine-local-");
+  std::vector<std::string> sections;
+  int bound = 0;
+  for (const auto& row : local) {
+    if (row.kind == PanelRowKind::Section) sections.push_back(row.label);
+    EXPECT(row.kind != PanelRowKind::HeaderAction && row.kind != PanelRowKind::Picker);
+    if (row.binding) {
+      ++bound;
+      EXPECT(row.binding->capability_id == "color.local" && row.object_name == "refine-local-" + row.binding->parameter_id);
+    }
+    if (row.label.rfind("黑白混合", 0) == 0) EXPECT(false);
+  }
+  EXPECT(sections == pixcake::ui::panels::refine_local_sections());
+  EXPECT(bound == 14);  // color.local 只登记了白平衡、影调的十四个通道
+  // 同名分组里的行和色彩面板一致（色阶的五支滑杆还在，只是未绑定）。
+  int levels = 0;
+  bool in_levels = false;
+  for (const auto& row : local) {
+    if (row.kind == PanelRowKind::Section) in_levels = row.label == "色阶";
+    else if (in_levels && row.kind == PanelRowKind::Slider) ++levels;
+  }
+  EXPECT(levels == 5);
+  const auto post = pixcake::ui::panels::color_section_rows("color.post", pixcake::ui::panels::refine_post_sections(),
+                                                            "refine-post-");
+  int post_bound = 0;
+  for (const auto& row : post) {
+    if (row.binding) ++post_bound;
+  }
+  EXPECT(post_bound == 14);
+}
+
 int main() {
+  test_local_and_post_reuse_the_colour_sections();
   test_q11_color_panel_rows_come_from_one_table();
   test_color_panel_is_a_list_of_folding_sections();
   test_c46_subgroup_labels_bind_to_kernel_modes();

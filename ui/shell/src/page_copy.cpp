@@ -6,6 +6,7 @@
 #include <iterator>
 #include <map>
 #include <set>
+#include <utility>
 
 namespace pixcake::ui::shell {
 namespace {
@@ -204,9 +205,15 @@ Texts build_texts() {
   t["history.paste"] = "粘贴效果";
   // 局部调色的蒙版列表（官方的“蒙版列表”：每个蒙版有自己的子项和一组滑杆）。
   t["local.mask.name"] = "自定义-%1";
-  t["local.mask.new"] = "新建蒙版";
+  t["local.mask.new"] = "创建蒙版";
+  t["local.common"] = "常用蒙版";
+  t["local.overlay"] = "显示蒙版叠加";
+  t["local.manage"] = "管理";
+  t["local.linked"] = "联动调整";
+  t["local.mask.list"] = "蒙版列表";
+  t["local.part.pending"] = "这个部位还没有分割模型，暂不可用";
   t["local.mask.remove"] = "删除蒙版";
-  t["local.mask.none"] = "还没有蒙版，先新建一个";
+  t["local.mask.none"] = "还没有蒙版：点上面的部位，或“创建蒙版”";
   t["local.draw"] = "在画布上拖动";
   t["local.item.add"] = "添加子项";
   t["local.item.remove"] = "删除子项";
@@ -443,15 +450,23 @@ Lists build_lists() {
                              item("crop", "裁剪", {}, {}, "裁剪、旋转"),
                              item("history", "历史", {}, {}, kHistory),
                              item("capture", "联机", {}, {}, kCapture)};
-  lists["refine-local"] = {};
-  for (const char* label :
-       {"所有人", "联动调整", "创建蒙版", "蒙版列表", "全部人物/整个人", "全部皮肤", "面部", "面部皮肤", "脖子",
-        "身体皮肤", "眉毛", "眼白", "眼瞳", "嘴唇", "牙齿", "口腔", "耳朵", "头发", "全部衣服", "上衣", "内搭",
-        "连体衣（裙）", "下装", "头纱/帽子", "手套", "鞋子", "背包", "首饰", "其他物品", "所有宠物", "全部背景",
-        "天空", "草地", "地面", "礁石", "水面", "沙滩", "山", "建筑物", "智能选区", "自由选区", "快速选区",
-        kWordBrush, kWordLinearGradient, kWordRadialGradient, kWordColorRange, kWordLuminanceRange}) {
-    lists["refine-local"].push_back(item("local-" + std::to_string(lists["refine-local"].size() + 1), label));
+  // 局部调色的蒙版区（PixCake 9.3.0，2026-11-08 截图）：主体、宠物、背景、自定义四个页签。主体页签的“常用蒙版”是
+  // 语义部位（名字来自 kernel/mask 的部位表），这里只列另外三个页签；编号就是作用部位的参数值，没有分割的部位编号
+  // 不在参数里，按钮禁用。
+  lists["refine-local-tabs"] = {item("subject", "主体"), item("pet", "宠物"), item("background", "背景"),
+                                item("custom", "自定义")};
+  lists["refine-local-pet"] = {item("pet.all", "所有宠物")};
+  lists["refine-local-background"] = {};
+  for (const auto& [id, label] : {std::pair<const char*, const char*>{"background.all", "全部背景"}, {"background.sky", "天空"},
+                                  {"background.grass", "草地"}, {"background.ground", "地面"}, {"background.rock", "礁石"},
+                                  {"background.water", "水面"}, {"background.beach", "沙滩"}, {"background.mountain", "山"},
+                                  {"background.building", "建筑物"}}) {
+    lists["refine-local-background"].push_back(item(id, label));
   }
+  lists["refine-local-custom"] = {item("smart", "智能选区"),        item("free", "自由选区"),
+                                  item("quick", "快速选区"),        item("brush", kWordBrush),
+                                  item("linear", kWordLinearGradient), item("radial", kWordRadialGradient),
+                                  item("color_range", kWordColorRange), item("luminance_range", kWordLuminanceRange)};
   const std::string clothing_prefix = "衣物美化-衣服调整-";
   for (const char* label : {"上衣祛褶皱", "上衣祛褶皱-祛粗褶皱", "上衣祛褶皱-祛细褶皱", "下装祛褶皱", "下装祛褶皱-祛粗褶皱",
                             "下装祛褶皱-祛细褶皱", "衣服祛汗渍", "衣服祛瑕疵", "衣服祛褶皱", "衣服祛褶皱-祛粗褶皱",

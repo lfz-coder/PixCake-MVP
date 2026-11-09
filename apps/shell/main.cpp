@@ -335,6 +335,22 @@ bool show_refine_module(QWidget& window, const char* id) {
   return button->isChecked();
 }
 
+// 展开某一页的折叠分组（色彩调节、局部调色、后期调色共用同一套分组，默认收起）。
+bool open_refine_section(QWidget& window, const char* page, const char* label) {
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  for (auto* toggle : window.findChildren<QToolButton*>(QStringLiteral("refine-section-toggle"))) {
+    const QWidget* section = toggle->parentWidget() != nullptr ? toggle->parentWidget()->parentWidget() : nullptr;
+    if (!toggle->isVisibleTo(&window) || toggle->text() != QString::fromUtf8(label) || section == nullptr ||
+        section->property("page").toString() != QString::fromLatin1(page)) {
+      continue;
+    }
+    toggle->setChecked(true);
+    return true;
+  }
+  qCritical("missing %s section %s", page, label);
+  return false;
+}
+
 // 导出进程写出成品，导出列表显示成功；成品带着精修的曝光（和画面一样偏红亮）。
 int smoke_export(pixcake::shell::ShellWindow& window, const QString& folder) {
   auto& controller = window.controller();
@@ -1415,7 +1431,7 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
     }
     (void)controller;
   }
-  if (!show_refine_module(window, "post")) return 8;
+  if (!show_refine_module(window, "post") || !open_refine_section(window, "post", "影调")) return 8;
   // Post colour: its exposure slider draws and commits to color.post (a step of its own in the history).
   {
     auto& controller = window.controller();
@@ -1443,7 +1459,7 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
       return 8;
     }
   }
-  if (!show_refine_module(window, "local")) return 8;
+  if (!show_refine_module(window, "local") || !open_refine_section(window, "local", "影调")) return 8;
   // Local colour (mask list): create a mask, brighten it, give it a linear gradient item (only part of the picture keeps the
   // brightening), cut a radial item out of it, then remove the items and the mask.  Gradients need no segmentation.
   {

@@ -62,6 +62,17 @@ std::vector<ChoiceOption> choice_options(const SliderBinding& binding);
 std::vector<PanelRow> refine_post_color_rows();
 // 局部调色面板的行：作用部位下拉（color.local/region），再是白平衡、影调两组标题和十四支滑杆（绑定 color.local）。
 std::vector<PanelRow> refine_local_rows();
+// 色彩面板的分组复用到别的能力（局部调色、后期调色和色彩调节是同一套分组，只是绑定不同）：从色彩面板的表里取
+// sections 列出的分组（按表里的顺序），滑杆和选择改绑到 capability 的同名参数；该能力没有登记的参数变成未绑定
+// （范围待确认，选择行不带）。分组标题栏的按钮、白平衡预设行、黑白混合（只属于全图的黑白配置文件）不带。
+// 绑定了的滑杆对象名是 <object_prefix><参数>。
+std::vector<PanelRow> color_section_rows(std::string_view capability, const std::vector<std::string>& sections,
+                                         std::string_view object_prefix);
+// 局部调色的分组（PixCake 9.3.0 局部调色页，2026-11-08 截图）：白平衡、影调、色阶、曲线、HSL、色彩编辑器、颜色分级、
+// 可选颜色、细节、创意色彩。
+std::vector<std::string> refine_local_sections();
+// 后期调色的分组：color.post 登记了参数的白平衡、影调。
+std::vector<std::string> refine_post_sections();
 // 后期调色面板：两项全图/局部，加色彩面板的分组标题。
 std::vector<std::string> refine_post_color_titles();
 const char* refine_color_panel_name();
