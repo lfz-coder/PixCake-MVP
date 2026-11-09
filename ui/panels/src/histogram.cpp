@@ -25,4 +25,10 @@ RgbHistogram rgb_histogram(const std::uint8_t* rgba, std::uint32_t width, std::u
   return out;
 }
 
+double histogram_bar_height(const RgbHistogram& histogram, std::uint32_t count) {
+  if (histogram.pixels == 0) return 0.0;
+  const double full = static_cast<double>(histogram.pixels) / 40.0;
+  return std::min(1.0, static_cast<double>(count) / full);
+}
+
 }  // namespace pixcake::ui::panels

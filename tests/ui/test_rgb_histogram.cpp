@@ -18,6 +18,14 @@ int main() {
   assert(h.green[20] == 2 && h.green[200] == 1 && h.green[0] == 2);
   assert(h.blue[30] == 3 && h.blue[0] == 1 && h.blue[255] == 1);
   assert(h.peak == 3);
+  // Display height: linear, full height = counted pixels / 40, clipped at 1 (measured on PixCake 9.3.0).
+  RgbHistogram tall;
+  tall.pixels = 4000;  // full height is 100 pixels
+  assert(histogram_bar_height(tall, 0) == 0.0);
+  assert(histogram_bar_height(tall, 25) == 0.25);
+  assert(histogram_bar_height(tall, 100) == 1.0);
+  assert(histogram_bar_height(tall, 3000) == 1.0);  // a background peak is clipped, not used as the scale
+  assert(histogram_bar_height(RgbHistogram{}, 7) == 0.0);
   // Invalid input: empty.
   assert(rgb_histogram(frame.data(), 3, 2, 11, frame.size()).pixels == 0);
   assert(rgb_histogram(frame.data(), 3, 3, 16, frame.size()).pixels == 0);

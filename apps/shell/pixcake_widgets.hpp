@@ -193,9 +193,10 @@ inline QString shellAssetFile(const QString& relative) {
   return {};
 }
 
-// 色彩调节页顶部的 RGB 直方图（官方样式）：深色渐变底，三个通道各画一块半透明填充、叠加处相加变亮，再描一条细线。
-// 高度按 log(1+计数) 画。官方也是这样：背景往往挤在一个色阶里，线性高度会只剩三根尖峰，对数才能看到从暗部爬到高光的那条坡。
-// 计数来自 ui/panels::rgb_histogram；没有数据时只画底。Qt 控件画不出这种图，用 QPainter 自绘。
+// 色彩调节页顶部的 RGB 直方图（官方样式）：深色渐变底，红、绿、蓝三个通道依次画一块 31% 不透明的填充（普通叠放，
+// 三者重叠处是官方那种钢蓝色），再各描一条 1px 线。高度是线性的：满高 = 统计像素数 / 40，超出的峰顶截掉
+// （ui/panels::histogram_bar_height，实测见 docs/superpowers/evidence/2026-11-09-refine-histogram-scale.md）。
+// 没有数据时只画底。Qt 控件画不出这种图，用 QPainter 自绘。
 class PixCakeHistogram final : public QFrame {
  public:
   explicit PixCakeHistogram(QWidget* parent = nullptr) : QFrame(parent) {
@@ -216,35 +217,33 @@ class PixCakeHistogram final : public QFrame {
     painter.setRenderHint(QPainter::Antialiasing);
     QLinearGradient ground(0, 0, 0, height());
     ground.setColorAt(0.0, QColor(0, 0, 0));
-    ground.setColorAt(1.0, QColor(36, 39, 46));
+    ground.setColorAt(1.0, QColor(31, 34, 39));
     painter.fillRect(rect(), ground);
     if (histogram_.peak == 0) return;
     const qreal span = width();
     const qreal bottom = height();
     const qreal tall = height() - 2;
-    const qreal peak = std::log1p(static_cast<qreal>(histogram_.peak));
     const auto path_of = [&](const std::array<std::uint32_t, 256>& bins, bool closed) {
       QPainterPath path;
       path.moveTo(0, bottom);
       for (int i = 0; i < 256; ++i) {
-        const qreal y = bottom - tall * std::log1p(static_cast<qreal>(bins[static_cast<std::size_t>(i)])) / peak;
+        const qreal y = bottom - tall * ui::panels::histogram_bar_height(histogram_, bins[static_cast<std::size_t>(i)]);
         path.lineTo(span * i / 255.0, y);
       }
       path.lineTo(span, bottom);
       if (closed) path.closeSubpath();
       return path;
     };
+    // 线色取自官方截图里最饱和的线像素。
     const std::array<std::pair<const std::array<std::uint32_t, 256>*, QColor>, 3> channels = {
-        {{&histogram_.red, QColor(220, 60, 60)}, {&histogram_.green, QColor(60, 190, 80)}, {&histogram_.blue, QColor(50, 130, 235)}}};
+        {{&histogram_.red, QColor(205, 20, 38)}, {&histogram_.green, QColor(0, 190, 73)}, {&histogram_.blue, QColor(0, 90, 255)}}};
     painter.setPen(Qt::NoPen);
-    painter.setCompositionMode(QPainter::CompositionMode_Plus);
     for (const auto& [bins, color] : channels) {
       QColor fill = color;
-      fill.setAlpha(110);
+      fill.setAlpha(79);  // 31%
       painter.setBrush(fill);
       painter.drawPath(path_of(*bins, true));
     }
-    painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
     painter.setBrush(Qt::NoBrush);
     for (const auto& [bins, color] : channels) {
       painter.setPen(QPen(color, 1.0));
