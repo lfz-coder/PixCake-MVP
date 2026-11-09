@@ -122,6 +122,15 @@ std::vector<std::uint8_t> serialize_fragment(const ParsedFragment& fragment) {
   return out;
 }
 
+// 本程序能读写的这个能力的最高片段版本（取自参数模式，至少 1）。
+std::uint32_t max_known_version(const std::string& capability_id) {
+  std::uint32_t version = 1;
+  for (const auto& mode : phase_one_parameter_modes()) {
+    if (mode.capability_id == capability_id) version = std::max(version, mode.schema_version);
+  }
+  return version;
+}
+
 bool known_capability(const std::vector<VersionLimit>& limits, const std::string& id, bool& too_new,
                       std::uint32_t version) {
   for (const auto& limit : limits) {
@@ -141,7 +150,14 @@ std::vector<VersionLimit> phase_one_version_limits() {
   // would iterate a destroyed temporary.
   const CapabilityRegistry registry = CapabilityRegistry::phase_one();
   std::vector<VersionLimit> limits;
-  for (const auto& descriptor : registry.descriptors()) limits.push_back({descriptor.id, 1});
+  for (const auto& descriptor : registry.descriptors()) {
+    // 能读到的最高片段版本取自参数模式（局部调色是 2：多蒙版的前缀参数）。
+    std::uint32_t readable = 1;
+    for (const auto& mode : phase_one_parameter_modes()) {
+      if (mode.capability_id == descriptor.id) readable = std::max(readable, mode.schema_version);
+    }
+    limits.push_back({descriptor.id, readable});
+  }
   return limits;
 }
 
@@ -643,6 +659,14 @@ ResultCode EditDocument::set_preview(const std::string& capability_id, const std
   return ResultCode::Ok;
 }
 
+std::vector<std::string> EditDocument::preview_parameter_ids(const std::string& capability_id) const {
+  std::vector<std::string> ids;
+  for (const auto& [key, value] : preview_) {
+    if (key.first == capability_id) ids.push_back(key.second);
+  }
+  return ids;
+}
+
 std::optional<std::string> EditDocument::preview(const std::string& capability_id,
                                                  const std::string& parameter_id) const {
   const auto found = preview_.find({capability_id, parameter_id});
@@ -704,7 +728,7 @@ ResultCode EditDocument::commit_preview_steps(std::uint64_t expected_revision, c
   if (too_new) {
     return ResultCode::CapabilityTooNew;
   }
-  if (existing && existing->version > 1) {
+  if (existing && existing->version > max_known_version(capability_id)) {
     return ResultCode::CapabilityTooNew;
   }
 
@@ -748,7 +772,7 @@ ResultCode EditDocument::commit_preview_steps(std::uint64_t expected_revision, c
   }
   EditDocument next = *this;
   next.clear_recovered_flag();
-  next.store_fragment(capability_id, version, serialize_tlv(inner_records));
+  next.store_fragment(capability_id, std::max(version, max_known_version(capability_id)), serialize_tlv(inner_records));  // 旧版本片段写入时升级
   next.set_revision(revision() + 1);
   const ResultCode saved = atomic_replace(files, path, next.encode(), log_);
   if (saved != ResultCode::Ok) {
@@ -802,7 +826,7 @@ ResultCode EditDocument::commit_fragment_replacement_steps(
                                                      parsed->id) == remove_capability_ids.end()) {
                                          return false;
                                        }
-                                       if (parsed->version > 1) return false;
+                                       if (parsed->version > max_known_version(parsed->id)) return false;
                                        if (!limits_.empty()) {
                                          bool too_new = false;
                                          if (!known_capability(limits_, parsed->id, too_new, parsed->version) || too_new) {
@@ -855,7 +879,7 @@ ResultCode EditDocument::commit_baked_reset_steps(std::uint64_t expected_revisio
                        const auto parsed = parse_fragment(record.payload);
                        if (!parsed) return false;
                        const auto* descriptor = CapabilityRegistry::phase_one().find(parsed->id);
-                       bool too_new = descriptor == nullptr || parsed->version > 1;
+                       bool too_new = descriptor == nullptr || parsed->version > max_known_version(parsed->id);
                        if (!limits_.empty()) {
                          bool known_too_new = false;
                          if (known_capability(limits_, parsed->id, known_too_new, parsed->version)) {

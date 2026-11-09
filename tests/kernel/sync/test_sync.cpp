@@ -305,7 +305,48 @@ void test_c31_sync_and_paste_validate_through_capability_modules() {
   EXPECT(target.revision() == 0 && files.files["docs/target.pxedit"] == saved);
 }
 
+// 局部调色的多个蒙版：第 2 个蒙版的参数提交后版本是 2，重新读盘仍在；旧的版本 1 片段照常可读，写入时升到 2；
+// 粘贴到另一张照片带着全部蒙版。
+void test_local_instances_persist_and_paste() {
+  const auto limits = pixcake::phase_one_version_limits();
+  auto document = *pixcake::EditDocument::create("multi");
+  pixcake::test::FakeFileSystem files;
+  EXPECT(document.write_snapshot(files, "docs/multi.pxedit") == pixcake::ResultCode::Ok);
+  // A legacy fragment: version 1, unprefixed values only.
+  document.store_fragment("color.local", 1,
+                          pixcake::encode_fragment_records({{pixcake::kFragmentParameterRecord,
+                                                             pixcake::encode_parameter_record("exposure", "1")}}));
+  EXPECT(document.write_snapshot(files, "docs/multi.pxedit") == pixcake::ResultCode::Ok);
+  EXPECT(document.set_preview("color.local", "m2:exposure", "0.5") == pixcake::ResultCode::Ok);
+  EXPECT(document.commit_preview(document.revision(), "color.local", "m2:exposure", limits, files,
+                                 "docs/multi.pxedit") == pixcake::ResultCode::Ok);
+  EXPECT(document.fragment("color.local")->version == 2);
+  EXPECT(document.committed_parameter("color.local", "exposure") == std::optional<std::string>("1"));
+  EXPECT(document.committed_parameter("color.local", "m2:exposure") == std::optional<std::string>("0.5"));
+  EXPECT(document.set_preview("color.local", "m3:region", "person.hair") == pixcake::ResultCode::Ok);
+  EXPECT(document.commit_preview(document.revision(), "color.local", "m3:region", limits, files,
+                                 "docs/multi.pxedit") == pixcake::ResultCode::Ok);
+  pixcake::EditDocument reloaded = *pixcake::EditDocument::create("multi");
+  EXPECT(pixcake::EditDocument::load(reloaded, files, "docs/multi.pxedit", limits).code == pixcake::ResultCode::Ok);
+  EXPECT(reloaded.committed_parameter("color.local", "m3:region") == std::optional<std::string>("person.hair"));
+  EXPECT(reloaded.committed_parameter("color.local", "exposure") == std::optional<std::string>("1"));
+  // A bad prefix or value is refused at commit.
+  EXPECT(document.set_preview("color.local", "m40:exposure", "1") == pixcake::ResultCode::Ok);  // preview is free text
+  EXPECT(document.commit_preview(document.revision(), "color.local", "m40:exposure", limits, files,
+                                 "docs/multi.pxedit") != pixcake::ResultCode::Ok);
+  // Paste carries every mask.
+  pixcake::EffectClipboard clipboard;
+  clipboard.fragments.push_back(*document.fragment("color.local"));
+  auto target = *pixcake::EditDocument::create("target-multi");
+  pixcake::test::FakeFileSystem target_files;
+  EXPECT(target.write_snapshot(target_files, "docs/t.pxedit") == pixcake::ResultCode::Ok);
+  EXPECT(pixcake::paste_committed(target, clipboard, 0, target_files, "docs/t.pxedit") == pixcake::ResultCode::Ok);
+  EXPECT(target.committed_parameter("color.local", "m2:exposure") == std::optional<std::string>("0.5"));
+  EXPECT(target.committed_parameter("color.local", "m3:region") == std::optional<std::string>("person.hair"));
+}
+
 int main() {
+  test_local_instances_persist_and_paste();
   test_c31_sync_and_paste_validate_through_capability_modules();
   test_tree_reads_attributes_from_owners();
   test_b37_checked_sync_copies_only_selected_fragments();

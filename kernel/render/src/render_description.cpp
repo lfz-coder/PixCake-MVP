@@ -102,6 +102,10 @@ CompileResult compile(const EditDocument& document, const CapabilityRegistry& re
       capability_ids.push_back(mode.capability_id);
     }
   }
+  // 局部调色第 N 个蒙版（带前缀的参数）只有预览值时同样要编译。
+  if (!document.preview_parameter_ids("color.local").empty() && seen_capabilities.insert("color.local").second) {
+    capability_ids.push_back("color.local");
+  }
 
   const DocumentReader reader(document);
   for (const auto& capability_id : capability_ids) {
@@ -131,7 +135,8 @@ CompileResult compile(const EditDocument& document, const CapabilityRegistry& re
     for (auto& step : compiled.steps) result.description.operations.push_back(operation_of(std::move(step)));
   }
 
-  std::sort(result.description.operations.begin(), result.description.operations.end(),
+  // 稳定排序：同一能力的多个步骤（局部调色的多个蒙版）保持模块给出的先后。
+  std::stable_sort(result.description.operations.begin(), result.description.operations.end(),
             [](const RenderOperation& left, const RenderOperation& right) {
               if (left.order != right.order) {
                 return left.order < right.order;

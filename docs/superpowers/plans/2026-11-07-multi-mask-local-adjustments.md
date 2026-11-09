@@ -45,3 +45,12 @@
 1. 参数前缀方案是否可以（推荐），还是要换成另外两种之一。
 2. 实例和子项上限：32 和 16 是否够。
 3. `color.local` 升到 `schema_version` 2，意味着旧版本程序会跳过局部调色而不是部分画出。
+
+## 实施记录
+
+### 第 1 步（2026-11-08 完成）
+- `color.local` 参数编号允许 `m<N>:` 前缀（`split_local_parameter`、`local_instance_prefix`、上限 `kMaxLocalInstances` = 32）；`find_parameter_mode` 对 `color.local` 先去前缀；前缀不合法（0、超过 32、前导零、非数字、空基础名）查不到。其他能力不受影响。
+- `color.local` 全部参数模式的 `schema_version` 升到 2。版本相关的几处都改成取自参数模式：`phase_one_version_limits`、`EditDocument` 提交和替换里的“版本大于 1 视为太新”（`max_known_version`）；提交写入时旧片段升到当前版本；模块 `migrate` 对 `color.local` 版本 1 直接升级；`write_back` 取 `max(旧版本, 当前版本)`。
+- 模块编译：实例 0 之后按编号 1..32，有任何参数的实例各编译一个绘制步骤；`compile_interactive` 认带前缀的参数；渲染描述改用稳定排序，保证同一能力的多个步骤保持先后。预览里只有带前缀的值时也会编译（`EditDocument::preview_parameter_ids`）。
+- 与方案的差别：`name`（蒙版名称）和 `combine` 这一步没有做——登记表不支持文本参数，名称留到壳层步骤由壳层自己存（或扩展文本参数）；`combine` 随子项在第 2 步做。
+- 测试：`test_render_description`（前缀拆分和非法前缀、校验、实例顺序、只有预览值的实例、没有实例 0、版本上限）、`test_sync`（旧版本 1 片段可读、提交升到 2、重读仍在、非法前缀提交被拒、粘贴带着全部蒙版）；`test_preset_library` 的“太新版本”用例从 2 改成 3。

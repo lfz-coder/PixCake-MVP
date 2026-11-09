@@ -107,4 +107,12 @@ std::optional<std::string> parameter_disabled_reason(
 bool validate_parameter_display_value(std::string_view capability_id, std::string_view parameter_id,
                                       std::string_view display_value);
 
+// 局部调色的多个蒙版（实例）：color.local 的参数编号可以带 "m<N>:" 前缀（N 为 1..kMaxLocalInstances），
+// 例如 "m2:exposure"；没有前缀的参数属于实例 0（旧文档不变）。登记表只登记基础参数，find_parameter_mode
+// 对 color.local 先去掉前缀再查。前缀不合法（不是 m 加十进制数字、0、超过上限、前导零）时查不到。
+inline constexpr int kMaxLocalInstances = 32;
+// 拆出实例编号和基础参数编号；没有前缀时 instance 为 0。前缀不合法返回 false。
+bool split_local_parameter(std::string_view parameter_id, int& instance, std::string_view& base);
+std::string local_instance_prefix(int instance);  // 实例 0 返回空串
+
 }  // namespace pixcake

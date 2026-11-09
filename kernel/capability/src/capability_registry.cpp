@@ -110,6 +110,10 @@ std::vector<ParameterMode> make_parameter_modes() {
                                   std::get<3>(spec), "color", "pixcake.color.local", std::get<0>(spec), 21);
     gradient.default_confirmed = false;
   }
+  // 局部调色允许多个蒙版（参数编号带 m<N>: 前缀），旧版本程序读到这个片段要整体跳过，所以版本升到 2。
+  for (auto& mode : modes) {
+    if (mode.capability_id == "color.local") mode.schema_version = 2;
+  }
   region.default_choice = "all";
   // 配置文件（需求第 10.3 节）：标准、质感、黑白、基础，默认标准。
   ParameterMode& profile = add("color.global", "profile", 0.0, 0.0, 1.0, 0.0, "color", "pixcake.color.global",
@@ -397,7 +401,34 @@ const MatchWritebackSwitch& match_writeback_switch() {
   return kSwitch;
 }
 
+bool split_local_parameter(std::string_view parameter_id, int& instance, std::string_view& base) {
+  instance = 0;
+  base = parameter_id;
+  if (parameter_id.size() < 3 || parameter_id[0] != 'm') return true;  // 基础参数没有 m 开头的以外的冲突：下面再查表
+  const auto colon = parameter_id.find(':');
+  if (colon == std::string_view::npos) return true;
+  const std::string_view digits = parameter_id.substr(1, colon - 1);
+  if (digits.empty() || digits.size() > 2 || digits[0] == '0') return false;
+  int value = 0;
+  for (const char c : digits) {
+    if (c < '0' || c > '9') return false;
+    value = value * 10 + (c - '0');
+  }
+  if (value < 1 || value > kMaxLocalInstances) return false;
+  instance = value;
+  base = parameter_id.substr(colon + 1);
+  return !base.empty();
+}
+
+std::string local_instance_prefix(int instance) { return instance <= 0 ? std::string() : "m" + std::to_string(instance) + ":"; }
+
 const ParameterMode* find_parameter_mode(std::string_view capability_id, std::string_view parameter_id) {
+  if (capability_id == "color.local") {
+    int instance = 0;
+    std::string_view base;
+    if (!split_local_parameter(parameter_id, instance, base)) return nullptr;
+    parameter_id = base;
+  }
   const auto& modes = phase_one_parameter_modes();
   for (const auto& mode : modes) {
     if (mode.capability_id == capability_id && mode.parameter_id == parameter_id) {

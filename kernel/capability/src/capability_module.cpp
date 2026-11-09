@@ -101,7 +101,7 @@ FragmentResult ParameterBackedModule::write_back(const std::optional<FragmentByt
       result.code = ResultCode::CapabilityTooNew;
       return result;
     }
-    result.fragment.version = existing->version;
+    result.fragment.version = std::max(existing->version, current_version());  // 旧版本片段写入时升级
     std::vector<FragmentRecord> records;
     if (!decode_fragment_records(existing->inner, records)) {
       result.code = ResultCode::DocumentCorrupt;
@@ -154,8 +154,9 @@ bool ParameterBackedModule::draws_parameter(const ParameterReader& reader, const
 
 ModuleCompile ParameterBackedModule::compile_modes(const ParameterReader& reader,
                                                    const std::vector<const ParameterMode*>& modes,
-                                                   const std::string& only) const {
+                                                   const std::string& only, int instance) const {
   ModuleCompile result;
+  const std::string prefix = local_instance_prefix(instance);
   const std::string unavailable = disabled_reason(reader.conditions());
   if (!unavailable.empty()) {
     result.diagnostics.push_back({descriptor_.id, unavailable + "，保留片段但跳过绘制", false});
@@ -176,7 +177,7 @@ ModuleCompile ParameterBackedModule::compile_modes(const ParameterReader& reader
   std::set<std::string> channels;
   for (const auto* mode : modes) {
     if (!only.empty() && mode->parameter_id != only) continue;
-    const auto value = reader.value(descriptor_.id, mode->parameter_id);
+    const auto value = reader.value(descriptor_.id, prefix + mode->parameter_id);
     if (!value) continue;
     double numeric = 0.0;
     bool numeric_ok = false;
@@ -221,7 +222,7 @@ ModuleCompile ParameterBackedModule::compile_modes(const ParameterReader& reader
       created = true;
     }
     if (!channels.insert(mode->render_channel).second) continue;
-    step.values.push_back(DrawValue{mode->parameter_id, mode->render_channel, *value, numeric});
+    step.values.push_back(DrawValue{prefix + mode->parameter_id, mode->render_channel, *value, numeric});
   }
   if (created) {
     if (step.values.empty()) {
@@ -236,12 +237,31 @@ ModuleCompile ParameterBackedModule::compile_modes(const ParameterReader& reader
 }
 
 ModuleCompile ParameterBackedModule::compile(const ParameterReader& reader) const {
-  return compile_modes(reader, parameter_modes(), "");
+  ModuleCompile result = compile_modes(reader, parameter_modes(), "");
+  if (descriptor_.id != "color.local") return result;
+  // 第 1..N 个蒙版：只要有任何一个参数就编译成一个绘制步骤，按实例编号先后排在实例 0 之后。
+  const auto modes = parameter_modes();
+  for (int instance = 1; instance <= kMaxLocalInstances; ++instance) {
+    const std::string prefix = local_instance_prefix(instance);
+    const bool present = std::any_of(modes.begin(), modes.end(), [&](const ParameterMode* mode) {
+      return reader.value(descriptor_.id, prefix + mode->parameter_id).has_value();
+    });
+    if (!present) continue;
+    ModuleCompile one = compile_modes(reader, modes, "", instance);
+    for (auto& step : one.steps) result.steps.push_back(std::move(step));
+    for (auto& diagnostic : one.diagnostics) result.diagnostics.push_back(std::move(diagnostic));
+  }
+  return result;
 }
 
 ModuleCompile ParameterBackedModule::compile_interactive(const ParameterReader& reader,
                                                          const std::string& parameter_id) const {
   if (parameter_id.empty()) return {};
+  int instance = 0;
+  std::string_view base;
+  if (descriptor_.id == "color.local" && split_local_parameter(parameter_id, instance, base) && instance > 0) {
+    return compile_modes(reader, parameter_modes(), std::string(base), instance);
+  }
   return compile_modes(reader, parameter_modes(), parameter_id);
 }
 
@@ -284,7 +304,12 @@ FragmentResult ParameterBackedModule::migrate(const FragmentBytes& fragment) con
   FragmentResult result;
   result.fragment = fragment;
   if (fragment.version == current_version()) return result;
-  // 第一阶段只有版本 1，没有可升级的旧版本；更低的版本号不是本能力写出的片段。
+  // 局部调色版本 1 到 2：数据布局不变（2 只是多了带前缀的蒙版参数），直接升级版本号。
+  if (descriptor_.id == "color.local" && fragment.version == 1) {
+    result.fragment.version = current_version();
+    return result;
+  }
+  // 其余能力只有版本 1，没有可升级的旧版本；更低的版本号不是本能力写出的片段。
   result.code = fragment.version > current_version() ? ResultCode::CapabilityTooNew : ResultCode::StateConflict;
   return result;
 }

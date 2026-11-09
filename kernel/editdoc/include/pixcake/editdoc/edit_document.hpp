@@ -118,6 +118,8 @@ class EditDocument {
                          const std::string& display_value);
   std::optional<std::string> preview(const std::string& capability_id,
                                      const std::string& parameter_id) const;
+  // 这个能力当前有预览值的参数编号（含局部调色带 m<N>: 前缀的）。
+  std::vector<std::string> preview_parameter_ids(const std::string& capability_id) const;
   ResultCode commit_preview(std::uint64_t expected_revision, const std::string& capability_id,
                             const std::string& parameter_id, const std::vector<VersionLimit>& limits,
                             FileSystem& files, const std::string& path);

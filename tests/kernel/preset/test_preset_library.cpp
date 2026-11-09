@@ -182,7 +182,7 @@ void test_c43_color_replaces_and_ai_color_stacks() {
 void test_c31_preset_apply_validates_through_capability_modules() {
   auto document = *pixcake::EditDocument::create("img-1");
   document.store_fragment("color.global", 1, marked(1));
-  document.store_fragment("color.local", 2, marked(2));
+  document.store_fragment("color.local", 3, marked(2));
   pixcake::test::FakeFileSystem files;
   EXPECT(document.write_snapshot(files, kPath) == pixcake::ResultCode::Ok);
   pixcake::PresetLibrary library;
@@ -207,7 +207,7 @@ void test_c31_preset_apply_validates_through_capability_modules() {
   EXPECT(library.apply(document, good, 0, files, kPath, latch) == pixcake::ResultCode::Ok);
   EXPECT(document.committed_parameter("color.global", "vibrance") == std::optional<std::string>("10"));
   // color.local 的片段来自更新的版本：替换整个色彩模块时也不删它。
-  EXPECT(document.fragment("color.local") && document.fragment("color.local")->version == 2);
+  EXPECT(document.fragment("color.local") && document.fragment("color.local")->version == 3);
 }
 
 // 管理和存盘：重命名守 20 字、删除、按已用能力推断类型、字节格式来回一致、坏字节被拒。

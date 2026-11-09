@@ -138,6 +138,54 @@ void test_local_region_becomes_a_semantic_mask() {
   EXPECT(result.description.operations.size() == 1 && result.description.operations[0].mask_ids.empty());
 }
 
+// 多个蒙版（实例）：带 m<N>: 前缀的参数登记到基础参数；前缀不合法被拒；每个实例一个绘制步骤，实例 0 在前。
+void test_local_instances_compile_in_order() {
+  using pixcake::find_parameter_mode;
+  int instance = -1;
+  std::string_view base;
+  EXPECT(pixcake::split_local_parameter("exposure", instance, base) && instance == 0 && base == "exposure");
+  EXPECT(pixcake::split_local_parameter("m2:exposure", instance, base) && instance == 2 && base == "exposure");
+  EXPECT(pixcake::split_local_parameter("m32:gradient_x", instance, base) && instance == 32 && base == "gradient_x");
+  for (const char* bad : {"m0:exposure", "m33:exposure", "m02:exposure", "mx:exposure", "m:exposure", "m2:"}) {
+    EXPECT(!pixcake::split_local_parameter(bad, instance, base));
+    EXPECT(find_parameter_mode("color.local", bad) == nullptr);
+  }
+  EXPECT(find_parameter_mode("color.local", "m3:exposure") == find_parameter_mode("color.local", "exposure"));
+  EXPECT(find_parameter_mode("color.global", "m3:exposure") == nullptr);  // only local colour has instances
+  EXPECT(pixcake::validate_parameter_display_value("color.local", "m3:exposure", "1.5"));
+  EXPECT(!pixcake::validate_parameter_display_value("color.local", "m3:exposure", "9"));
+  EXPECT(pixcake::validate_parameter_display_value("color.local", "m2:region", "person.hair"));
+
+  auto document = *pixcake::EditDocument::create("img-instances");
+  // Only previews, only instances 2 and 1 (set out of order): both must compile, instance 1 before 2.
+  EXPECT(document.set_preview("color.local", "m2:exposure", "1") == pixcake::ResultCode::Ok);
+  EXPECT(document.set_preview("color.local", "m2:region", "person.hair") == pixcake::ResultCode::Ok);
+  EXPECT(document.set_preview("color.local", "m1:exposure", "-1") == pixcake::ResultCode::Ok);
+  EXPECT(document.set_preview("color.local", "exposure", "0.5") == pixcake::ResultCode::Ok);
+  auto result = pixcake::render::compile(document);
+  EXPECT(result.description.operations.size() == 3);
+  if (result.description.operations.size() == 3) {
+    const auto& ops = result.description.operations;
+    EXPECT(ops[0].values.size() == 1 && ops[0].values[0].parameter_id == "exposure");
+    EXPECT(ops[1].values.size() == 1 && ops[1].values[0].parameter_id == "m1:exposure" && ops[1].mask_ids.empty());
+    EXPECT(ops[2].values.size() == 1 && ops[2].values[0].parameter_id == "m2:exposure");
+    EXPECT(ops[2].mask_ids == std::vector<std::string>{"semantic:person.hair"});
+    for (const auto& op : ops) EXPECT(op.values[0].channel == "exposure");
+  }
+  // Without instance 0 the others still draw.
+  auto only_two = *pixcake::EditDocument::create("img-instances-2");
+  EXPECT(only_two.set_preview("color.local", "m5:contrast", "10") == pixcake::ResultCode::Ok);
+  result = pixcake::render::compile(only_two);
+  EXPECT(result.description.operations.size() == 1);
+  // Local colour fragments are version 2 now; the readable limit follows the registry.
+  bool found = false;
+  for (const auto& limit : pixcake::phase_one_version_limits()) {
+    if (limit.capability_id == "color.local") { found = true; EXPECT(limit.max_readable_version == 2); }
+    if (limit.capability_id == "color.global") EXPECT(limit.max_readable_version == 1);
+  }
+  EXPECT(found);
+}
+
 void test_too_new_fragment_is_skipped_and_preserved() {
   auto document = *pixcake::EditDocument::create("img-2");
   document.store_fragment("color.global", 2, {9, 9});
@@ -286,6 +334,7 @@ int main() {
   test_c05_profile_choice_is_rendered_as_choice_index();
   test_capability_order_is_stable_across_parameters();
   test_local_region_becomes_a_semantic_mask();
+  test_local_instances_compile_in_order();
   test_too_new_fragment_is_skipped_and_preserved();
   test_layer_and_mask_inputs_are_descriptive();
   return g_failures == 0 ? 0 : 1;

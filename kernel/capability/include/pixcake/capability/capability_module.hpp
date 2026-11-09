@@ -207,8 +207,9 @@ class ParameterBackedModule : public CapabilityModule {
   // 颗粒效果为 0 时的其余颗粒参数、非纯色背景下的纯色参数），数据不删。
   virtual bool draws_parameter(const ParameterReader& reader, const ParameterMode& mode) const;
   // 按参数模式把读到的值编成一条绘制描述；only 非空时只取这一个参数。
+  // instance 大于 0 时读 "m<N>:" 前缀的参数（局部调色的第 N 个蒙版）。
   ModuleCompile compile_modes(const ParameterReader& reader, const std::vector<const ParameterMode*>& modes,
-                              const std::string& only) const;
+                              const std::string& only, int instance = 0) const;
 
  private:
   CapabilityDescriptor descriptor_;
