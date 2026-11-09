@@ -1,7 +1,7 @@
 # PixCake 像素处理来源与共识登记
 
-日期：2026-11-06
-状态：全局约束，第一批效果登记
+日期：2026-11-09（修订）
+状态：来源规则；执行状态以 [像素处理来源与执行现状矩阵](../evidence/2026-11-09-pixel-processing-status-matrix.md) 为准
 
 这份文档记录像素效果为什么这样实现、证据来自哪里，以及哪些结论仍然不能声称等同于 PixCake 官方内部实现。算法有可靠来源，不等于已经证明与官方产品逐像素一致；两者必须分开记录。
 
@@ -18,11 +18,11 @@
 
 没有 `normative-standard`、`peer-reviewed` 或 `library-reference` 支撑的通用公式，不得标为“已验证”。没有 `black-box-product` 或官方内部资料时，不得把项目公式写成“官方公式”。
 
-## 统一输入约定
+## 统一输入约定与当前差异
 
-当前 `gpu::RgbaImage` 是渲染器的**归一化线性工作缓冲区**：每个 RGBA8 通道在进入 reference/GPU executor 前已经被解释为 `[0,1]` 的线性值，alpha 保持线性覆盖率。真正的 JPEG/PNG/TIFF/RAW 解码器必须在 `apps/renderd`/`apps/exportd` 适配层完成格式解码、色彩配置和编码转换；不能让 `kernel/` 或 GPU 后端打开用户文件。
+设计契约要求 `gpu::RgbaImage` 是渲染器的**归一化线性工作缓冲区**：每个 RGBA8 通道在进入 reference/GPU executor 前应已经被转换到 `[0,1]` 的线性值，alpha 保持线性覆盖率。真正的 JPEG/PNG/TIFF/RAW 解码器在 `apps/renderd`/`apps/exportd` 适配层完成格式解码和色彩配置；不能让 `kernel/` 或 GPU 后端打开用户文件。
 
-如果输入来自 sRGB 编码文件，适配层必须按 IEC 61966-2-1 的 sRGB 传递函数转换到线性值；输出编码时执行相反转换。当前真实 codec 尚未接入，因此这条约定是接口约束，不是已经完成的 I/O 功能。
+如果输入来自 sRGB 编码文件，适配层必须按 IEC 61966-2-1 的 sRGB 传递函数转换到线性值；输出编码时执行相反转换。当前 macOS ImageIO 解码器的接口仍标记输出为 sRGB RGBA8，而 reference/GPU 仍按线性工作缓冲区解释，因此这条链路标记为**未闭环**，不能把真实图片上的曝光/对比度结果称为完成的线性颜色管理。
 
 ## 第一批效果登记
 
@@ -86,21 +86,25 @@ W3C 规定 `contrast(100%)` 保持输入、`contrast(0%)` 变成中灰；项目�
 
 ### Brightness、Highlights、Shadows、Whites、Blacks、Texture、Clarity、Dehaze、Vibrance、Saturation
 
-状态：`reference-only`，不能标为官方效果完成，也不进入 GPU 已实现清单。
+状态：`project-reference`；当前有 reference 和条件性 GPU 路径，但不能标为官方效果完成。
 
-它们仍缺少足以证明官方等价的传递函数。下一次登记必须继续写明色彩空间、公式、标准/论文/库来源、像素向量和 GPU readback 证据，不能恢复旧的隐藏经验系数。
+它们仍缺少足以证明官方等价的传递函数。代码中的公式必须继续保持显式、可测试，并在来源不足时标为 `project-decision`，不能把 GPU 与本项目 reference 的一致误写成官方一致。
 
 ### LUT 与图层混合
 
-状态：LUT 三线性采样和 `normal`/`multiply`/`screen` reference 合成属于 `reference-only`，因为具体 LUT/profile 资源必须来自已解析资源，不能在代码里编造官方滤镜内容。输入资源的来源、版本、色彩空间和许可证由资源提供方登记；GPU 多纹理/多层路径仍未完成。
+状态：LUT 三线性采样和 `normal`/`multiply`/`screen` reference 合成属于条件性 reference。具体 LUT/profile 资源必须来自已解析资源，不能在代码里编造官方滤镜内容；当前 GPU 没有 3D LUT 路径。输入资源的来源、版本、色彩空间和许可证仍需登记。
 
 ## 实现状态与门禁
 
-- `gpu/render` 的 shader 执行 ICC Bradford 白平衡、Exposure EV 和 W3C affine contrast，uniform 由同一份 CPU 矩阵/参数映射生成。四个通道（Temperature、Tint、Exposure、Contrast）都已通过 GPU readback 与 reference 的逐通道对比（容差 ±3/255），登记为 GPU `Implemented`。这只说明 GPU 与本项目 reference 一致，不说明与 PixCake 官方一致。
+- `gpu/render` 的 shader 对已登记通道执行与 CPU reference 对应的公式。GPU 支持是条件性的：能力、通道、混合模式和蒙版数量必须通过 `PassRegistry::gpuSupported`；否则由 reference fallback。readback 证明的是 GPU 与本项目 reference 一致，不证明与 PixCake 官方一致。
 - reference 结果可以帮助开发和测试，但不能单独证明官方视觉一致。
 - 每个新 effect 必须先更新本文件，再添加 pass registry 条目和像素测试。
 - 测试必须至少覆盖零值恒等性、正负边界、灰阶向量、饱和裁剪、蒙版 0/50/100% 和 revision 失配。
-- 真实图像解码/编码、sRGB/RAW 色彩管理和预览/导出的进程接入完成前，不得把端到端像素链路标为完成。
+- 真实图像解码/编码已经存在，但 sRGB/ICC/RAW 到线性工作缓冲区的转换契约尚未闭环；在该项完成前，不得把端到端线性像素链路标为完成。
+
+## 当前状态的唯一来源
+
+逐参数的当前状态以 [2026-11-09 像素处理来源与执行现状矩阵](../evidence/2026-11-09-pixel-processing-status-matrix.md) 为准。本文保留公式来源和证据等级；历史决策记录只说明当时为什么采用某个项目公式，不覆盖矩阵中的当前实现状态。若本文、矩阵、代码注释或测试名称出现冲突，必须在同一变更中修正，不能选择性引用。
 
 ## 决策记录
 

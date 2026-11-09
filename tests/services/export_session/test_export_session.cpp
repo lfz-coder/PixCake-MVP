@@ -238,6 +238,28 @@ int main() {
     assert(back.watermark_on && back.watermark && *back.watermark == *marked.settings.watermark);
     assert(back.watermark_free_copy);
     assert(back.folder == out && back.format == ExportFormat::Tiff16);
+    assert(!back.layout_on && !back.layout);
+
+    // 排版印刷：开关和全部参数跨会话记住。
+    ExportLayout sheet;
+    sheet.id_photo = false;
+    sheet.paper_width_mm = 127;
+    sheet.paper_height_mm = 89;
+    sheet.dpi = 600;
+    sheet.rows = 3;
+    sheet.cols = 2;
+    sheet.gap_px = 25;
+    sheet.margin_top_mm = 11;
+    sheet.margin_left_mm = 4;
+    ExportDefaults printed = back;
+    printed.layout_on = true;
+    printed.layout = sheet;
+    assert(exports->remember_defaults(printed) == ResultCode::Ok);
+    exports.reset();
+    assert(ExportSession::open(*projects, session, options, exports, diagnostic) == ResultCode::Ok);
+    const auto reread = exports->defaults();
+    assert(reread.layout_on && reread.layout && *reread.layout == sheet);
+    assert(reread.watermark_on && reread.folder == out);  // the other remembered items are untouched
   }
 
   // A missing original is refused with a notice; signed out nothing is queued.

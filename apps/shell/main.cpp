@@ -352,6 +352,18 @@ int smoke_export(pixcake::shell::ShellWindow& window, const QString& folder) {
   auto remembered = controller.export_target()->defaults;
   remembered.watermark_on = true;
   remembered.watermark = pixcake::ExportWatermark{material, {}};
+  // 排版印刷也记住上次的开关和参数：5寸 竖向、普通照片排版、600 dpi、3 行 2 列、间隔 25、上边距 11。
+  pixcake::ExportLayout sheet;
+  sheet.id_photo = false;
+  sheet.paper_width_mm = 89;
+  sheet.paper_height_mm = 127;
+  sheet.dpi = 600;
+  sheet.rows = 3;
+  sheet.cols = 2;
+  sheet.gap_px = 25;
+  sheet.margin_top_mm = 11;
+  remembered.layout_on = true;
+  remembered.layout = sheet;
   controller.remember_export_defaults(remembered);
 
   QString problem;
@@ -391,31 +403,49 @@ int smoke_export(pixcake::shell::ShellWindow& window, const QString& folder) {
       dialog->reject();
       return;
     }
-    // The layout tab: a switch (off by default), nine papers, 6寸 and 300 dpi by default; plain layout hides the grid.
+    // The layout tab: nine papers; the switch and every parameter come back as remembered (seeded above);
+    // plain layout hides the grid; going back to the observed defaults is what a fresh account sees.
     {
       auto* layout_group = dialog->findChild<QGroupBox*>(QStringLiteral("export-layout"));
       auto* paper = dialog->findChild<QComboBox*>(QStringLiteral("export-layout-paper"));
       auto* dpi = dialog->findChild<QSpinBox*>(QStringLiteral("export-layout-dpi"));
       auto* rows = dialog->findChild<QSpinBox*>(QStringLiteral("export-layout-rows"));
+      auto* cols = dialog->findChild<QSpinBox*>(QStringLiteral("export-layout-cols"));
+      auto* gap = dialog->findChild<QSpinBox*>(QStringLiteral("export-layout-gap"));
+      auto* top = dialog->findChild<QSpinBox*>(QStringLiteral("export-layout-margin-top"));
       auto* plain_layout = dialog->findChild<QRadioButton*>(QStringLiteral("export-layout-plain"));
+      auto* portrait_layout = dialog->findChild<QRadioButton*>(QStringLiteral("export-layout-portrait"));
       tabs->setCurrentIndex(2);
-      const bool shown = layout_group != nullptr && layout_group->isVisibleTo(dialog) && !layout_group->isChecked() &&
-                         paper != nullptr && paper->count() == 9 && paper->currentData().toString() == QStringLiteral("152x102") &&
-                         dpi != nullptr && dpi->value() == 300 && rows != nullptr && rows->isVisibleTo(dialog) &&
-                         plain_layout != nullptr;
-      const QString snapshot = QStringLiteral("tab %1 group-hidden %2 visible %3 rows-visible %4")
-                                   .arg(tabs->currentIndex()).arg(layout_group && layout_group->isHidden())
-                                   .arg(layout_group && layout_group->isVisibleTo(dialog)).arg(rows && rows->isVisibleTo(dialog));
-      bool plain_hides_grid = false;
-      if (shown) {
-        plain_layout->setChecked(true);
-        plain_hides_grid = !rows->isVisibleTo(dialog);
+      const bool restored = layout_group != nullptr && layout_group->isVisibleTo(dialog) && layout_group->isChecked() &&
+                            paper != nullptr && paper->count() == 9 && paper->currentData().toString() == QStringLiteral("89x127") &&
+                            portrait_layout != nullptr && portrait_layout->isChecked() && plain_layout != nullptr &&
+                            plain_layout->isChecked() && dpi != nullptr && dpi->value() == 600 && rows != nullptr &&
+                            rows->value() == 3 && cols != nullptr && cols->value() == 2 && gap != nullptr &&
+                            gap->value() == 25 && top != nullptr && top->value() == 11;
+      const QString snapshot = QStringLiteral("group %1 checked %2 paper %3 rows %4 dpi %5 plain %6")
+                                   .arg(layout_group != nullptr).arg(layout_group && layout_group->isChecked())
+                                   .arg(paper ? paper->currentData().toString() : QString()).arg(rows ? rows->value() : -1)
+                                   .arg(dpi ? dpi->value() : -1).arg(plain_layout && plain_layout->isChecked());
+      // Plain layout hides the grid; the id layout shows it.
+      bool grid_follows_kind = false;
+      if (restored) {
+        const bool plain_hidden = !rows->isVisibleTo(dialog);
         dialog->findChild<QRadioButton*>(QStringLiteral("export-layout-id"))->setChecked(true);
+        grid_follows_kind = plain_hidden && rows->isVisibleTo(dialog);
+        // Leave the observed defaults in place for what follows (the dialog is rejected, which remembers them).
+        layout_group->setChecked(false);
+        dialog->findChild<QRadioButton*>(QStringLiteral("export-layout-landscape"))->setChecked(true);
+        paper->setCurrentIndex(paper->findData(QStringLiteral("152x102")));
+        dpi->setValue(300);
+        rows->setValue(1);
+        cols->setValue(1);
+        gap->setValue(10);
+        top->setValue(0);
       }
       tabs->setCurrentIndex(1);
-      if (!shown || !plain_hides_grid) {
-        problem = QStringLiteral("the layout tab differs from the observed one (shown %1, plain hides grid %2, %3)")
-                      .arg(shown).arg(plain_hides_grid).arg(snapshot);
+      if (!restored || !grid_follows_kind) {
+        problem = QStringLiteral("the layout tab differs from the observed one (restored %1, grid follows kind %2, %3)")
+                      .arg(restored).arg(grid_follows_kind).arg(snapshot);
         dialog->reject();
         return;
       }

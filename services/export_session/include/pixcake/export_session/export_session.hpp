@@ -89,6 +89,9 @@ struct ExportDefaults {
   bool watermark_on = false;
   std::optional<ExportWatermark> watermark;
   bool watermark_free_copy = false;  // 同时导出无水印图片的勾选（实测会记住）
+  // 排版印刷：开关和全部参数都记住（实测导出后重开，开关、行列数等都是上次的）。
+  bool layout_on = false;
+  std::optional<ExportLayout> layout;
 };
 
 // File extension for a format; Original takes the original's (JPEG, PNG, TIFF

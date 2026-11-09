@@ -481,6 +481,11 @@ ExportDefaults ExportSession::defaults() const {
       ExportSettings settings;
       if (parse_export_settings(value, settings) == ResultCode::Ok) out.watermark = settings.watermark;
     }
+    if (key == "layout_on") out.layout_on = value == "1";
+    if (key == "layout") {
+      ExportSettings settings;
+      if (parse_export_settings(value, settings) == ResultCode::Ok) out.layout = settings.layout;
+    }
   }
   return out;
 }
@@ -501,6 +506,12 @@ ResultCode ExportSession::remember_defaults(const ExportDefaults& defaults) {
     ExportSettings settings;
     settings.watermark = defaults.watermark;
     text += "watermark=" + encode_export_settings(settings) + "\n";
+  }
+  text += std::string("layout_on=") + (defaults.layout_on ? "1" : "0") + "\n";
+  if (defaults.layout) {
+    ExportSettings settings;
+    settings.layout = defaults.layout;
+    text += "layout=" + encode_export_settings(settings) + "\n";
   }
   const std::string path = options_.data_directory + "/exports/defaults";
   const std::string temp = path + ".tmp";

@@ -576,6 +576,8 @@ class ExportDialog final : public QDialog {
     if (!material_.empty()) {
       defaults.watermark = ExportWatermark{material_, placements_};
     }
+    defaults.layout_on = static_cast<QGroupBox*>(layout_)->isChecked();
+    defaults.layout = currentLayout();  // 开关关着也记参数
     return defaults;
   }
 
@@ -623,7 +625,7 @@ class ExportDialog final : public QDialog {
     auto* group = new QGroupBox(qtext("export.layout.group"), this);
     group->setObjectName(QStringLiteral("export-layout"));
     group->setCheckable(true);
-    group->setChecked(false);  // 实测默认关
+    group->setChecked(target_.defaults.layout_on);  // 实测默认关；之后记住上次的
     auto* form = new QFormLayout(group);
     form->addRow(sectionLabel(qtext("export.layout.note")));
     auto* kinds = new QHBoxLayout;
@@ -644,7 +646,8 @@ class ExportDialog final : public QDialog {
     layout_landscape_ = new QRadioButton(qtext("export.layout.landscape"), group);
     layout_landscape_->setObjectName(QStringLiteral("export-layout-landscape"));
     layout_landscape_->setChecked(true);  // 实测默认横
-    auto* portrait = new QRadioButton(qtext("export.layout.portrait"), group);
+    layout_portrait_ = new QRadioButton(qtext("export.layout.portrait"), group);
+    auto* portrait = layout_portrait_;
     portrait->setObjectName(QStringLiteral("export-layout-portrait"));
     auto* turn_group = new QButtonGroup(group);
     turn_group->addButton(layout_landscape_);
@@ -684,17 +687,41 @@ class ExportDialog final : public QDialog {
         if (auto* label = form->labelForField(box)) label->setVisible(id);
       }
     };
+    if (target_.defaults.layout) applyLayout(*target_.defaults.layout);  // 实测记住上次的全部参数
     connect(layout_id_, &QRadioButton::toggled, this, grid_visible);
     grid_visible();
     return group;
+  }
+
+  // 把记住的排版参数放回控件（值已经过 parse 的范围检查；纸张不在列表里就留默认）。
+  void applyLayout(const ExportLayout& layout) {
+    layout_id_->setChecked(layout.id_photo);
+    layout_plain_->setChecked(!layout.id_photo);
+    const bool landscape = layout.paper_width_mm >= layout.paper_height_mm;
+    layout_landscape_->setChecked(landscape);
+    layout_portrait_->setChecked(!landscape);
+    const int wide = std::max(layout.paper_width_mm, layout.paper_height_mm);
+    const int tall = std::min(layout.paper_width_mm, layout.paper_height_mm);
+    int paper = layout_paper_->findData(QStringLiteral("%1x%2").arg(wide).arg(tall));
+    if (paper < 0) paper = layout_paper_->findData(QStringLiteral("%1x%2").arg(tall).arg(wide));  // 5寸的编号是窄边在前
+    if (paper >= 0) layout_paper_->setCurrentIndex(paper);
+    layout_dpi_->setValue(layout.dpi);
+    layout_rows_->setValue(layout.rows);
+    layout_cols_->setValue(layout.cols);
+    layout_gap_->setValue(layout.gap_px);
+    layout_top_->setValue(layout.margin_top_mm);
+    layout_bottom_->setValue(layout.margin_bottom_mm);
+    layout_left_->setValue(layout.margin_left_mm);
+    layout_right_->setValue(layout.margin_right_mm);
   }
 
   ExportLayout currentLayout() const {
     ExportLayout layout;
     layout.id_photo = layout_id_->isChecked();
     const QStringList size = layout_paper_->currentData().toString().split(QLatin1Char('x'));
-    const int wide = size.value(0).toInt();
-    const int tall = size.value(1).toInt();
+    // 列表里 5寸 写作 89×127（窄边在前），其余宽边在前；方向才决定相纸的宽高。
+    const int wide = std::max(size.value(0).toInt(), size.value(1).toInt());
+    const int tall = std::min(size.value(0).toInt(), size.value(1).toInt());
     layout.paper_width_mm = layout_landscape_->isChecked() ? wide : tall;
     layout.paper_height_mm = layout_landscape_->isChecked() ? tall : wide;
     layout.dpi = layout_dpi_->value();
@@ -780,6 +807,7 @@ class ExportDialog final : public QDialog {
   QRadioButton* layout_id_ = nullptr;
   QRadioButton* layout_plain_ = nullptr;
   QRadioButton* layout_landscape_ = nullptr;
+  QRadioButton* layout_portrait_ = nullptr;
   QComboBox* layout_paper_ = nullptr;
   QSpinBox* layout_dpi_ = nullptr;
   QSpinBox* layout_rows_ = nullptr;
