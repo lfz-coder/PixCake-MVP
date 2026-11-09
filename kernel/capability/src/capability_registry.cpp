@@ -100,6 +100,7 @@ std::vector<ParameterMode> make_parameter_modes() {
   region.choices.push_back("linear");  // 线性渐变、径向渐变：蒙版由下面的位置参数在画幅上算出，不需要分割模型
   region.choices.push_back("radial");
   for (const auto& part : mask::semantic_parts()) region.choices.push_back(part.id);
+  region.default_choice = "all";  // 必须在后面的 add() 之前：add 可能让 modes 重新分配，region 引用会失效
   // 渐变的位置和形状（百分比，和分辨率无关）。官方没有逐项实测，范围按画面百分比取，默认值未确认。
   for (const auto& spec : {std::make_tuple("gradient_x", 0.0, 100.0, 50.0), std::make_tuple("gradient_y", 0.0, 100.0, 50.0),
                            std::make_tuple("gradient_angle", -180.0, 180.0, 0.0),
@@ -110,11 +111,16 @@ std::vector<ParameterMode> make_parameter_modes() {
                                   std::get<3>(spec), "color", "pixcake.color.local", std::get<0>(spec), 21);
     gradient.default_confirmed = false;
   }
+  // 子项和上一步的叠加方式：添加（并集）或减去。只有同一蒙版里有多个子项时才起作用；官方的合成像素没有核对。
+  {
+    ParameterMode& combine = add("color.local", "mode", 0.0, 0.0, 1.0, 0.0, "color", "pixcake.color.local", "mode", 21);
+    combine.choices = {"add", "subtract"};
+    combine.default_choice = "add";
+  }
   // 局部调色允许多个蒙版（参数编号带 m<N>: 前缀），旧版本程序读到这个片段要整体跳过，所以版本升到 2。
   for (auto& mode : modes) {
     if (mode.capability_id == "color.local") mode.schema_version = 2;
   }
-  region.default_choice = "all";
   // 配置文件（需求第 10.3 节）：标准、质感、黑白、基础，默认标准。
   ParameterMode& profile = add("color.global", "profile", 0.0, 0.0, 1.0, 0.0, "color", "pixcake.color.global",
                                "profile", 20);
@@ -420,6 +426,27 @@ bool split_local_parameter(std::string_view parameter_id, int& instance, std::st
   return !base.empty();
 }
 
+bool split_local_item(std::string_view base, int& item, std::string_view& leaf) {
+  item = 0;
+  leaf = base;
+  if (base.size() < 3 || base[0] != 's') return true;
+  const auto colon = base.find(':');
+  if (colon == std::string_view::npos) return true;
+  const std::string_view digits = base.substr(1, colon - 1);
+  if (digits.empty() || digits.size() > 2 || digits[0] == '0') return false;
+  int value = 0;
+  for (const char c : digits) {
+    if (c < '0' || c > '9') return false;
+    value = value * 10 + (c - '0');
+  }
+  if (value < 1 || value > kMaxLocalItems) return false;
+  item = value;
+  leaf = base.substr(colon + 1);
+  return !leaf.empty();
+}
+
+std::string local_item_prefix(int item) { return item <= 0 ? std::string() : "s" + std::to_string(item) + ":"; }
+
 std::string local_instance_prefix(int instance) { return instance <= 0 ? std::string() : "m" + std::to_string(instance) + ":"; }
 
 const ParameterMode* find_parameter_mode(std::string_view capability_id, std::string_view parameter_id) {
@@ -427,7 +454,11 @@ const ParameterMode* find_parameter_mode(std::string_view capability_id, std::st
     int instance = 0;
     std::string_view base;
     if (!split_local_parameter(parameter_id, instance, base)) return nullptr;
-    parameter_id = base;
+    int item = 0;
+    std::string_view leaf;
+    if (!split_local_item(base, item, leaf)) return nullptr;
+    if (item > 0 && leaf != "region" && leaf != "mode" && leaf.rfind("gradient_", 0) != 0) return nullptr;  // 子项只有自己的参数
+    parameter_id = leaf;
   }
   const auto& modes = phase_one_parameter_modes();
   for (const auto& mode : modes) {

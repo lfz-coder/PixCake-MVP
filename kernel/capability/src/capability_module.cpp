@@ -1,4 +1,5 @@
 #include "pixcake/capability/capability_module.hpp"
+#include "pixcake/mask/combined_mask.hpp"
 #include "pixcake/mask/gradient_mask.hpp"
 #include "pixcake/mask/semantic_parts.hpp"
 
@@ -207,6 +208,7 @@ ModuleCompile ParameterBackedModule::compile_modes(const ParameterReader& reader
       }
       continue;
     }
+    if (descriptor_.id == "color.local" && mode->parameter_id == "mode") continue;  // 子项叠加方式，子项 0 没有“上一步”
     if (descriptor_.id == "color.local" && mode->parameter_id.rfind("gradient_", 0) == 0) {
       const int whole = static_cast<int>(std::lround(numeric));
       if (mode->parameter_id == "gradient_x") gradient.x = whole;
@@ -228,8 +230,49 @@ ModuleCompile ParameterBackedModule::compile_modes(const ParameterReader& reader
     if (step.values.empty()) {
       result.diagnostics.push_back({descriptor_.id, "片段没有可编译的参数值", false});
     } else {
-      if (!region_mask.empty()) step.mask_ids.push_back(region_mask);
-      if (gradient_region) step.mask_ids.push_back(mask::gradient_mask_id(gradient));
+      // 蒙版：子项 0（实例前缀下的 region 和 gradient_*）加子项 1..N（s<K>: 前缀）；只有一个“添加”子项时直接用它的编号，
+      // 多个时合成一个组合编号（像素由 gpu 在子项蒙版都有之后生成）。整个画面的子项不参与。
+      std::vector<mask::CombinedPart> parts;
+      if (!region_mask.empty()) parts.push_back({false, region_mask});
+      if (gradient_region) parts.push_back({false, mask::gradient_mask_id(gradient)});
+      if (descriptor_.id == "color.local") {
+        for (int item = 1; item <= kMaxLocalItems; ++item) {
+          const std::string item_prefix = prefix + local_item_prefix(item);
+          const auto region = reader.value(descriptor_.id, item_prefix + "region");
+          if (!region || *region == "all" || !validate_parameter_display_value(descriptor_.id, item_prefix + "region", *region)) {
+            continue;
+          }
+          std::string id;
+          if (*region == "linear" || *region == "radial") {
+            mask::GradientMask g;
+            g.radial = *region == "radial";
+            const auto number = [&](const char* name, int fallback) {
+              const auto text = reader.value(descriptor_.id, item_prefix + name);
+              double parsed = 0.0;
+              return text && parse_number(*text, parsed) &&
+                             validate_parameter_display_value(descriptor_.id, item_prefix + name, *text)
+                         ? static_cast<int>(std::lround(parsed))
+                         : fallback;
+            };
+            g.x = number("gradient_x", g.x);
+            g.y = number("gradient_y", g.y);
+            g.angle = number("gradient_angle", g.angle);
+            g.size = number("gradient_size", g.size);
+            g.feather = number("gradient_feather", g.feather);
+            g.ratio = number("gradient_ratio", g.ratio);
+            id = mask::gradient_mask_id(g);
+          } else {
+            id = mask::semantic_mask_id(*region);
+          }
+          const auto how = reader.value(descriptor_.id, item_prefix + "mode");
+          parts.push_back({how == std::optional<std::string>("subtract"), std::move(id)});
+        }
+      }
+      if (parts.size() == 1 && !parts[0].subtract) {
+        step.mask_ids.push_back(parts[0].id);
+      } else if (!parts.empty()) {
+        step.mask_ids.push_back(mask::combined_mask_id(parts));
+      }
       result.steps.push_back(std::move(step));
     }
   }

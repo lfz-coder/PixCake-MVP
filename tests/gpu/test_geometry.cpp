@@ -1,5 +1,6 @@
 // 几何变换（需求 §12.6）：翻转、旋转 90°、拉直和比例裁剪，图像和蒙版同步；描述里的 crop 参数读成几何。
 #include <pixcake/gpu/geometry.hpp>
+#include <pixcake/mask/combined_mask.hpp>
 #include <pixcake/mask/gradient_mask.hpp>
 
 #include <cmath>
@@ -193,9 +194,47 @@ void test_gradient_masks() {
   }
 }
 
+// 组合蒙版：编号往返；添加取并集，减去乘 (1 − 子项)；缺子项蒙版时不生成；渐变子项在组合里也会被生成。
+void test_combined_masks() {
+  std::vector<mask::CombinedPart> parts = {{false, "gradient:linear:50:50:0:50:0:100"}, {true, "gradient:radial:25:50:0:40:0:100"}};
+  const std::string id = mask::combined_mask_id(parts);
+  std::vector<mask::CombinedPart> parsed;
+  EXPECT(mask::parse_combined_mask_id(id, parsed) && parsed.size() == 2 && !parsed[0].subtract && parsed[1].subtract &&
+         parsed[1].id == parts[1].id);
+  EXPECT(!mask::parse_combined_mask_id("combined:", parsed) && !mask::parse_combined_mask_id("combined:x", parsed) &&
+         !mask::parse_combined_mask_id("combined:+a|", parsed) && !mask::parse_combined_mask_id("semantic:a", parsed));
+  EXPECT(mask::leaf_mask_ids(id) == (std::vector<std::string>{parts[0].id, parts[1].id}));
+  EXPECT(mask::leaf_mask_ids("semantic:person.hair") == std::vector<std::string>{"semantic:person.hair"});
+
+  render::RenderDescription description;
+  render::RenderOperation operation;
+  operation.capability_id = "color.local";
+  operation.mask_ids = {id};
+  description.operations = {operation};
+  std::vector<gpu::RenderMask> masks;
+  gpu::add_combined_masks(description, masks);
+  EXPECT(masks.empty());  // the leaves are not there yet
+  gpu::add_gradient_masks(description, 200, 100, masks);
+  EXPECT(masks.size() == 2);  // the gradients inside the combination are generated
+  gpu::add_combined_masks(description, masks);
+  EXPECT(masks.size() == 3 && masks[2].id == id);
+  if (masks.size() == 3) {
+    const auto at = [](const gpu::RenderMask& m, std::uint32_t x, std::uint32_t y) { return m.alpha[y * m.width + x]; };
+    // Left half bright (linear), minus a hard-edged-ish circle at 25%: inside the circle the result is cut away.
+    EXPECT(at(masks[2], 5, 5) == 255);                  // far from the circle, linear is full
+    EXPECT(at(masks[2], 50, 50) < 30);                  // circle centre: linear 255 x (1 - 255/255) ~ 0
+    EXPECT(at(masks[2], 150, 50) < 30);                 // linear is nearly empty here
+    // Union: add both.
+    description.operations[0].mask_ids = {mask::combined_mask_id({{false, parts[0].id}, {false, parts[1].id}})};
+    gpu::add_combined_masks(description, masks);
+    EXPECT(masks.size() == 4 && at(masks[3], 5, 5) == 255 && at(masks[3], 150, 50) < 30);
+  }
+}
+
 }  // namespace
 
 int main() {
+  test_combined_masks();
   test_gradient_masks();
   test_flips_and_turns_move_image_and_mask_together();
   test_straighten_crops_to_the_inscribed_rectangle();

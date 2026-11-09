@@ -31,4 +31,9 @@ bool apply_geometry(const Geometry& geometry, RgbaImage& image, std::vector<Rend
 void add_gradient_masks(const pixcake::render::RenderDescription& description, std::uint32_t width,
                         std::uint32_t height, std::vector<RenderMask>& masks);
 
+// 组合蒙版（"combined:…"）：按子项顺序把已有的子项蒙版（语义的、渐变的）合成一块——添加取并集（较大者），
+// 减去是 原值 × (1 − 子项)。所有子项蒙版都在才生成；缺任何一个就不生成（对应的绘制步骤会因蒙版缺失被跳过）。
+// 要在 add_gradient_masks 之后调用。
+void add_combined_masks(const pixcake::render::RenderDescription& description, std::vector<RenderMask>& masks);
+
 }  // namespace pixcake::gpu

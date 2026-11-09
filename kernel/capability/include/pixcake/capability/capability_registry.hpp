@@ -114,5 +114,11 @@ inline constexpr int kMaxLocalInstances = 32;
 // 拆出实例编号和基础参数编号；没有前缀时 instance 为 0。前缀不合法返回 false。
 bool split_local_parameter(std::string_view parameter_id, int& instance, std::string_view& base);
 std::string local_instance_prefix(int instance);  // 实例 0 返回空串
+// 一个蒙版里的子项（语义部位或渐变）：实例前缀之后可以再带 "s<K>:"（K 为 1..kMaxLocalItems），只允许子项自己的参数
+// （region、mode、gradient_*）；没有 s 前缀的是子项 0。
+inline constexpr int kMaxLocalItems = 16;
+// base 是去掉实例前缀后的参数编号；拆出子项编号和叶子参数编号。前缀不合法返回 false。
+bool split_local_item(std::string_view base, int& item, std::string_view& leaf);
+std::string local_item_prefix(int item);  // 子项 0 返回空串
 
 }  // namespace pixcake

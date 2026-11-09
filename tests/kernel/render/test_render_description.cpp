@@ -177,6 +177,37 @@ void test_local_instances_compile_in_order() {
   EXPECT(only_two.set_preview("color.local", "m5:contrast", "10") == pixcake::ResultCode::Ok);
   result = pixcake::render::compile(only_two);
   EXPECT(result.description.operations.size() == 1);
+  // Sub-items of one mask: part grammar, validation, and the combined mask id.
+  int item = -1;
+  EXPECT(pixcake::split_local_item("region", item, base) && item == 0 && base == "region");
+  EXPECT(pixcake::split_local_item("s3:gradient_x", item, base) && item == 3 && base == "gradient_x");
+  EXPECT(!pixcake::split_local_item("s17:region", item, base) && !pixcake::split_local_item("s0:region", item, base));
+  EXPECT(find_parameter_mode("color.local", "m2:s3:region") == find_parameter_mode("color.local", "region"));
+  EXPECT(find_parameter_mode("color.local", "s2:mode") == find_parameter_mode("color.local", "mode"));
+  EXPECT(find_parameter_mode("color.local", "s2:exposure") == nullptr);  // tone belongs to the whole mask
+  EXPECT(pixcake::validate_parameter_display_value("color.local", "s2:mode", "subtract"));
+  EXPECT(!pixcake::validate_parameter_display_value("color.local", "s2:mode", "xor"));
+  auto items = *pixcake::EditDocument::create("img-items");
+  EXPECT(items.set_preview("color.local", "m1:exposure", "1") == pixcake::ResultCode::Ok);
+  EXPECT(items.set_preview("color.local", "m1:region", "person.skin.all") == pixcake::ResultCode::Ok);
+  EXPECT(items.set_preview("color.local", "m1:s1:region", "person.lips") == pixcake::ResultCode::Ok);
+  EXPECT(items.set_preview("color.local", "m1:s1:mode", "subtract") == pixcake::ResultCode::Ok);
+  EXPECT(items.set_preview("color.local", "m1:s2:region", "linear") == pixcake::ResultCode::Ok);
+  EXPECT(items.set_preview("color.local", "m1:s2:gradient_x", "30") == pixcake::ResultCode::Ok);
+  result = pixcake::render::compile(items);
+  EXPECT(result.description.operations.size() == 1);
+  if (result.description.operations.size() == 1) {
+    EXPECT(result.description.operations[0].mask_ids ==
+           std::vector<std::string>{"combined:+semantic:person.skin.all|-semantic:person.lips|+gradient:linear:30:50:0:50:50:100"});
+    for (const auto& value : result.description.operations[0].values) EXPECT(value.channel != "mode");
+  }
+  // One "add" item alone keeps the plain id; a lone "subtract" item is a combination (it removes from nothing).
+  auto one = *pixcake::EditDocument::create("img-one-item");
+  EXPECT(one.set_preview("color.local", "exposure", "1") == pixcake::ResultCode::Ok);
+  EXPECT(one.set_preview("color.local", "s1:region", "person.hair") == pixcake::ResultCode::Ok);
+  result = pixcake::render::compile(one);
+  EXPECT(result.description.operations.size() == 1 &&
+         result.description.operations[0].mask_ids == std::vector<std::string>{"semantic:person.hair"});
   // Local colour fragments are version 2 now; the readable limit follows the registry.
   bool found = false;
   for (const auto& limit : pixcake::phase_one_version_limits()) {

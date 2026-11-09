@@ -314,6 +314,32 @@ int main() {
                 red_at(before, 300), red_at(after, 300));
   }
 
+  // A combined mask: the left of the frame brightened, with a circle cut out of it (no mask source needed).
+  {
+    ExportService service;
+    auto job = work("combined-1", source, dir.path() + "/unused.jpg", dir.path());
+    pixcake::render::RenderOperation local = operation("color.local", "pixcake.color.local", {value("exposure", 1.0)});
+    local.mask_ids = {"combined:+gradient:linear:50:50:0:10:0:100|-gradient:radial:25:50:0:40:0:100"};
+    job.description.operations.push_back(local);
+    std::string why;
+    assert(service.submit(std::move(job), why) == ResultCode::Ok);
+    const auto result = service.process_next();
+    assert(result.code == ResultCode::Ok);
+    pixcake::PosixFileSystem files;
+    const std::string written = dir.path() + "/combined.jpg";
+    assert(files.write_new(written, result.product).ok);
+    const auto before = decode(source);
+    const auto after = decode(written);
+    const auto red_at = [](const pixcake::platform::MacDecodedImage& image, std::uint32_t x, std::uint32_t y) {
+      return static_cast<int>(image.rgba[(static_cast<std::size_t>(y) * image.width + x) * 4]);
+    };
+    assert(red_at(after, 80, 5) > red_at(before, 80, 5) * 3 / 2);            // outside the circle: brightened
+    assert(std::abs(red_at(after, 80, 100) - red_at(before, 80, 100)) <= 3);  // inside the circle: cut away
+    assert(std::abs(red_at(after, 300, 100) - red_at(before, 300, 100)) <= 3);
+    std::printf("export combined: top %d -> %d, circle %d -> %d\n", red_at(before, 80, 5), red_at(after, 80, 5),
+                red_at(before, 80, 100), red_at(after, 80, 100));
+  }
+
   // Through the queue: the product is published at the destination, the task
   // leaves the pending list and the queue records success.
   {

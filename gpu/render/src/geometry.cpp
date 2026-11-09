@@ -1,4 +1,5 @@
 #include <pixcake/gpu/geometry.hpp>
+#include <pixcake/mask/combined_mask.hpp>
 #include <pixcake/mask/gradient_mask.hpp>
 
 #include <algorithm>
@@ -240,11 +241,48 @@ void add_gradient_masks(const pixcake::render::RenderDescription& description, s
   if (width == 0 || height == 0) return;
   for (const auto& operation : description.operations) {
     if (!operation.enabled) continue;
+    for (const auto& whole : operation.mask_ids) {
+      for (const auto& id : pixcake::mask::leaf_mask_ids(whole)) {  // 组合编号里的渐变子项也要生成
+        pixcake::mask::GradientMask gradient;
+        if (!pixcake::mask::parse_gradient_mask_id(id, gradient)) continue;
+        const bool present = std::any_of(masks.begin(), masks.end(), [&id](const RenderMask& m) { return m.id == id; });
+        if (!present) masks.push_back(gradient_mask(id, gradient, width, height));
+      }
+    }
+  }
+}
+
+void add_combined_masks(const pixcake::render::RenderDescription& description, std::vector<RenderMask>& masks) {
+  for (const auto& operation : description.operations) {
+    if (!operation.enabled) continue;
     for (const auto& id : operation.mask_ids) {
-      pixcake::mask::GradientMask gradient;
-      if (!pixcake::mask::parse_gradient_mask_id(id, gradient)) continue;
-      const bool present = std::any_of(masks.begin(), masks.end(), [&id](const RenderMask& m) { return m.id == id; });
-      if (!present) masks.push_back(gradient_mask(id, gradient, width, height));
+      std::vector<pixcake::mask::CombinedPart> parts;
+      if (!pixcake::mask::parse_combined_mask_id(id, parts)) continue;
+      if (std::any_of(masks.begin(), masks.end(), [&id](const RenderMask& m) { return m.id == id; })) continue;
+      std::vector<const RenderMask*> sources;
+      for (const auto& part : parts) {
+        const auto found = std::find_if(masks.begin(), masks.end(), [&part](const RenderMask& m) { return m.id == part.id; });
+        if (found == masks.end() || found->alpha.size() < static_cast<std::size_t>(found->width) * found->height) break;
+        sources.push_back(&*found);
+      }
+      if (sources.size() != parts.size() || sources.empty()) continue;
+      RenderMask out;
+      out.id = id;
+      out.width = sources[0]->width;
+      out.height = sources[0]->height;
+      bool same_size = true;
+      for (const auto* source : sources) same_size = same_size && source->width == out.width && source->height == out.height;
+      if (!same_size) continue;
+      out.alpha.assign(sources[0]->alpha.size(), 0);
+      for (std::size_t p = 0; p < parts.size(); ++p) {
+        const auto& from = sources[p]->alpha;
+        for (std::size_t i = 0; i < out.alpha.size(); ++i) {
+          out.alpha[i] = parts[p].subtract
+                             ? static_cast<std::uint8_t>(std::lround(out.alpha[i] * (255 - from[i]) / 255.0))
+                             : std::max(out.alpha[i], from[i]);
+        }
+      }
+      masks.push_back(std::move(out));
     }
   }
 }

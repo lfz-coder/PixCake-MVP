@@ -1,5 +1,6 @@
 #include "pixcake/renderd/semantic_mask_provider.hpp"
 
+#include "pixcake/mask/combined_mask.hpp"
 #include "pixcake/mask/semantic_parts.hpp"
 
 #include <algorithm>
@@ -34,8 +35,11 @@ std::vector<std::string> users_of(const render::RenderDescription& description, 
   std::vector<std::string> users;
   for (const auto& operation : description.operations) {
     if (!operation.enabled) continue;
-    if (std::find(operation.mask_ids.begin(), operation.mask_ids.end(), mask_id) != operation.mask_ids.end() &&
-        std::find(users.begin(), users.end(), operation.capability_id) == users.end()) {
+    bool uses = false;
+    for (const auto& whole : operation.mask_ids) {
+      for (const auto& leaf : mask::leaf_mask_ids(whole)) uses = uses || leaf == mask_id;
+    }
+    if (uses && std::find(users.begin(), users.end(), operation.capability_id) == users.end()) {
       users.push_back(operation.capability_id);
     }
   }
@@ -56,8 +60,10 @@ std::vector<std::string> SemanticMaskProvider::referenced_semantic_ids(const ren
   std::vector<std::string> ids;
   for (const auto& operation : description.operations) {
     if (!operation.enabled) continue;
-    for (const auto& id : operation.mask_ids) {
-      if (mask::is_semantic_mask_id(id) && std::find(ids.begin(), ids.end(), id) == ids.end()) ids.push_back(id);
+    for (const auto& whole : operation.mask_ids) {
+      for (const auto& id : mask::leaf_mask_ids(whole)) {  // 组合编号里的语义子项也要提供
+        if (mask::is_semantic_mask_id(id) && std::find(ids.begin(), ids.end(), id) == ids.end()) ids.push_back(id);
+      }
     }
   }
   return ids;
