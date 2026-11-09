@@ -14,6 +14,7 @@ namespace pixcake::exportd {
 // - 普通照片排版：整张照片缩放到正好放进相纸（面积平均缩小、双线性放大），居中。
 // - 证件照排版：rows×cols 张原始大小的照片（格间 gap_px）拼成一整块画布，画布中心对准相纸中心，
 //   相纸是这块画布上的窗口：画布大了裁、小了留白（所以 2 行时缝在纸中间，奇数行只看到中间一张）。
+// - 证件照排版有 1 px 黑色裁切线（LayoutGeometry::cut_rows），只在照片以外。
 // - 边距是裁切窗口：窗口外变白，照片本身不动。
 // 结果替换 image。
 ResultCode compose_layout(const ExportLayout& layout, RgbaSource& image, std::string& diagnostic);

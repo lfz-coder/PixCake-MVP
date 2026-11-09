@@ -1,7 +1,7 @@
 # PixCake 像素处理来源与共识登记
 
 日期：2026-11-09（修订）
-状态：来源规则；执行状态以 [像素处理来源与执行现状矩阵](../evidence/2026-11-09-pixel-processing-status-matrix.md) 为准
+状态：来源规则；执行状态以 [像素处理来源与执行现状矩阵](../evidence/2026-11-09-pixel-processing-status-matrix.md) 为准；逐参数公式以[像素公式与来源逐参数登记](../evidence/2026-11-09-pixel-formula-registry.md)为准
 
 这份文档记录像素效果为什么这样实现、证据来自哪里，以及哪些结论仍然不能声称等同于 PixCake 官方内部实现。算法有可靠来源，不等于已经证明与官方产品逐像素一致；两者必须分开记录。
 

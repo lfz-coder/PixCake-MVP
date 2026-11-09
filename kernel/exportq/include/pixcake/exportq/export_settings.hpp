@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace pixcake {
@@ -108,6 +109,12 @@ struct LayoutGeometry {
   std::int64_t window_left = 0, window_top = 0, window_right = 0, window_bottom = 0;
   bool scaled = false;
   std::vector<LayoutRect> photos;
+  // 证件照排版的裁切线：1 px 纯黑横线，画在 cut_rows 这些行上，横向覆盖整张纸宽（不受边距窗口限制），
+  // 但跳过 [cut_skip_left, cut_skip_right)：所有照片可见部分合起来的横向范围（列与列之间的格缝也在里面）。
+  // 行是每张照片可见部分（照片 ∩ 窗口 ∩ 相纸）的上边缘上方一行、下边缘下方第二行，落在纸外的不要；
+  // 从小到大、不重复。普通照片排版没有线。实测见 2026-11-07 证据文档“裁切线”一节（官方 6 张成品逐点一致）。
+  std::vector<std::int64_t> cut_rows;
+  std::int64_t cut_skip_left = 0, cut_skip_right = 0;
 };
 bool layout_geometry(const ExportLayout& layout, std::uint32_t photo_width, std::uint32_t photo_height,
                      LayoutGeometry& out);

@@ -118,7 +118,21 @@ int main() {
     assert(at(image, 800, 596)[0] == 255);
     assert(at(image, 800, 607)[0] == 0);
     for (std::uint32_t x = 0; x < image.width; ++x) assert(white(image, x, 600));  // the gap
+    // Cut lines: pure black at y 598 and 606 beside the photos, none across the photos' columns (官方 _(6)).
+    for (const std::uint32_t y : {598u, 606u}) {
+      assert(at(image, 0, y)[0] == 0 && at(image, 384, y)[0] == 0 && at(image, 1409, y)[0] == 0 &&
+             at(image, 1794, y)[0] == 0);
+      assert(white(image, 385, y) && white(image, 800, y) && white(image, 1408, y));
+    }
     layout.rows = 1;
+  }
+  // Id layout 2x2: the cut lines skip the whole block of columns, the gap between them too (官方 _(2)).
+  {
+    auto image = ramp(1024, 1536);
+    layout.rows = layout.cols = 2;
+    assert(compose_layout(layout, image, why) == ResultCode::Ok);
+    assert(white(image, 896, 598) && white(image, 896, 606));
+    layout.rows = layout.cols = 1;
   }
   // Id layout 1 row x 2 columns: two 892-wide cells, the photo centred in each, vertically centred.
   {
@@ -164,8 +178,16 @@ int main() {
     assert(geometry.page_width == 1795 && geometry.page_height == 1205 && !geometry.scaled);
     assert(geometry.photos.size() == 2 && geometry.photos[0].top == -939 && geometry.photos[1].top == 607);
     assert(geometry.photos[0].left == 385 && geometry.photos[0].width == 1024 && geometry.photos[0].height == 1536);
+    // Cut lines as the test build drew them: 598 and 606 (官方 _(6)); with an 11 mm top margin also 129 (_(9)).
+    assert((geometry.cut_rows == std::vector<std::int64_t>{598, 606}));
+    assert(geometry.cut_skip_left == 385 && geometry.cut_skip_right == 1409);
+    two.margin_top_mm = 11;
+    assert(layout_geometry(two, 1024, 1536, geometry));
+    assert((geometry.cut_rows == std::vector<std::int64_t>{129, 598, 606}));
+    two.margin_top_mm = 0;
     two.id_photo = false;
     assert(layout_geometry(two, 1024, 1536, geometry) && geometry.scaled && geometry.photos.size() == 1);
+    assert(geometry.cut_rows.empty());
     assert(geometry.photos[0].height == 1205 && geometry.photos[0].width == 803 && geometry.photos[0].left == 496);
     two.paper_width_mm = 0;
     assert(!layout_geometry(two, 1024, 1536, geometry));

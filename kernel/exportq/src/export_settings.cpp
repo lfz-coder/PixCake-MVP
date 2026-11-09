@@ -149,6 +149,25 @@ bool layout_geometry(const ExportLayout& layout, std::uint32_t photo_width, std:
       out.photos.push_back({origin_x + col * (iw + gap), origin_y + row * (ih + gap), iw, ih});
     }
   }
+  std::set<std::int64_t> rows;
+  for (const LayoutRect& at : out.photos) {
+    const std::int64_t top = std::max({at.top, out.window_top, std::int64_t{0}});
+    const std::int64_t bottom = std::min({at.top + at.height, out.window_bottom, static_cast<std::int64_t>(height)});
+    const std::int64_t left = std::max({at.left, out.window_left, std::int64_t{0}});
+    const std::int64_t right = std::min({at.left + at.width, out.window_right, static_cast<std::int64_t>(width)});
+    if (top >= bottom || left >= right) continue;  // 看不见的照片没有线
+    if (out.cut_skip_left == out.cut_skip_right) {
+      out.cut_skip_left = left;
+      out.cut_skip_right = right;
+    } else {
+      out.cut_skip_left = std::min(out.cut_skip_left, left);
+      out.cut_skip_right = std::max(out.cut_skip_right, right);
+    }
+    for (const std::int64_t y : {top - 1, bottom + 1}) {
+      if (y >= 0 && y < static_cast<std::int64_t>(height)) rows.insert(y);
+    }
+  }
+  out.cut_rows.assign(rows.begin(), rows.end());
   return true;
 }
 

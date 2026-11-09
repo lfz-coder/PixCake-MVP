@@ -3,7 +3,7 @@
 日期：2026-11-09  
 状态：当前实现的验收基线
 
-这份矩阵把四件事分开记录：公式的来源、CPU reference 是否存在、GPU 是否能执行、预览/导出是否接入。`GPU 已实现` 只表示 GPU 与本项目 reference 的 readback 对比通过，不表示与 PixCake 官方逐像素一致。
+这份矩阵把四件事分开记录：公式的来源、CPU reference 是否存在、GPU 是否能执行、预览/导出是否接入。逐参数的实际公式和数值映射见[像素公式与来源逐参数登记](2026-11-09-pixel-formula-registry.md)。`GPU 已实现` 只表示 GPU 与本项目 reference 的 readback 对比通过，不表示与 PixCake 官方逐像素一致。
 
 ## 状态含义
 

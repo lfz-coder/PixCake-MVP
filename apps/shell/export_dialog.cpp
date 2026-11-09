@@ -19,6 +19,7 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QPainter>
+#include <QPen>
 #include <QPointer>
 #include <QRadioButton>
 #include <QScrollArea>
@@ -610,6 +611,14 @@ class ExportDialog final : public QDialog {
     QPainter painter(&paper);
     painter.setRenderHint(QPainter::SmoothPixmapTransform);
     painter.scale(scale, scale);
+    // 裁切线（先画，照片盖在上面）；预览缩小后至少画 1 个屏幕像素宽。
+    painter.setPen(QPen(Qt::black, 0));
+    for (const std::int64_t y : geometry.cut_rows) {  // 照片那几列（连格缝）不画
+      if (geometry.cut_skip_left > 0) painter.drawLine(QPointF(0, y + 0.5), QPointF(geometry.cut_skip_left, y + 0.5));
+      if (geometry.cut_skip_right < geometry.page_width) {
+        painter.drawLine(QPointF(geometry.cut_skip_right, y + 0.5), QPointF(geometry.page_width, y + 0.5));
+      }
+    }
     painter.setClipRect(QRectF(geometry.window_left, geometry.window_top, geometry.window_right - geometry.window_left,
                                geometry.window_bottom - geometry.window_top));
     for (const LayoutRect& at : geometry.photos) {

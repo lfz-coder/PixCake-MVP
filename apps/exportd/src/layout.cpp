@@ -118,6 +118,16 @@ ResultCode compose_layout(const ExportLayout& layout, RgbaSource& image, std::st
     const auto sw = static_cast<std::uint32_t>(at.width), sh = static_cast<std::uint32_t>(at.height);
     blit(page, resample(photo, image.width, image.height, sw, sh), sw, sh, at.left, at.top, window);
   } else {
+    // 裁切线先画，照片后画：线只留在照片以外的地方。
+    for (const std::int64_t y : geometry.cut_rows) {
+      for (std::uint32_t x = 0; x < width; ++x) {
+        if (static_cast<std::int64_t>(x) >= geometry.cut_skip_left && static_cast<std::int64_t>(x) < geometry.cut_skip_right) {
+          continue;  // 照片那几列（连格缝）不画
+        }
+        std::uint8_t* to = page.at(x, y);
+        to[0] = to[1] = to[2] = 0;
+      }
+    }
     for (const LayoutRect& at : geometry.photos) blit(page, photo, image.width, image.height, at.left, at.top, window);
   }
   image.width = width;
