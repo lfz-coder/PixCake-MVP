@@ -1,0 +1,12 @@
+[package]
+name = "photocraft-vectors"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Dumps PhotoCraft Camera Raw per-pixel vectors for PixCake's C++ port tests"
+
+# Standalone: not part of PhotoCraft's workspace nor built by PixCake's CMake.
+[workspace]
+
+[dependencies]
+photocraft-algo = { path = "../../third_party/photocraft/crates/algo" }
