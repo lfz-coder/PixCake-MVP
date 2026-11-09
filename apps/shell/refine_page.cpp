@@ -300,16 +300,57 @@ void addCropPanel(QWidget* modules, QVBoxLayout* layout, PageActions* actions) {
 struct LocalState {
   int mask = -1;  // 选中的蒙版（实例编号），-1 没有
   int item = -1;  // 选中的子项，-1 没有
+  bool draw = false;     // “在画布上拖动”打开：画布接管鼠标
+  int drag_item = -1;    // 正在拖动的子项
+  bool drag_radial = false;
+  QPointF drag_start;    // 拖动起点（图像百分比）
   QString signature;
 };
 
-void addLocalPanel(QWidget* modules, QVBoxLayout* layout, PageActions* actions) {
+// 在画布上拖出渐变（官方的做法）：线性从起点拖到终点，起点一侧强度 1，终点一侧 0；径向从中心拖到外缘一个角，得到
+// 椭圆。位置按图像百分比，换算到参数：线性的中心取两点中点、角度取方向、范围取两点距离占对角线的百分比；径向的
+// 中心取起点、横向半径取水平距离、椭圆比例取纵横距离比。每个参数经同一条请求路径：拖动中是预览，松开提交。
+struct GradientParams {
+  int x = 50, y = 50, angle = 0, size = 50, ratio = 100;
+  bool valid = false;
+};
+
+GradientParams gradient_from_drag(bool radial, const QPointF& start, const QPointF& end, const QSize& image) {
+  GradientParams out;
+  const double w = image.width();
+  const double h = image.height();
+  if (w <= 0 || h <= 0) return out;
+  const double dx = (end.x() - start.x()) / 100.0 * w;  // 像素
+  const double dy = (end.y() - start.y()) / 100.0 * h;
+  const double diagonal = std::sqrt(w * w + h * h);
+  if (!radial) {
+    const double length = std::sqrt(dx * dx + dy * dy);
+    if (length < 1.0) return out;
+    out.x = static_cast<int>(std::lround((start.x() + end.x()) / 2.0));
+    out.y = static_cast<int>(std::lround((start.y() + end.y()) / 2.0));
+    out.angle = static_cast<int>(std::lround(std::atan2(dy, dx) * 180.0 / 3.14159265358979323846));
+    out.size = std::clamp(static_cast<int>(std::lround(length / diagonal * 100.0)), 0, 100);
+  } else {
+    const double rx = std::abs(dx);
+    const double ry = std::abs(dy);
+    if (rx < 1.0 || ry < 1.0) return out;  // 纵或横为 0 得到空蒙版
+    out.x = static_cast<int>(std::lround(start.x()));
+    out.y = static_cast<int>(std::lround(start.y()));
+    out.size = std::clamp(static_cast<int>(std::lround(2.0 * rx / diagonal * 100.0)), 0, 100);
+    out.ratio = std::clamp(static_cast<int>(std::lround(ry / rx * 100.0)), 5, 400);
+  }
+  out.valid = true;
+  return out;
+}
+
+std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout, PageActions* actions,
+                                           PixCakeImageView* canvas) {
   auto* body = new QWidget(modules);
   body->setObjectName(QStringLiteral("refine-local-body"));
   auto* body_layout = new QVBoxLayout(body);
   body_layout->setContentsMargins(0, 0, 0, 0);
   layout->addWidget(body);
-  if (actions == nullptr || !actions->has_photo()) return;
+  if (actions == nullptr || !actions->has_photo()) return nullptr;
   const auto state = std::make_shared<LocalState>();
   const auto rebuild = std::make_shared<std::function<void()>>();
   const auto binding_of = [](int mask, int item, const std::string& parameter) {
@@ -448,6 +489,12 @@ void addLocalPanel(QWidget* modules, QVBoxLayout* layout, PageActions* actions) 
     auto* item_buttons = new QWidget(body);
     auto* item_buttons_layout = new QHBoxLayout(item_buttons);
     item_buttons_layout->setContentsMargins(0, 0, 0, 0);
+    auto* draw = action(qtext("local.draw"), item_buttons, true);
+    draw->setObjectName(QStringLiteral("refine-local-draw"));
+    draw->setCheckable(true);
+    draw->setChecked(state->draw);
+    QObject::connect(draw, &QPushButton::toggled, draw, [state](bool on) { state->draw = on; });
+    item_buttons_layout->addWidget(draw);
     auto* add_item = action(qtext("local.item.add"), item_buttons, true);
     add_item->setObjectName(QStringLiteral("refine-local-item-add"));
     auto* remove_item = action(qtext("local.item.remove"), item_buttons, state->item >= 0);
@@ -509,10 +556,107 @@ void addLocalPanel(QWidget* modules, QVBoxLayout* layout, PageActions* actions) 
   actions->watch_history(body, [=] {
     if (signature() != state->signature) (*rebuild)();
   });
+
+  // 画布：选中蒙版且打开“在画布上拖动”时接管鼠标。选中的子项是渐变就改它，否则按“添加子项”的部位下拉（线性或
+  // 径向，默认线性）新建一个子项。画布上画出选中渐变的手柄（线性两端和连线，径向椭圆和内椭圆）。
+  if (canvas == nullptr) return nullptr;
+  const auto hooks = std::make_shared<CanvasHooks>();
+  const QPointer<PixCakeImageView> view(canvas);
+  hooks->accepts = [state, actions] { return state->draw && state->mask >= 0 && actions->has_photo(); };
+  hooks->drag = [=](int phase, const QPointF& at) {
+    if (!view) return;
+    if (phase == 0) {
+      const auto items = items_of(state->mask);
+      const auto found = std::find_if(items.begin(), items.end(), [&](const auto& pair) { return pair.first == state->item; });
+      if (found != items.end() && (found->second == "linear" || found->second == "radial")) {
+        state->drag_item = found->first;
+        state->drag_radial = found->second == "radial";
+      } else {
+        // 新建：部位下拉选了径向就是径向，否则线性；叠加方式取下拉。
+        bool radial = false;
+        QString how = QStringLiteral("add");
+        for (auto* box : body->findChildren<QComboBox*>(QStringLiteral("refine-local-item-region"))) {
+          radial = box->currentData().toString() == QStringLiteral("radial");
+        }
+        for (auto* box : body->findChildren<QComboBox*>(QStringLiteral("refine-local-item-mode"))) how = box->currentData().toString();
+        int free_item = -1;
+        for (int item = 0; item <= kMaxLocalItems && free_item < 0; ++item) {
+          if (std::none_of(items.begin(), items.end(), [&](const auto& pair) { return pair.first == item; })) free_item = item;
+        }
+        if (free_item < 0) {
+          state->drag_item = -1;
+          return;
+        }
+        if (free_item > 0) actions->request_parameter(binding_of(state->mask, free_item, "mode"), how.toStdString(), true);
+        actions->request_parameter(binding_of(state->mask, free_item, "region"), radial ? "radial" : "linear", true);
+        state->drag_item = free_item;
+        state->drag_radial = radial;
+      }
+      state->item = state->drag_item;
+      state->drag_start = at;
+      return;
+    }
+    if (state->drag_item < 0) return;
+    const auto params = gradient_from_drag(state->drag_radial, state->drag_start, at, view->image().size());
+    if (!params.valid) return;
+    const bool commit = phase == 2;
+    const auto write = [&](const char* name, int value) {
+      actions->request_parameter(binding_of(state->mask, state->drag_item, name), std::to_string(value), commit);
+    };
+    write("gradient_x", params.x);
+    write("gradient_y", params.y);
+    if (!state->drag_radial) write("gradient_angle", params.angle);
+    write("gradient_size", params.size);
+    if (state->drag_radial) write("gradient_ratio", params.ratio);
+    if (commit) {
+      state->drag_item = -1;
+      if (const auto run = std::weak_ptr<std::function<void()>>(rebuild).lock()) {
+        state->signature = signature();
+        (*run)();
+      }
+    }
+  };
+  hooks->paint = [=](QPainter& painter, const QRectF& rect) {
+    if (state->mask < 0 || state->item < 0) return;
+    const auto items = items_of(state->mask);
+    const auto found = std::find_if(items.begin(), items.end(), [&](const auto& pair) { return pair.first == state->item; });
+    if (found == items.end() || (found->second != "linear" && found->second != "radial") || !view) return;
+    const auto number = [&](const char* name, int fallback) {
+      const auto value = actions->parameter_value(binding_of(state->mask, state->item, name));
+      return value ? std::atoi(value->c_str()) : fallback;
+    };
+    const double x = rect.left() + number("gradient_x", 50) / 100.0 * rect.width();
+    const double y = rect.top() + number("gradient_y", 50) / 100.0 * rect.height();
+    const double w = view->image().width();
+    const double h = view->image().height();
+    const double scale = w > 0 ? rect.width() / w : 1.0;  // 图像像素到屏幕
+    const double diagonal = std::sqrt(w * w + h * h);
+    const double size = number("gradient_size", 50) / 100.0 * diagonal / 2.0;  // 像素：线性半宽、径向横向半径
+    painter.setBrush(Qt::NoBrush);
+    for (const QColor& color : {QColor(0, 0, 0, 140), QColor(255, 255, 255, 230)}) {
+      painter.setPen(QPen(color, color.alpha() > 200 ? 1.5 : 3.0));
+      if (found->second == "linear") {
+        const double radians = number("gradient_angle", 0) * 3.14159265358979323846 / 180.0;
+        const QPointF half(std::cos(radians) * size * scale, std::sin(radians) * size * scale);
+        painter.drawLine(QPointF(x, y) - half, QPointF(x, y) + half);
+        painter.drawEllipse(QPointF(x, y) - half, 4, 4);
+        painter.drawEllipse(QPointF(x, y) + half, 4, 4);
+      } else {
+        const double rx = size * scale;
+        const double ry = rx * number("gradient_ratio", 100) / 100.0;
+        const double inner = 1.0 - number("gradient_feather", 50) / 100.0;
+        painter.drawEllipse(QPointF(x, y), rx, ry);
+        painter.drawEllipse(QPointF(x, y), rx * inner, ry * inner);
+        painter.drawEllipse(QPointF(x, y), 3, 3);
+      }
+    }
+  };
+  canvas->setHooks(hooks);
+  return hooks;
 }
 
-void addModules(QWidget* modules, QVBoxLayout* modules_layout, PageActions* actions,
-                PixCakeHistogram** histogram) {
+void addModules(QWidget* modules, QVBoxLayout* modules_layout, PageActions* actions, PixCakeHistogram** histogram,
+                PixCakeImageView* canvas) {
   for (const auto& entry : ui::shell::page_list("refine-modules")) {
     auto* button = action(qs(entry.text), modules);
     const QString description = moduleDescription(entry.id.c_str());
@@ -524,7 +668,7 @@ void addModules(QWidget* modules, QVBoxLayout* modules_layout, PageActions* acti
 
   auto* local = labelPanel(modules, modules_layout, "refine-local-labels", moduleDescription("local"));
   addLabelList(local, "refine-local");
-  addLocalPanel(modules, local, actions);
+  addLocalPanel(modules, local, actions, canvas);
   const char* feather = panels::refine_local_feather_label();
   addDisabledSlider(modules, local, panels::slider_spec(feather, panels::refine_local_binding(feather)), QString());
 
@@ -660,7 +804,7 @@ QWidget* buildRefinePage(const PageContext& context) {
   modules_layout->setContentsMargins(14, 12, 14, 12);
   modules_layout->addWidget(text(qtext("region.refine-modules")));
   PixCakeHistogram* histogram = nullptr;
-  addModules(modules, modules_layout, actions, &histogram);
+  addModules(modules, modules_layout, actions, &histogram, image_view);
   if (image_view != nullptr) {
     QPointer<PixCakeImageView> view(image_view);
     QPointer<PixCakeHistogram> chart(histogram);

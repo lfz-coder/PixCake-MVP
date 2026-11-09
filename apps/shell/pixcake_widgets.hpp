@@ -25,7 +25,9 @@
 #include "pixcake/ui/panels/histogram.hpp"
 #include "pixcake/ui/shell/page_copy.hpp"
 
+#include <algorithm>
 #include <functional>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -233,6 +235,14 @@ class PixCakeHistogram final : public QFrame {
   ui::panels::RgbHistogram histogram_;
 };
 
+// 画布上的交互叠加（局部调色的渐变手柄）：画在图像上的内容、是否接管鼠标、拖动（阶段 0 按下、1 移动、2 松开；
+// 位置是图像上的百分比 0..100）。由精修页的局部面板设置。
+struct CanvasHooks {
+  std::function<void(QPainter&, const QRectF&)> paint;
+  std::function<bool()> accepts;
+  std::function<void(int, const QPointF&)> drag;
+};
+
 // The refine canvas: shows the latest preview frame fitted into the widget
 // (aspect kept, never enlarged past 1:1 device pixels), or a status line.
 class PixCakeImageView final : public QFrame {
@@ -253,17 +263,55 @@ class PixCakeImageView final : public QFrame {
     update();
   }
   const QImage& image() const { return image_; }
+  void setHooks(std::shared_ptr<CanvasHooks> hooks) {
+    hooks_ = std::move(hooks);
+    update();
+  }
+  // 图像在控件里显示的矩形；没有图像时为空。
+  QRectF imageRect() const {
+    if (image_.isNull()) return {};
+    const qreal ratio = devicePixelRatioF();
+    QSizeF size = QSizeF(image_.size()) / ratio;
+    size.scale(QSizeF(rect().size()).boundedTo(size), Qt::KeepAspectRatio);
+    return QRectF(QPointF((width() - size.width()) / 2, (height() - size.height()) / 2), size);
+  }
 
  protected:
+  void mousePressEvent(QMouseEvent* event) override {
+    if (takes(event)) {
+      dragging_ = true;
+      hooks_->drag(0, percent(event->position()));
+    } else {
+      QFrame::mousePressEvent(event);
+    }
+  }
+  void mouseMoveEvent(QMouseEvent* event) override {
+    if (dragging_ && hooks_) {
+      hooks_->drag(1, percent(event->position()));
+      update();
+    } else {
+      QFrame::mouseMoveEvent(event);
+    }
+  }
+  void mouseReleaseEvent(QMouseEvent* event) override {
+    if (dragging_ && hooks_) {
+      dragging_ = false;
+      hooks_->drag(2, percent(event->position()));
+      update();
+    } else {
+      QFrame::mouseReleaseEvent(event);
+    }
+  }
   void paintEvent(QPaintEvent*) override {
     QPainter painter(this);
     if (!image_.isNull()) {
-      const qreal ratio = devicePixelRatioF();
-      QSizeF size = QSizeF(image_.size()) / ratio;
-      size.scale(QSizeF(rect().size()).boundedTo(size), Qt::KeepAspectRatio);
-      const QRectF target(QPointF((width() - size.width()) / 2, (height() - size.height()) / 2), size);
+      const QRectF target = imageRect();
       painter.setRenderHint(QPainter::SmoothPixmapTransform);
       painter.drawImage(target, image_);
+      if (hooks_ && hooks_->paint) {
+        painter.setRenderHint(QPainter::Antialiasing);
+        hooks_->paint(painter, target);
+      }
     }
     if (!status_.isEmpty()) {
       painter.setPen(palette().color(QPalette::PlaceholderText));
@@ -272,8 +320,21 @@ class PixCakeImageView final : public QFrame {
   }
 
  private:
+  bool takes(const QMouseEvent* event) const {
+    return hooks_ && hooks_->accepts && hooks_->accepts() && hooks_->drag && event->button() == Qt::LeftButton &&
+           imageRect().contains(event->position());
+  }
+  QPointF percent(const QPointF& at) const {
+    const QRectF target = imageRect();
+    if (target.isEmpty()) return {};
+    return {std::clamp((at.x() - target.left()) / target.width() * 100.0, 0.0, 100.0),
+            std::clamp((at.y() - target.top()) / target.height() * 100.0, 0.0, 100.0)};
+  }
+
   QImage image_;
   QString status_;
+  std::shared_ptr<CanvasHooks> hooks_;
+  bool dragging_ = false;
 };
 
 inline QPixmap loadAssetPixmap(const QString& relative, int size) {

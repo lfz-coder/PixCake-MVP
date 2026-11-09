@@ -193,6 +193,7 @@ Texts build_texts() {
   t["local.mask.new"] = "新建蒙版";
   t["local.mask.remove"] = "删除蒙版";
   t["local.mask.none"] = "还没有蒙版，先新建一个";
+  t["local.draw"] = "在画布上拖动";
   t["local.item.add"] = "添加子项";
   t["local.item.remove"] = "删除子项";
   t["local.item.mode.add"] = "添加";

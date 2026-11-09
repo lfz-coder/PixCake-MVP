@@ -1416,6 +1416,122 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
       return 8;
     }
   }
+  // Dragging gradients on the canvas: a linear drag creates an item whose parameters follow the two points; a radial
+  // drag makes an ellipse from the centre to a corner.  Everything is deleted again at the end.
+  {
+    auto& controller = window.controller();
+    auto* canvas = dynamic_cast<pixcake::shell::PixCakeImageView*>(
+        window.findChild<QFrame*>(QStringLiteral("refine-canvas-image")));
+    auto* create = visibleChild<QPushButton>(window, "refine-local-new");
+    if (canvas == nullptr || create == nullptr) {
+      qCritical("canvas or mask panel missing for the drag test");
+      return 8;
+    }
+    create->click();
+    auto* draw = visibleChild<QPushButton>(window, "refine-local-draw");
+    if (draw == nullptr) {
+      qCritical("the draw toggle is missing");
+      return 8;
+    }
+    draw->setChecked(true);
+    const auto drag = [&](double x0, double y0, double x1, double y1) {
+      const QRectF rect = canvas->imageRect();
+      const auto at = [&](double x, double y) { return QPointF(rect.left() + x / 100.0 * rect.width(), rect.top() + y / 100.0 * rect.height()); };
+      const auto send = [&](QEvent::Type type, const QPointF& point, Qt::MouseButtons buttons) {
+        QMouseEvent event(type, point, canvas->mapToGlobal(point), Qt::LeftButton, buttons, Qt::NoModifier);
+        QCoreApplication::sendEvent(canvas, &event);
+      };
+      const auto shown = controller.frames_shown();
+      send(QEvent::MouseButtonPress, at(x0, y0), Qt::LeftButton);
+      send(QEvent::MouseMove, at((x0 + x1) / 2, (y0 + y1) / 2), Qt::LeftButton);
+      send(QEvent::MouseMove, at(x1, y1), Qt::LeftButton);
+      send(QEvent::MouseButtonRelease, at(x1, y1), Qt::NoButton);
+      return wait_frames(window, shown + 1, 30'000) && wait_current(window, 30'000);
+    };
+    // The mask needs some brightening to see the gradient: set its exposure first.
+    auto* exposure = visibleChild<QSlider>(window, "refine-local-exposure");
+    if (exposure == nullptr) {
+      qCritical("the new mask has no exposure slider (drag test)");
+      return 8;
+    }
+    exposure->setValue(std::min(exposure->maximum(), exposure->value() + 20));
+    wait_current(window, 30'000);
+    const double whole_red = mean_red(view->image());
+    if (!drag(40, 30, 40, 70)) {
+      qCritical("no frame after the linear drag");
+      return 8;
+    }
+    const auto number = [&](const char* name) {
+      const auto value = controller.parameter_value({"color.local", std::string("m") + std::to_string(controller.local_masks().back()) + ":" + name});
+      return value ? std::atoi(value->c_str()) : -9999;
+    };
+    // Straight down from 30% to 70% of the height: centre (40, 50), direction 90 degrees, the length a part of the diagonal.
+    const double w = view->image().width();
+    const double h = view->image().height();
+    const int expected_size = static_cast<int>(std::lround(0.4 * h / std::sqrt(w * w + h * h) * 100.0));
+    if (controller.local_masks().empty() || std::abs(number("gradient_x") - 40) > 1 || std::abs(number("gradient_y") - 50) > 1 ||
+        std::abs(number("gradient_angle") - 90) > 1 || std::abs(number("gradient_size") - expected_size) > 1) {
+      qCritical("linear drag parameters: x %d y %d angle %d size %d (expected size %d)", number("gradient_x"), number("gradient_y"),
+                number("gradient_angle"), number("gradient_size"), expected_size);
+      return 8;
+    }
+    // The top is brightened (alpha 1 at the start), the bottom is not: the picture is darker than the whole-image result.
+    if (!(mean_red(view->image()) < whole_red - 0.5)) {
+      qCritical("the dragged linear gradient did not limit the brightening: %.2f vs %.2f", mean_red(view->image()), whole_red);
+      return 8;
+    }
+    // Drag again: it edits the same item (flipped direction = 270 degrees... start at the bottom).
+    if (!drag(40, 70, 40, 30)) {
+      qCritical("no frame after the second drag");
+      return 8;
+    }
+    if (std::abs(std::abs(number("gradient_angle")) - 90) > 1 || number("gradient_angle") == 90) {
+      qCritical("dragging the other way should flip the angle, got %d", number("gradient_angle"));
+      return 8;
+    }
+    auto* items = visibleChild<QListWidget>(window, "refine-local-items");
+    if (items == nullptr || items->count() != 1) {
+      qCritical("a second drag should edit the item, not add one");
+      return 8;
+    }
+    // Radial: remove the linear item, pick the radial part, drag from the centre to a corner.
+    auto* drop = visibleChild<QPushButton>(window, "refine-local-item-remove");
+    if (drop == nullptr) {
+      qCritical("item remove missing");
+      return 8;
+    }
+    drop->click();
+    wait_current(window, 30'000);
+    auto* region_box = visibleChild<QComboBox>(window, "refine-local-item-region");
+    region_box->setCurrentIndex(region_box->findData(QStringLiteral("radial")));
+    draw = visibleChild<QPushButton>(window, "refine-local-draw");
+    draw->setChecked(true);
+    if (!drag(50, 50, 70, 60)) {
+      qCritical("no frame after the radial drag");
+      return 8;
+    }
+    const double rx = 0.2 * w;
+    const double ry = 0.1 * h;
+    if (std::abs(number("gradient_x") - 50) > 1 || std::abs(number("gradient_y") - 50) > 1 ||
+        std::abs(number("gradient_ratio") - static_cast<int>(std::lround(ry / rx * 100.0))) > 2 ||
+        std::abs(number("gradient_size") - static_cast<int>(std::lround(2.0 * rx / std::sqrt(w * w + h * h) * 100.0))) > 1) {
+      qCritical("radial drag parameters: x %d y %d size %d ratio %d", number("gradient_x"), number("gradient_y"), number("gradient_size"),
+                number("gradient_ratio"));
+      return 8;
+    }
+    // Clean up: delete the mask.
+    auto* remove = visibleChild<QPushButton>(window, "refine-local-delete");
+    if (remove == nullptr) {
+      qCritical("mask delete missing");
+      return 8;
+    }
+    remove->click();
+    wait_current(window, 30'000);
+    if (!controller.local_masks().empty()) {
+      qCritical("the dragged mask was not deleted");
+      return 8;
+    }
+  }
   // Presets: save the photo's colour as a preset through the dialog, apply it (a history step), see it listed.
   // (Needs a project: the development page that opens a bare photo has none.)
   if (window.controller().current_project()) {
