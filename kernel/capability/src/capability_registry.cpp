@@ -1,4 +1,5 @@
 #include "pixcake/capability/capability_registry.hpp"
+#include "pixcake/mask/brush_mask.hpp"
 #include "pixcake/mask/semantic_parts.hpp"
 
 #include <tuple>
@@ -101,6 +102,7 @@ std::vector<ParameterMode> make_parameter_modes() {
   region.choices.push_back("radial");
   region.choices.push_back("color_range");      // 颜色范围、亮度范围：蒙版由画面本身和下面的取样值算出
   region.choices.push_back("luminance_range");
+  region.choices.push_back("brush");  // 画笔：笔触存在同一子项的文本参数 strokes 里
   for (const auto& part : mask::semantic_parts()) region.choices.push_back(part.id);
   region.default_choice = "all";  // 必须在后面的 add() 之前：add 可能让 modes 重新分配，region 引用会失效
   // 渐变的位置和形状（百分比，和分辨率无关）。官方没有逐项实测，范围按画面百分比取，默认值未确认。
@@ -133,6 +135,12 @@ std::vector<ParameterMode> make_parameter_modes() {
     ParameterMode& invert = add("color.local", "invert", 0.0, 0.0, 1.0, 0.0, "color", "pixcake.color.local", "invert", 21);
     invert.choices = {"off", "on"};
     invert.default_choice = "off";
+  }
+  // 画笔笔触（子项的文本参数，见 kernel/mask/brush_mask.hpp 的格式）：整串合法才收；不能同步、不能存预设。
+  {
+    ParameterMode& strokes = add("color.local", "strokes", 0.0, 0.0, 1.0, 0.0, "color", "pixcake.color.local", "strokes", 21);
+    strokes.text = true;
+    strokes.max_length = static_cast<std::uint32_t>(mask::kMaxBrushTextChars);
   }
   // 蒙版名称（只有蒙版本身有，子项没有）：1 到 20 个字符的文本，默认没有（界面显示“自定义-N”）。
   {
@@ -480,7 +488,7 @@ const ParameterMode* find_parameter_mode(std::string_view capability_id, std::st
     int item = 0;
     std::string_view leaf;
     if (!split_local_item(base, item, leaf)) return nullptr;
-    if (item > 0 && leaf != "region" && leaf != "mode" && leaf != "invert" && leaf.rfind("gradient_", 0) != 0 && leaf.rfind("range_", 0) != 0 &&
+    if (item > 0 && leaf != "region" && leaf != "mode" && leaf != "invert" && leaf != "strokes" && leaf.rfind("gradient_", 0) != 0 && leaf.rfind("range_", 0) != 0 &&
         leaf.rfind("lum_", 0) != 0) {
       return nullptr;
     }  // 子项只有自己的参数
@@ -547,7 +555,12 @@ bool validate_parameter_display_value(std::string_view capability_id, std::strin
       if (byte < 0x20 || byte == 0x7f) return false;
       if ((byte & 0xC0) != 0x80) ++characters;
     }
-    return characters >= 1 && characters <= mode->max_length;
+    if (characters < 1 || characters > mode->max_length) return false;
+    if (mode->parameter_id == "strokes") {
+      std::vector<mask::BrushStroke> parsed;
+      return mask::decode_brush_strokes(display_value, parsed) && !parsed.empty();
+    }
+    return true;
   }
   if (!mode->choices.empty()) {
     for (const auto& choice : mode->choices) {

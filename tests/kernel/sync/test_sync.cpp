@@ -1,10 +1,13 @@
 #include "pixcake/editdoc/edit_document.hpp"
+#include "pixcake/capabilities/module_set.hpp"
+#include "pixcake/capability/capability_module.hpp"
 #include "pixcake/capability/capability_registry.hpp"
 #include "pixcake/sync/sync_batch.hpp"
 #include "pixcake/capability/fragment_codec.hpp"
 #include "support/fake_file_system.hpp"
 
 #include <cstdio>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -408,7 +411,54 @@ void test_commit_parameters_is_one_revision() {
          pixcake::ResultCode::StateConflict);
 }
 
+// 自定义画笔蒙版不能同步、不能存预设（需求 §10.8）：粘贴、同步、预设搬运都不带走画笔子项的区域、叠加方式、反相和笔触，
+// 其余的（别的子项、整个蒙版的调整）照常。
+void test_brush_items_do_not_travel() {
+  const std::string strokes = "a1000,0,100,100:1000,5000,8000,0";
+  std::vector<pixcake::FragmentRecord> records;
+  const auto add = [&records](const char* id, const char* value) {
+    records.push_back({pixcake::kFragmentParameterRecord, pixcake::encode_parameter_record(id, value)});
+  };
+  add("m1:exposure", "1");
+  add("m1:region", "brush");
+  add("m1:strokes", strokes.c_str());
+  add("m1:invert", "on");
+  add("m2:exposure", "0.5");
+  add("m2:region", "person.hair");
+  add("m2:s1:region", "brush");
+  add("m2:s1:mode", "subtract");
+  add("m2:s1:strokes", strokes.c_str());
+  add("m2:s2:region", "linear");
+  pixcake::FragmentBytes source;
+  source.version = 2;
+  source.inner = pixcake::encode_fragment_records(records);
+  const pixcake::FragmentTransfer moved = pixcake::transfer_fragment("color.local", source, std::nullopt);
+  EXPECT(moved.code == pixcake::ResultCode::Ok && moved.fragment.has_value());
+  std::vector<pixcake::FragmentRecord> out;
+  EXPECT(moved.fragment && pixcake::decode_fragment_records(moved.fragment->inner, out));
+  std::map<std::string, std::string> got;
+  for (const auto& record : out) {
+    std::string id, value;
+    if (pixcake::decode_parameter_record(record.payload, id, value)) got[id] = value;
+  }
+  EXPECT(got.count("m1:exposure") == 1 && got.count("m2:exposure") == 1 && got["m2:region"] == "person.hair" &&
+         got["m2:s2:region"] == "linear");  // everything else travels
+  EXPECT(got.count("m1:region") == 0 && got.count("m1:strokes") == 0 && got.count("m1:invert") == 0 &&
+         got.count("m2:s1:region") == 0 && got.count("m2:s1:mode") == 0 && got.count("m2:s1:strokes") == 0);  // the brush items stay
+  EXPECT(got.size() == 4);
+  // Paste puts the same into the target document.
+  pixcake::EffectClipboard clipboard;
+  clipboard.fragments.push_back({"color.local", 2, source.inner});
+  auto target = *pixcake::EditDocument::create("brush-target");
+  pixcake::test::FakeFileSystem files;
+  EXPECT(target.write_snapshot(files, "docs/b.pxedit") == pixcake::ResultCode::Ok);
+  EXPECT(pixcake::paste_committed(target, clipboard, 0, files, "docs/b.pxedit") == pixcake::ResultCode::Ok);
+  EXPECT(target.committed_parameter("color.local", "m2:exposure") == std::optional<std::string>("0.5") &&
+         !target.committed_parameter("color.local", "m1:strokes") && !target.committed_parameter("color.local", "m1:region"));
+}
+
 int main() {
+  test_brush_items_do_not_travel();
   test_commit_parameters_is_one_revision();
   test_remove_local_mask();
   test_local_instances_persist_and_paste();

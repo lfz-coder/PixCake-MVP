@@ -1,5 +1,6 @@
 #include "pixcake/capability/capability_module.hpp"
 #include "pixcake/mask/combined_mask.hpp"
+#include "pixcake/mask/brush_mask.hpp"
 #include "pixcake/mask/gradient_mask.hpp"
 #include "pixcake/mask/range_mask.hpp"
 #include "pixcake/mask/semantic_parts.hpp"
@@ -61,6 +62,35 @@ std::uint32_t ParameterBackedModule::current_version() const {
   return version;
 }
 
+// 自定义画笔蒙版不能同步、不能存预设（需求 §10.8）：区域是画笔的子项，它的区域、叠加方式、反相和笔触都不带走。
+// 笔触参数本身不管区域是什么也不带走。
+static void drop_brush_items(std::vector<ParameterValue>& values) {
+  std::set<std::pair<int, int>> brush_items;  // 蒙版实例和子项
+  for (const auto& value : values) {
+    int instance = 0;
+    std::string_view base;
+    if (!split_local_parameter(value.parameter_id, instance, base)) continue;
+    int item = 0;
+    std::string_view leaf;
+    if (split_local_item(base, item, leaf) && leaf == "region" && value.display_value == "brush") {
+      brush_items.emplace(instance, item);
+    }
+  }
+  values.erase(std::remove_if(values.begin(), values.end(),
+                              [&brush_items](const ParameterValue& value) {
+                                int instance = 0;
+                                std::string_view base;
+                                if (!split_local_parameter(value.parameter_id, instance, base)) return false;
+                                int item = 0;
+                                std::string_view leaf;
+                                if (!split_local_item(base, item, leaf)) return false;
+                                if (leaf == "strokes") return true;
+                                return brush_items.count({instance, item}) != 0 &&
+                                       (leaf == "region" || leaf == "mode" || leaf == "invert");
+                              }),
+               values.end());
+}
+
 ExtractResult ParameterBackedModule::extract(const FragmentBytes& fragment) const {
   ExtractResult result;
   result.fragment = fragment;
@@ -82,6 +112,30 @@ ExtractResult ParameterBackedModule::extract(const FragmentBytes& fragment) cons
       return result;
     }
     if (find_parameter_mode(descriptor_.id, value.parameter_id) != nullptr) result.values.push_back(std::move(value));
+  }
+  if (descriptor_.id == "color.local") {
+    // 画笔子项不带走：值里去掉，片段里对应的参数记录也去掉（同步、粘贴、预设搬运的是这个过滤后的片段）。
+    const std::vector<ParameterValue> before = result.values;
+    drop_brush_items(result.values);
+    if (result.values.size() != before.size()) {
+      std::set<std::string> kept_ids;
+      for (const auto& value : result.values) kept_ids.insert(value.parameter_id);
+      std::set<std::string> dropped;
+      for (const auto& value : before) {
+        if (kept_ids.count(value.parameter_id) == 0) dropped.insert(value.parameter_id);
+      }
+      std::vector<FragmentRecord> kept;
+      for (auto& record : records) {
+        std::string id;
+        std::string display;
+        if (record.type == kFragmentParameterRecord && decode_parameter_record(record.payload, id, display) &&
+            dropped.count(id) != 0) {
+          continue;
+        }
+        kept.push_back(std::move(record));
+      }
+      result.fragment.inner = encode_fragment_records(kept);
+    }
   }
   return result;
 }
@@ -213,6 +267,8 @@ ModuleCompile ParameterBackedModule::compile_modes(const ParameterReader& reader
   bool gradient_region = false;
   std::string range_region;  // color_range 或 luminance_range
   bool invert_item0 = false;  // 子项 0 反相
+  std::string brush_item0;  // 子项 0 的画笔蒙版编号，笔触空或不合格时为空
+  bool brush_selected = false;  // 有子项选了画笔（笔触可能还是空的）
   std::set<std::string> channels;
   for (const auto* mode : modes) {
     if (!only.empty() && mode->parameter_id != only) continue;
@@ -244,6 +300,12 @@ ModuleCompile ParameterBackedModule::compile_modes(const ParameterReader& reader
         gradient_region = true;
       } else if (*value == "color_range" || *value == "luminance_range") {
         range_region = *value;
+      } else if (*value == "brush") {
+        brush_selected = true;
+        const auto text = reader.value(descriptor_.id, prefix + "strokes");
+        if (text && validate_parameter_display_value(descriptor_.id, prefix + "strokes", *text)) {
+          brush_item0 = mask::brush_mask_id(*text);
+        }
       } else if (*value != "all") {
         region_mask = mask::semantic_mask_id(*value);
       }
@@ -285,6 +347,7 @@ ModuleCompile ParameterBackedModule::compile_modes(const ParameterReader& reader
       if (!region_mask.empty()) parts.push_back({false, region_mask});
       if (gradient_region) parts.push_back({false, mask::gradient_mask_id(gradient)});
       if (!range_region.empty()) parts.push_back({false, range_mask_id_of(reader, descriptor_.id, prefix, range_region)});
+      if (!brush_item0.empty()) parts.push_back({false, brush_item0});
       if (invert_item0) {
         for (auto& part : parts) part.id = mask::invert_mask_id(part.id);  // 此时只有子项 0 的部位
       }
@@ -316,6 +379,11 @@ ModuleCompile ParameterBackedModule::compile_modes(const ParameterReader& reader
             id = mask::gradient_mask_id(g);
           } else if (*region == "color_range" || *region == "luminance_range") {
             id = range_mask_id_of(reader, descriptor_.id, item_prefix, *region);
+          } else if (*region == "brush") {
+            brush_selected = true;
+            const auto text = reader.value(descriptor_.id, item_prefix + "strokes");
+            if (!text || !validate_parameter_display_value(descriptor_.id, item_prefix + "strokes", *text)) continue;  // 还没画：不参与
+            id = mask::brush_mask_id(*text);
           } else {
             id = mask::semantic_mask_id(*region);
           }
@@ -326,7 +394,9 @@ ModuleCompile ParameterBackedModule::compile_modes(const ParameterReader& reader
           parts.push_back({how == std::optional<std::string>("subtract"), std::move(id)});
         }
       }
-      if (parts.size() == 1 && !parts[0].subtract) {
+      if (parts.empty() && brush_selected) {
+        step.mask_ids.push_back(std::string(mask::kBrushMaskPrefix));  // 选了画笔但还没画：空蒙版，绘制步骤被跳过
+      } else if (parts.size() == 1 && !parts[0].subtract) {
         step.mask_ids.push_back(parts[0].id);
       } else if (!parts.empty()) {
         step.mask_ids.push_back(mask::combined_mask_id(parts));

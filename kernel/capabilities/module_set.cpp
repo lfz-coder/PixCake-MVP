@@ -127,7 +127,7 @@ FragmentTransfer transfer_fragment(std::string_view capability_id, const std::op
       return result;
     }
   }
-  result.fragment = migrated.fragment;
+  result.fragment = extracted.fragment;  // 模块可以去掉不能搬运的内容（画笔子项），所以用提取后的片段
   return result;
 }
 

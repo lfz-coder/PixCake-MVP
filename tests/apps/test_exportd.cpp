@@ -367,6 +367,33 @@ int main() {
                 red_at(after, 5, 5), red_at(before, 315, 195), red_at(after, 315, 195));
   }
 
+  // A brush stroke: +1 EV only along the painted line (a 320 x 200 frame, a stroke 10% of the long edge wide).
+  {
+    ExportService service;
+    auto job = work("brush-1", source, dir.path() + "/unused.jpg", dir.path());
+    pixcake::render::RenderOperation local = operation("color.local", "pixcake.color.local", {value("exposure", 1.0)});
+    local.mask_ids = {"brush:a1000,0,100,100:1500,5000,7000,0"};  // x from 15% to 85% at mid height, 32 px wide, hard
+    job.description.operations.push_back(local);
+    std::string why;
+    assert(service.submit(std::move(job), why) == ResultCode::Ok);
+    const auto result = service.process_next();
+    assert(result.code == ResultCode::Ok && result.width == 320 && result.height == 200);
+    pixcake::PosixFileSystem files;
+    const std::string written = dir.path() + "/brush.jpg";
+    assert(files.write_new(written, result.product).ok);
+    const auto before = decode(source);
+    const auto after = decode(written);
+    const auto red_at = [](const pixcake::platform::MacDecodedImage& image, std::uint32_t x, std::uint32_t y) {
+      return static_cast<int>(image.rgba[(static_cast<std::size_t>(y) * image.width + x) * 4]);
+    };
+    assert(red_at(after, 160, 100) > red_at(before, 160, 100) * 3 / 2);            // on the stroke
+    assert(std::abs(red_at(after, 160, 20) - red_at(before, 160, 20)) <= 3);       // far above it
+    assert(std::abs(red_at(after, 160, 180) - red_at(before, 160, 180)) <= 3);     // far below it
+    assert(std::abs(red_at(after, 5, 100) - red_at(before, 5, 100)) <= 3);         // beyond its end
+    std::printf("export brush: on %d -> %d, above %d -> %d\n", red_at(before, 160, 100), red_at(after, 160, 100),
+                red_at(before, 160, 20), red_at(after, 160, 20));
+  }
+
   // An inverted gradient brightens the other side of the frame.
   {
     ExportService service;

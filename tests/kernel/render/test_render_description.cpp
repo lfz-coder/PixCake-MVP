@@ -260,6 +260,35 @@ void test_local_instances_compile_in_order() {
   result = pixcake::render::compile(lone);
   EXPECT(result.description.operations.size() == 1 &&
          result.description.operations[0].mask_ids == std::vector<std::string>{"invert:semantic:person.hair"});
+  // Brush: the item's strokes (a text parameter) become the mask id; an empty or bad brush is an empty mask.
+  const std::string strokes_text = "a1000,0,100,100:1000,5000,8000,0";
+  EXPECT(find_parameter_mode("color.local", "m3:s2:strokes") == find_parameter_mode("color.local", "strokes"));
+  EXPECT(pixcake::validate_parameter_display_value("color.local", "strokes", strokes_text));
+  EXPECT(!pixcake::validate_parameter_display_value("color.local", "strokes", "a1000,0,100,100:1,1,"));
+  EXPECT(!pixcake::validate_parameter_display_value("color.local", "strokes", ""));
+  auto brush = *pixcake::EditDocument::create("img-brush");
+  EXPECT(brush.set_preview("color.local", "m1:exposure", "1") == pixcake::ResultCode::Ok);
+  EXPECT(brush.set_preview("color.local", "m1:region", "brush") == pixcake::ResultCode::Ok);
+  result = pixcake::render::compile(brush);  // painted nothing yet: an empty mask, so the step is skipped, not applied to everything
+  EXPECT(result.description.operations.size() == 1 &&
+         result.description.operations[0].mask_ids == std::vector<std::string>{"brush:"});
+  EXPECT(brush.set_preview("color.local", "m1:strokes", strokes_text) == pixcake::ResultCode::Ok);
+  result = pixcake::render::compile(brush);
+  EXPECT(result.description.operations.size() == 1 &&
+         result.description.operations[0].mask_ids == std::vector<std::string>{"brush:" + strokes_text});
+  for (const auto& value : result.description.operations[0].values) EXPECT(value.channel != "strokes");
+  // A later item: brush subtracted from a part; its strokes missing means the item is left out; inverted brush wraps.
+  EXPECT(brush.set_preview("color.local", "m1:s1:region", "brush") == pixcake::ResultCode::Ok);
+  EXPECT(brush.set_preview("color.local", "m1:s1:mode", "subtract") == pixcake::ResultCode::Ok);
+  result = pixcake::render::compile(brush);
+  EXPECT(result.description.operations.size() == 1 &&
+         result.description.operations[0].mask_ids == std::vector<std::string>{"brush:" + strokes_text});
+  EXPECT(brush.set_preview("color.local", "m1:s1:strokes", "e500,50,100,100:5000,5000") == pixcake::ResultCode::Ok);
+  EXPECT(brush.set_preview("color.local", "m1:invert", "on") == pixcake::ResultCode::Ok);
+  result = pixcake::render::compile(brush);
+  EXPECT(result.description.operations.size() == 1 &&
+         result.description.operations[0].mask_ids ==
+             std::vector<std::string>{"combined:+invert:brush:" + strokes_text + "|-brush:e500,50,100,100:5000,5000"});
   // One "add" item alone keeps the plain id; a lone "subtract" item is a combination (it removes from nothing).
   auto one = *pixcake::EditDocument::create("img-one-item");
   EXPECT(one.set_preview("color.local", "exposure", "1") == pixcake::ResultCode::Ok);

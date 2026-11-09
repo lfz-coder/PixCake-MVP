@@ -1,5 +1,6 @@
 #include <pixcake/gpu/geometry.hpp>
 #include <pixcake/mask/combined_mask.hpp>
+#include <pixcake/mask/brush_mask.hpp>
 #include <pixcake/mask/gradient_mask.hpp>
 #include <pixcake/mask/range_mask.hpp>
 
@@ -351,6 +352,116 @@ void add_range_masks(const pixcake::render::RenderDescription& description, cons
         } else if (pixcake::mask::parse_luminance_range_mask_id(id, luminance)) {
           masks.push_back(luminance_range_mask(id, luminance, image));
         }
+      }
+    }
+  }
+}
+
+namespace {
+
+// 一笔：沿折线按间距落章，每章强度 = 流畅度 × 剖面(距离)，累积 1 − Π(1 − 章)，上限为密度。只在笔触包围盒里算。
+// 结果合到 mask（0..255）：添加是 1 − (1 − m)(1 − s)，橡皮擦是 m × (1 − s)。
+void paint_stroke(const pixcake::mask::BrushStroke& stroke, std::uint32_t width, std::uint32_t height,
+                  std::vector<std::uint8_t>& mask) {
+  const double w = width;
+  const double h = height;
+  const double diameter = std::max(1.0, stroke.size / 10000.0 * std::max(w, h));
+  const double outer = pixcake::mask::brush_outer_radius(diameter, stroke.feather);
+  std::vector<std::pair<double, double>> points;
+  points.reserve(stroke.points.size());
+  double min_x = 1e30, min_y = 1e30, max_x = -1e30, max_y = -1e30;
+  for (const auto& p : stroke.points) {
+    const double x = p.first / 10000.0 * w;
+    const double y = p.second / 10000.0 * h;
+    points.emplace_back(x, y);
+    min_x = std::min(min_x, x);
+    max_x = std::max(max_x, x);
+    min_y = std::min(min_y, y);
+    max_y = std::max(max_y, y);
+  }
+  const int x0 = std::max(0, static_cast<int>(std::floor(min_x - outer)));
+  const int y0 = std::max(0, static_cast<int>(std::floor(min_y - outer)));
+  const int x1 = std::min(static_cast<int>(width), static_cast<int>(std::ceil(max_x + outer)) + 1);
+  const int y1 = std::min(static_cast<int>(height), static_cast<int>(std::ceil(max_y + outer)) + 1);
+  if (x1 <= x0 || y1 <= y0) return;
+  const int bw = x1 - x0;
+  const int bh = y1 - y0;
+  std::vector<float> accumulated(static_cast<std::size_t>(bw) * bh, 0.0F);
+  // 剖面查表：距离的平方到强度，避免每个像素算平方根。
+  constexpr int kTable = 512;
+  std::vector<float> profile(kTable + 1);
+  for (int i = 0; i <= kTable; ++i) {
+    const double d = outer * std::sqrt(static_cast<double>(i) / kTable);
+    profile[static_cast<std::size_t>(i)] = static_cast<float>(pixcake::mask::brush_profile(d, diameter, stroke.feather));
+  }
+  const double flow = stroke.flow / 100.0;
+  const double density = stroke.density / 100.0;
+  const double outer2 = outer * outer;
+  const double spacing = std::max(0.75, diameter * 0.05);
+  const auto stamp = [&](double cx, double cy) {
+    const int sx0 = std::max(x0, static_cast<int>(std::floor(cx - outer)));
+    const int sx1 = std::min(x1, static_cast<int>(std::ceil(cx + outer)) + 1);
+    const int sy0 = std::max(y0, static_cast<int>(std::floor(cy - outer)));
+    const int sy1 = std::min(y1, static_cast<int>(std::ceil(cy + outer)) + 1);
+    for (int y = sy0; y < sy1; ++y) {
+      const double dy = y + 0.5 - cy;
+      float* row = accumulated.data() + static_cast<std::size_t>(y - y0) * bw;
+      for (int x = sx0; x < sx1; ++x) {
+        const double dx = x + 0.5 - cx;
+        const double d2 = dx * dx + dy * dy;
+        if (d2 >= outer2) continue;
+        const double s = flow * profile[static_cast<std::size_t>(d2 / outer2 * kTable)];
+        float& a = row[x - x0];
+        a = static_cast<float>(1.0 - (1.0 - a) * (1.0 - s));
+      }
+    }
+  };
+  stamp(points[0].first, points[0].second);
+  double carry = 0.0;  // 离上一章还差多远
+  for (std::size_t i = 1; i < points.size(); ++i) {
+    const double ax = points[i - 1].first, ay = points[i - 1].second;
+    const double bx = points[i].first, by = points[i].second;
+    const double length = std::hypot(bx - ax, by - ay);
+    if (length <= 0.0) continue;
+    double at = spacing - carry;
+    while (at <= length) {
+      stamp(ax + (bx - ax) * at / length, ay + (by - ay) * at / length);
+      at += spacing;
+    }
+    carry = length - (at - spacing);
+  }
+  for (int y = 0; y < bh; ++y) {
+    for (int x = 0; x < bw; ++x) {
+      const double s = std::min<double>(accumulated[static_cast<std::size_t>(y) * bw + x], density);
+      if (s <= 0.0) continue;
+      std::uint8_t& m = mask[static_cast<std::size_t>(y + y0) * width + (x + x0)];
+      const double old = m / 255.0;
+      const double merged = stroke.erase ? old * (1.0 - s) : 1.0 - (1.0 - old) * (1.0 - s);
+      m = static_cast<std::uint8_t>(std::lround(std::clamp(merged, 0.0, 1.0) * 255.0));
+    }
+  }
+}
+
+}  // namespace
+
+void add_brush_masks(const pixcake::render::RenderDescription& description, std::uint32_t width, std::uint32_t height,
+                     std::vector<RenderMask>& masks) {
+  if (width == 0 || height == 0) return;
+  for (const auto& operation : description.operations) {
+    if (!operation.enabled) continue;
+    for (const auto& whole : operation.mask_ids) {
+      for (const auto& id : pixcake::mask::leaf_mask_ids(whole)) {
+        if (!pixcake::mask::is_brush_mask_id(id)) continue;
+        if (std::any_of(masks.begin(), masks.end(), [&id](const RenderMask& m) { return m.id == id; })) continue;
+        std::vector<pixcake::mask::BrushStroke> strokes;
+        if (!pixcake::mask::parse_brush_mask_id(id, strokes)) continue;
+        RenderMask mask;
+        mask.id = id;
+        mask.width = width;
+        mask.height = height;
+        mask.alpha.assign(static_cast<std::size_t>(width) * height, 0);
+        for (const auto& stroke : strokes) paint_stroke(stroke, width, height, mask.alpha);
+        masks.push_back(std::move(mask));
       }
     }
   }

@@ -1,4 +1,5 @@
 add_library(pixcake_mask
+  src/brush_mask.cpp
   src/combined_mask.cpp
   src/gradient_mask.cpp
   src/range_mask.cpp

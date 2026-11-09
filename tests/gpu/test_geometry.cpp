@@ -1,5 +1,6 @@
 // 几何变换（需求 §12.6）：翻转、旋转 90°、拉直和比例裁剪，图像和蒙版同步；描述里的 crop 参数读成几何。
 #include <pixcake/gpu/geometry.hpp>
+#include <pixcake/mask/brush_mask.hpp>
 #include <pixcake/mask/combined_mask.hpp>
 #include <pixcake/mask/gradient_mask.hpp>
 #include <pixcake/mask/range_mask.hpp>
@@ -336,7 +337,110 @@ void test_invert_masks() {
   }
 }
 
+// 画笔：笔触文本往返、非法文本被拒；剖面（羽化 0 硬边、羽化大外沿柔）；硬边笔触的宽度等于大小；密度是上限；
+// 流畅度低时同一处多次叠加才累积；橡皮擦擦掉；多笔合并；组合、反相里的画笔子项也生成。
+void test_brush_masks() {
+  using mask::BrushStroke;
+  BrushStroke line;
+  line.size = 1000;  // 画面长边的 10%
+  line.feather = 0;
+  line.points = {{1000, 5000}, {9000, 5000}};
+  std::string text = mask::encode_brush_strokes({line});
+  std::vector<BrushStroke> parsed;
+  EXPECT(text == "a1000,0,100,100:1000,5000,8000,0");
+  EXPECT(mask::decode_brush_strokes(text, parsed) && parsed.size() == 1 && parsed[0].points.size() == 2 &&
+         parsed[0].points[1].first == 9000 && !parsed[0].erase);
+  EXPECT(mask::decode_brush_strokes("", parsed) && parsed.empty());
+  for (const char* bad : {"x1000,0,100,100:1,1", "a0,0,100,100:1,1", "a10,101,100,100:1,1", "a10,0,100,100:1", "a10,0,100,100:10001,1",
+                          "a10,0,100,100:5,5,-6,0", "a10,0,100,100:1,1/", "a10,0,100,100:1,1,", "a10,0,100,100", "a10,0,100,100:1,1//a10,0,100,100:1,1"}) {
+    std::vector<BrushStroke> unchanged = {line};
+    EXPECT(!mask::decode_brush_strokes(bad, unchanged) && unchanged.size() == 1);
+  }
+  EXPECT(mask::parse_brush_mask_id(mask::brush_mask_id(text), parsed) && !mask::parse_brush_mask_id("brush:", parsed) &&
+         !mask::parse_brush_mask_id("gradient:linear:1:2:3:4:5:100", parsed));
+  // Profile.
+  EXPECT(mask::brush_profile(0.0, 100.0, 0) == 1.0 && mask::brush_profile(49.0, 100.0, 0) == 1.0 &&
+         mask::brush_profile(51.0, 100.0, 0) == 0.0);
+  EXPECT(mask::brush_profile(0.0, 100.0, 100) == 1.0 && mask::brush_profile(1000.0, 100.0, 100) == 0.0);
+  EXPECT(std::abs(mask::brush_profile(105.0, 100.0, 100) - 0.5) < 0.05);  // half height at 1.05 x the size (radius), as measured
+  EXPECT(mask::brush_outer_radius(100.0, 100) > mask::brush_outer_radius(100.0, 50));
+
+  const auto render = [](const std::vector<BrushStroke>& strokes, std::uint32_t width, std::uint32_t height) {
+    render::RenderDescription description;
+    render::RenderOperation operation;
+    operation.capability_id = "color.local";
+    operation.mask_ids = {mask::brush_mask_id(mask::encode_brush_strokes(strokes))};
+    description.operations = {operation};
+    std::vector<gpu::RenderMask> masks;
+    gpu::add_brush_masks(description, width, height, masks);
+    gpu::add_brush_masks(description, width, height, masks);
+    return masks;
+  };
+  // A hard stroke across a 400 x 200 frame: size 1000/10000 of the long edge = 40 px wide, centred on y = 100.
+  auto masks = render({line}, 400, 200);
+  EXPECT(masks.size() == 1 && masks[0].alpha.size() == 400u * 200u);
+  if (masks.size() == 1 && masks[0].alpha.size() == 400u * 200u) {
+    const auto at = [&](int x, int y) { return masks[0].alpha[static_cast<std::size_t>(y) * 400 + x]; };
+    EXPECT(at(200, 100) == 255 && at(200, 85) == 255 && at(200, 115) == 255);
+    EXPECT(at(200, 70) == 0 && at(200, 130) == 0);   // outside the 40 px width
+    EXPECT(at(10, 100) == 0 && at(390, 100) == 0);   // beyond the stroke ends (round caps reach 20 px)
+    int rows = 0;
+    for (int y = 0; y < 200; ++y) rows += at(200, y) > 128 ? 1 : 0;
+    EXPECT(rows >= 39 && rows <= 41);
+  }
+  // Density caps the stroke; low flow on a single pass still reaches the cap along a dense path.
+  BrushStroke faint = line;
+  faint.density = 50;
+  masks = render({faint}, 400, 200);
+  if (!masks.empty()) EXPECT(masks[0].alpha[100u * 400 + 200] >= 126 && masks[0].alpha[100u * 400 + 200] <= 129);
+  BrushStroke slow = line;
+  slow.flow = 10;
+  slow.points = {{5000, 5000}};  // a single dab: one stamp at 10% flow
+  masks = render({slow}, 400, 200);
+  if (!masks.empty()) EXPECT(masks[0].alpha[100u * 400 + 200] >= 24 && masks[0].alpha[100u * 400 + 200] <= 27);
+  // Eraser removes, two strokes merge as a union.
+  BrushStroke vertical = line;
+  vertical.points = {{5000, 1000}, {5000, 9000}};
+  masks = render({line, vertical}, 400, 200);
+  if (!masks.empty()) {
+    EXPECT(masks[0].alpha[100u * 400 + 50] == 255 && masks[0].alpha[40u * 400 + 200] == 255);  // each stroke is there
+    EXPECT(masks[0].alpha[10u * 400 + 50] == 0);
+  }
+  BrushStroke eraser = line;
+  eraser.erase = true;
+  eraser.points = {{4000, 5000}, {6000, 5000}};
+  masks = render({line, eraser}, 400, 200);
+  if (!masks.empty()) {
+    EXPECT(masks[0].alpha[100u * 400 + 200] == 0);    // erased in the middle
+    EXPECT(masks[0].alpha[100u * 400 + 50] == 255);   // still there at the ends
+  }
+  // The same strokes at another size give the same picture (positions and sizes are fractions).
+  const auto small = render({line}, 200, 100);
+  const auto big = render({line}, 800, 400);
+  if (!small.empty() && !big.empty()) {
+    EXPECT(small[0].alpha[50u * 200 + 100] == 255 && big[0].alpha[200u * 800 + 400] == 255);
+    EXPECT(small[0].alpha[35u * 200 + 100] == 0 && big[0].alpha[140u * 800 + 400] == 0);  // 15 px up from the middle at 400 high
+  }
+  // Brush leaves inside combined and inverted ids are generated; an inverted brush is 255 - brush.
+  render::RenderDescription description;
+  render::RenderOperation operation;
+  operation.capability_id = "color.local";
+  const std::string id = mask::brush_mask_id(text);
+  operation.mask_ids = {mask::combined_mask_id({{false, mask::invert_mask_id(id)}, {true, "gradient:linear:50:50:0:10:0:100"}})};
+  description.operations = {operation};
+  std::vector<gpu::RenderMask> pieces;
+  gpu::add_brush_masks(description, 400, 200, pieces);
+  gpu::add_gradient_masks(description, 400, 200, pieces);
+  gpu::add_invert_masks(description, pieces);
+  gpu::add_combined_masks(description, pieces);
+  EXPECT(pieces.size() == 4);
+  for (const auto& m : pieces) {
+    if (m.id == mask::invert_mask_id(id)) EXPECT(m.alpha[100u * 400 + 200] == 0 && m.alpha[10u * 400 + 200] == 255);
+  }
+}
+
 int main() {
+  test_brush_masks();
   test_invert_masks();
   test_range_masks();
   test_combined_masks();

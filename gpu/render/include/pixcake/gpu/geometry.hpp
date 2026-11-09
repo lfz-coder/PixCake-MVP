@@ -36,6 +36,11 @@ void add_gradient_masks(const pixcake::render::RenderDescription& description, s
 void add_range_masks(const pixcake::render::RenderDescription& description, const RgbaImage& image,
                      std::vector<RenderMask>& masks);
 
+// 画笔蒙版（"brush:<笔触文本>"，含组合、反相里的子项）：按画幅（几何变换之后）把笔触画成蒙版。笔触位置按画面比例、笔的
+// 大小按长边比例，所以预览和导出同一块。已有同编号的不重复生成；编号不合法的忽略。要在 add_invert_masks 之前调用。
+void add_brush_masks(const pixcake::render::RenderDescription& description, std::uint32_t width, std::uint32_t height,
+                     std::vector<RenderMask>& masks);
+
 // 反相蒙版（"invert:<子项编号>"，单独的或组合编号里的子项）：子项蒙版有了之后生成 255 − 子项。子项蒙版缺了就不生成。
 // 要在 add_gradient_masks、add_range_masks 之后、add_combined_masks 之前调用。
 void add_invert_masks(const pixcake::render::RenderDescription& description, std::vector<RenderMask>& masks);

@@ -84,7 +84,7 @@ add_test(NAME test_history_restart COMMAND test_history_restart)
 
 add_executable(test_sync kernel/sync/test_sync.cpp)
 target_include_directories(test_sync PRIVATE ${CMAKE_SOURCE_DIR}/tests)
-target_link_libraries(test_sync PRIVATE pixcake_sync pixcake_warnings)
+target_link_libraries(test_sync PRIVATE pixcake_sync pixcake_capability_modules pixcake_warnings)
 add_test(NAME test_sync COMMAND test_sync)
 
 add_executable(test_capability_registry kernel/capability/test_capability_registry.cpp)

@@ -1,5 +1,6 @@
 #include "pixcake/project_session/project_session.hpp"
 
+#include "pixcake/capabilities/module_set.hpp"
 #include "pixcake/capability/capability_registry.hpp"
 #include "pixcake/persist/atomic_file.hpp"
 #include "pixcake/preset/preset_codec.hpp"
@@ -410,7 +411,13 @@ ResultCode ProjectSession::save_preset(std::int64_t item, const PresetDraft& dra
   for (const auto& id : draft.capability_ids) {
     const auto fragment = document->fragment(id);
     if (!fragment) continue;  // 勾了但这张图没调：不存
-    preset.fragments.push_back({id, fragment->version, fragment->inner});
+    // 经能力模块过滤：自定义画笔蒙版不能存进预设（需求 §10.8），其余原样。
+    const FragmentTransfer moved = transfer_fragment(id, FragmentBytes{fragment->version, fragment->inner}, std::nullopt);
+    if (moved.code != ResultCode::Ok || !moved.fragment) {
+      diagnostic = "a checked function cannot be saved into a preset";
+      return moved.code != ResultCode::Ok ? moved.code : ResultCode::StateConflict;
+    }
+    preset.fragments.push_back({id, moved.fragment->version, moved.fragment->inner});
   }
   std::vector<std::string> ids;
   for (const auto& fragment : preset.fragments) ids.push_back(fragment.capability_id);
