@@ -89,7 +89,7 @@ renderd 每个进程只服务一个连接：30 秒内没有壳层连接退出码
 |---|---|---|
 | 项目会话 | `services/project_session`：`ProjectSession`（无 Qt） | 打开 `<数据目录>/projects.sqlite`；`import_new_project` 按需求 5.2 命名（第一个文件夹名，否则第一张图片去扩展名），文件夹展开为其中的 jpg/jpeg/png/tif/tiff/bmp（不递归、跳过隐藏文件、按名排序），每个文件经 `MacSourceAccess::create_bookmark` 取书签，经 `BusinessCommands` 创建项目和导入；逐文件失败原因（O-14）；`resolve_photo` 经书签取原图路径，挪走或删除时按项目库规则标“原文件缺失”且不打开；`mark_edited` |
 | 预览会话 | `PreviewSessionOptions::document_id`、`on_committed` | 项目里的照片文档名为 `photo-<编号>.pxedit`，放在 `<数据目录>/documents`；提交成功后把照片标成“已编辑” |
-| 控制器 | `ShellController` | 导入：主页新建项目并进入精修打开第一张（需求 5.3）；在项目内追加。主页项目列表点击进入项目；图库双击照片进入精修；回主页关闭照片（renderd 退出）。导入和打开失败的原因作为页面提示 |
+| 控制器 | `ShellController` | 导入：主页新建项目并进入精修打开第一张（需求 5.3）；在项目内追加。主页项目列表单击选中、双击进入项目；图库双击照片进入图库单视图；回主页关闭照片（renderd 退出）。导入和打开失败的原因作为页面提示 |
 | 主页 | `home_page.cpp` | 导入区（`PixCakeDropPanel`）点击选图片、拖入文件或文件夹；“导入文件夹”按钮；项目列表来自项目库 |
 | 图库 | `library_page.cpp` | `QListWidget` 图标模式列出当前项目照片（文件名、异常原图状态、已编辑），双击进精修；“＋ 导入照片”追加 |
 | 主题 | `pixcake_theme.hpp` | 照片列表与滚动条的深色样式 |

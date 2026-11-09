@@ -152,7 +152,7 @@ void test_q12_pages_only_draw() {
       }
     }
   }
-  if (pages != 5) fail("expected one page file per page (login, home, library, refine, creative), found " +
+  if (pages != 6) fail("expected one page file per page (login, home, local-projects, library, refine, creative), found " +
                        std::to_string(pages));
 }
 

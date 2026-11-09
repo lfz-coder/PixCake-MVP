@@ -33,7 +33,7 @@ QLabel* sectionTitle(const QString& label) {
   return title;
 }
 
-// 项目列表（需求 5.2）：本机的项目，点击进入（默认精修，需求 5.3）。没有项目时是空状态。
+// 项目列表（需求 5.2）：单击选中，双击打开项目（需求 5.3）。没有项目时是空状态。
 QFrame* projectList(QWidget* parent, PageActions* actions) {
   const auto projects = actions->projects();
   if (projects.empty()) return sectionCard(parent, qtext("home.projects.empty"), false);
@@ -111,10 +111,13 @@ QWidget* buildHomePage(const PageContext& context) {
   nav_layout->addWidget(brand_row);
   nav_layout->addSpacing(18);
   for (const auto& entry : ui::shell::page_list("home-nav")) {
-    auto* button = itemAction("home-nav", entry, nav, entry.id == "home" || entry.id == "trash");
+    auto* button = itemAction("home-nav", entry, nav,
+                              entry.id == "home" || entry.id == "local" || entry.id == "trash");
     button->setObjectName(QStringLiteral("home-nav"));
     if (entry.id == "trash") {
       QObject::connect(button, &QPushButton::clicked, button, [button, actions] { openTrashDialog(button, actions); });
+    } else if (entry.id == "local") {
+      QObject::connect(button, &QPushButton::clicked, button, [actions] { actions->request_page(Page::LocalProjects); });
     }
     button->setProperty("selected", entry.id == "home");
     nav_layout->addWidget(button);

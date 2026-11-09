@@ -69,12 +69,113 @@ namespace panels = pixcake::ui::panels;
 // 只在开发构建：--page 直接预览某个页面（门禁规则 18）。发布构建由会话决定首屏（安全清单 S-25）。
 Page parse_page(const QString& value) {
   if (value == QStringLiteral("home")) return Page::Home;
+  if (value == QStringLiteral("local-projects")) return Page::LocalProjects;
   if (value == QStringLiteral("library")) return Page::Library;
   if (value == QStringLiteral("refine")) return Page::Refine;
   if (value == QStringLiteral("creative")) return Page::Creative;
   return Page::Login;
 }
 #endif
+
+// 官方图标条只在鼠标悬停时显示名字（图 1 的「参考线」）。页签、导出、像素助手、会员续费
+// 在官方顶栏里一直有字，其余顶栏图标、上下工具条和右侧图标栏不能把文案画在按钮上。
+int check_icon_hover_chrome(const QWidget& window) {
+  const QString assistant = QString::fromStdString(pixcake::ui::shell::page_item("refine-top", "assistant").text);
+  const QString exported = QString::fromStdString(pixcake::ui::shell::page_item("refine-global", "export").text);
+  const QString membership = QString::fromStdString(pixcake::ui::shell::page_item("home-toolbar", "membership").text);
+  const auto hover_ok = [](const QAbstractButton* button) {
+    return button->text().isEmpty() && !button->accessibleName().isEmpty() &&
+           button->toolTip() == button->accessibleName() && !button->icon().isNull();
+  };
+  const auto caption_ok = [](const QAbstractButton* button) {
+    return !button->text().isEmpty() && button->text() == button->accessibleName();
+  };
+  if (const auto* top = window.findChild<QFrame*>(QStringLiteral("workspace-top"))) {
+    const auto buttons = top->findChildren<QPushButton*>();
+    if (buttons.isEmpty()) {
+      qCritical("workspace top has no buttons");
+      return 8;
+    }
+    for (const auto* button : buttons) {
+      const QString name = button->accessibleName();
+      if (button->property("page-tab").toBool() || name == assistant || name == exported || name == membership) {
+        if (!caption_ok(button)) {
+          qCritical("top caption missing: %s", qPrintable(name));
+          return 8;
+        }
+      } else if (!hover_ok(button)) {
+        qCritical("top button still shows '%s' (%s)", qPrintable(button->text()), qPrintable(name));
+        return 8;
+      }
+    }
+  }
+  for (auto* button : window.findChildren<QPushButton*>(QStringLiteral("home-toolbar"))) {
+    const bool keep = button->accessibleName() == membership;
+    if (keep ? !caption_ok(button) : !hover_ok(button)) {
+      qCritical("home toolbar caption: %s", qPrintable(button->accessibleName()));
+      return 8;
+    }
+  }
+  const bool refine = window.findChild<QWidget*>(QStringLiteral("refine-page")) != nullptr;
+  const bool creative = window.findChild<QWidget*>(QStringLiteral("creative-page")) != nullptr;
+  const bool library = window.findChild<QWidget*>(QStringLiteral("library-page")) != nullptr;
+  const auto tools = window.findChildren<QFrame*>(QStringLiteral("workspace-tool-button"));
+  if ((refine || creative) && tools.isEmpty()) {
+    qCritical("missing workspace tools");
+    return 8;
+  }
+  for (const auto* tool : tools) {
+    if (tool->findChild<QLabel*>(QStringLiteral("workspace-tool-label")) != nullptr || tool->toolTip().isEmpty() ||
+        tool->toolTip() != tool->accessibleName()) {
+      qCritical("workspace tool shows a caption: %s", qPrintable(tool->accessibleName()));
+      return 8;
+    }
+    const auto* glyph = tool->findChild<QLabel*>(QStringLiteral("shell-icon"));
+    const auto* pending = tool->findChild<QLabel*>(QStringLiteral("pending-icon"));
+    if ((glyph == nullptr) == (pending == nullptr) || (glyph != nullptr && glyph->toolTip() != tool->toolTip()) ||
+        (pending != nullptr && pending->toolTip() != tool->toolTip())) {
+      qCritical("workspace tool icon/tooltip: %s", qPrintable(tool->accessibleName()));
+      return 8;
+    }
+  }
+  if (refine || creative || library) {
+    const auto* thumbs = window.findChild<QFrame*>(QStringLiteral("workspace-thumbs"));
+    if (thumbs == nullptr) {
+      qCritical("missing thumbnail strip");
+      return 8;
+    }
+    for (const auto* button : thumbs->findChildren<QPushButton*>()) {
+      if (button->objectName() == QStringLiteral("icon-button") ||
+          button->objectName() == QStringLiteral("thumbs-selected")) {
+        continue;
+      }
+      if (!hover_ok(button)) {
+        qCritical("thumbnail button still shows '%s' (%s)", qPrintable(button->text()),
+                  qPrintable(button->accessibleName()));
+        return 8;
+      }
+    }
+  }
+  if (refine) {
+    int rails = 0;
+    for (const auto* rail : window.findChildren<QToolButton*>()) {
+      if (!rail->objectName().startsWith(QStringLiteral("refine-rail-"))) continue;
+      ++rails;
+      const QString id = rail->objectName().mid(QStringLiteral("refine-rail-").size());
+      const bool uploaded =
+          !pixcake::shell::shellAssetFile(QStringLiteral("refine-modules/") + id + QStringLiteral(".svg")).isEmpty();
+      if (!hover_ok(rail) || rail->property("pending-icon").toBool() == uploaded) {
+        qCritical("refine rail caption or icon: %s", qPrintable(rail->objectName()));
+        return 8;
+      }
+    }
+    if (rails == 0) {
+      qCritical("missing refine rail");
+      return 8;
+    }
+  }
+  return 0;
+}
 
 // 精修某个面板的标签全部按文案表画出，且都禁用。
 int check_disabled_labels(const QWidget& window, const char* object_name, std::string_view list,
@@ -255,7 +356,7 @@ int check_refine_sliders(const QWidget& window) {
 
 // Q-12：页签点击经 ShellController 改显示模型并重画；旧页面删除，新页面出现。
 int check_tab_navigation(QWidget& window, Page first_page) {
-  if (first_page == Page::Login || first_page == Page::Home) return 0;
+  if (first_page == Page::Login || first_page == Page::Home || first_page == Page::LocalProjects) return 0;
   const bool to_refine = first_page == Page::Library;
   const auto& target = pixcake::ui::shell::page_item("page-switch", to_refine ? "refine" : "library");
   const QString before = first_page == Page::Library ? QStringLiteral("library-page")
@@ -287,6 +388,16 @@ int smoke(QWidget& window, Page first_page) {
   if (first_page == Page::Refine) {
     if (const int tracks = check_track_sliders(window); tracks != 0) return tracks;
   }
+  if (const int chrome = check_icon_hover_chrome(window); chrome != 0) return chrome;
+  if (first_page == Page::LocalProjects) {
+    const auto* page = window.findChild<QWidget*>(QStringLiteral("local-projects-page"));
+    const auto* list = window.findChild<QListWidget*>(QStringLiteral("local-projects-list"));
+    const auto* empty = window.findChild<QWidget*>(QStringLiteral("empty-state"));
+    if (page == nullptr || (list == nullptr && empty == nullptr) || (list != nullptr && empty != nullptr)) {
+      qCritical("local projects page has neither a project list nor an empty state");
+      return 7;
+    }
+  }
   if (first_page == Page::Refine) {
     if (const int crop = check_disabled_labels(window, "refine-crop-labels", "refine-crop",
                                                   {"crop-2", "crop-4", "crop-14", "crop-15", "crop-16", "crop-17", "angle"}); crop != 0) return crop;
@@ -309,7 +420,7 @@ int smoke(QWidget& window, Page first_page) {
         return 4;
       }
     }
-    // Development aid: every module page with all its sections open, full height.
+    // Development aid: the whole window, then every module page with all its sections open.
     if (const char* shot = std::getenv("PIXCAKE_SMOKE_SCREENSHOT"); shot != nullptr && *shot != '\0') {
       window.resize(1386, 800);
       QCoreApplication::processEvents();
@@ -1287,7 +1398,7 @@ int smoke_import_flow(pixcake::shell::ShellWindow& window, const std::vector<std
   emit list->itemActivated(item_of(list, edited));
   QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
   const auto* single = dynamic_cast<const pixcake::shell::PixCakeImageView*>(
-      window.findChild<QFrame*>(QStringLiteral("library-single-image")));
+      window.findChild<QWidget*>(QStringLiteral("library-single-image")));
   if (!wait_current(window, 60'000) || controller.display().page() != Page::Library ||
       controller.display().library_view() != "single" || controller.current_photo() != edited || single == nullptr ||
       single->image().isNull()) {
@@ -2425,13 +2536,13 @@ int main(int argc, char** argv) {
 #ifdef PIXCAKE_DEV_PAGES
   QString default_page = QStringLiteral("login");
   const auto executable = QFileInfo(QString::fromLocal8Bit(argv[0])).baseName();
-  for (const auto& page : {QStringLiteral("home"), QStringLiteral("library"), QStringLiteral("refine"),
-                           QStringLiteral("creative")}) {
+  for (const auto& page : {QStringLiteral("home"), QStringLiteral("local-projects"), QStringLiteral("library"),
+                           QStringLiteral("refine"), QStringLiteral("creative")}) {
     if (executable.endsWith(QStringLiteral("-") + page)) default_page = page;
   }
   QCommandLineOption page_option(QStringList() << QStringLiteral("page"),
                                  QStringLiteral("Development build only: display a read-only shell page: login, "
-                                                "home, library, refine, creative."),
+                                                "home, local-projects, library, refine, creative."),
                                  QStringLiteral("page"), default_page);
   parser.addOption(page_option);
   QCommandLineOption dev_sign_in_option(QStringList() << QStringLiteral("dev-sign-in"),

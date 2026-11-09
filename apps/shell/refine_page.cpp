@@ -25,6 +25,9 @@
 #include <QTreeWidget>
 #include <QSignalBlocker>
 #include <QMenu>
+#include <QActionGroup>
+#include <QWidgetAction>
+#include <QGraphicsDropShadowEffect>
 #include <QKeySequence>
 #include <QMouseEvent>
 #include <QPointer>
@@ -1920,7 +1923,7 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
     // 画笔设置显示着且“在画布上拖动”打开：光标圈是笔的大小（硬边直径，图像像素按显示比例换算）。
     if (!view || !state->draw || !state->brush_on || state->mask < 0 || view->image().isNull()) return 0.0;
     const QRectF shown = view->imageRect();
-    return shown.isEmpty() ? 0.0 : state->brush_size * shown.width() / view->image().width();
+    return shown.isEmpty() ? 0.0 : state->brush_size * shown.width() / view->logicalImageSize().width();
   };
   // 画笔快捷键：K 选画笔并打开“在画布上拖动”；其余调当前画笔设置的滑杆（每次 10），只在画笔设置显示时起作用。
   bindShortcut(modules, "brush-tool", [=] {
@@ -1949,7 +1952,7 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
   hooks->paint = [=](QPainter& painter, const QRectF& rect) {
     if (state->drag_brush && !state->stroke_points.empty() && view && !view->image().isNull()) {
       // 正在画的一笔：按笔的大小（图像像素）换算成显示像素，半透明红色，圆头。
-      const double scale = rect.width() / view->image().width();
+      const double scale = rect.width() / view->logicalImageSize().width();
       QPen pen(QColor(235, 64, 52, 150));
       pen.setWidthF(std::max(1.0, state->brush_size * scale));
       pen.setCapStyle(Qt::RoundCap);
@@ -2239,6 +2242,19 @@ class ClickFilter final : public QObject {
   std::function<void()> run_;
 };
 
+// The reset control is a click-only dropdown.  Keep its accessible tooltip
+// text for existing AX/source checks, but suppress the native hover bubble.
+class SuppressToolTipFilter final : public QObject {
+ public:
+  using QObject::QObject;
+
+ protected:
+  bool eventFilter(QObject* watched, QEvent* event) override {
+    if (event->type() == QEvent::ToolTip) return true;
+    return QObject::eventFilter(watched, event);
+  }
+};
+
 class ZoomPopupRow final : public QFrame {
  public:
   ZoomPopupRow(int index, QString label, QString shortcut, QWidget* parent, std::function<void(int)> activate)
@@ -2362,6 +2378,55 @@ class ZoomPopupCombo final : public QComboBox {
 
 // One hit target for the status bar: the selected edge is blue while the
 // explanatory copy stays muted, matching the dark editor footer.
+class PreviewSizeStatus final : public QFrame {
+ public:
+  explicit PreviewSizeStatus(QWidget* parent = nullptr) : QFrame(parent) {
+    setObjectName(QStringLiteral("refine-preview-status"));
+    setAttribute(Qt::WA_Hover, true);
+    setCursor(Qt::PointingHandCursor);
+    auto* layout = new QHBoxLayout(this);
+    layout->setContentsMargins(12, 5, 12, 5);
+    layout->setSpacing(6);
+
+    auto* info = new QLabel(qtext("refine.preview-size.info-icon"), this);
+    info->setObjectName(QStringLiteral("refine-preview-status-info"));
+    info->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    info->setAlignment(Qt::AlignCenter);
+    layout->addWidget(info, 0, Qt::AlignVCenter);
+
+    text_ = new QLabel(this);
+    text_->setObjectName(QStringLiteral("refine-preview-status-text"));
+    text_->setTextFormat(Qt::RichText);
+    text_->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    text_->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
+    layout->addWidget(text_, 0, Qt::AlignVCenter);
+    layout->addStretch(1);
+  }
+
+  void setMaxEdge(std::uint32_t edge) {
+    text_->setText(QStringLiteral("<span style=\"color:#2F7CF6;font-weight:500;\">%1px</span>"
+                                  "<span style=\"color:#B8B8BF;\"> %2</span>")
+                       .arg(edge)
+                       .arg(qtext("refine.preview-size.status").toHtmlEscaped()));
+  }
+
+  void onClicked(std::function<void()> callback) { callback_ = std::move(callback); }
+
+ protected:
+  void mouseReleaseEvent(QMouseEvent* event) override {
+    if (event->button() == Qt::LeftButton && rect().contains(event->position().toPoint()) && callback_) {
+      callback_();
+      event->accept();
+      return;
+    }
+    QFrame::mouseReleaseEvent(event);
+  }
+
+ private:
+  QLabel* text_ = nullptr;
+  std::function<void()> callback_;
+};
+
 void repolish(QWidget* widget) {
   widget->style()->unpolish(widget);
   widget->style()->polish(widget);
@@ -2389,6 +2454,7 @@ QWidget* buildRefinePage(const PageContext& context) {
   auto* back = iconAction(qtext("refine.back.button"), iconPath("refine-top", "back"), top, true);
   back->setObjectName(QStringLiteral("top-action"));
   back->setAccessibleName(qs(copyItem("refine-top", "back").text));
+  showNameOnHover(back);
   PageActions* actions = &context.actions;
   QObject::connect(back, &QPushButton::clicked, back, [actions] { actions->request_page(Page::Home); });
   // 单图撤销 Cmd+Z、重做 Shift+Cmd+Z（需求 §8、§23.1；Qt 的 Ctrl 在 macOS 上就是 Cmd）。
@@ -2402,7 +2468,9 @@ QWidget* buildRefinePage(const PageContext& context) {
   bindShortcut(page, "copy-effect", [actions] { actions->request_copy_effect(); });
   bindShortcut(page, "paste-effect", [actions] { actions->request_paste_effect(); });
   top_layout->addWidget(back);
-  top_layout->addWidget(itemAction("refine-top", copyItem("refine-top", "search"), top));
+  auto* search = itemAction("refine-top", copyItem("refine-top", "search"), top);
+  showNameOnHover(search);
+  top_layout->addWidget(search);
   top_layout->addWidget(itemAction("refine-top", copyItem("refine-top", "assistant"), top));
   top_layout->addStretch();
   auto* tabs = new QHBoxLayout;
@@ -2421,6 +2489,8 @@ QWidget* buildRefinePage(const PageContext& context) {
   QFrame* hand_tool = nullptr;
   QFrame* guides_tool = nullptr;
   QFrame* preset_tool = nullptr;
+  QFrame* reset_tool = nullptr;
+  bool trailing_tools_started = false;
   for (const auto& entry : ui::shell::page_list("refine-tools")) {
     // 显示比例是显示层状态：点击后直接展开比例下拉框，不把比例写入项目参数。
     if (entry.id == "zoom") {
@@ -2456,13 +2526,71 @@ QWidget* buildRefinePage(const PageContext& context) {
       toolbar_layout->addWidget(zoom_combo);
       continue;
     }
+    if (entry.id == "reset" && !trailing_tools_started) {
+      // Keep the editing tools together on the left and align the two global
+      // effect actions with the right edge of the toolbar.
+      toolbar_layout->addStretch(1);
+      trailing_tools_started = true;
+    }
     auto* tool = workspaceTool("refine-tools", entry, toolbar);
     if (entry.id == "hand") hand_tool = tool;
     if (entry.id == "guides") guides_tool = tool;
     if (entry.id == "preset") preset_tool = tool;
+    if (entry.id == "reset") reset_tool = tool;
     toolbar_layout->addWidget(tool);
   }
-  toolbar_layout->addStretch();
+  if (auto* reset = dynamic_cast<PixCakeWorkspaceTool*>(reset_tool)) {
+    reset->setDropdownIndicator(true);
+    reset->setToolTip(reset->accessibleName());
+    reset->setAttribute(Qt::WA_AlwaysShowToolTips, false);
+    auto* suppress_tooltip = new SuppressToolTipFilter(reset);
+    reset->installEventFilter(suppress_tooltip);
+    for (auto* label : reset->findChildren<QLabel*>()) label->installEventFilter(suppress_tooltip);
+    reset->onClicked([actions, reset](Qt::KeyboardModifiers) {
+      // Selecting an item rebuilds the refine page.  Keep the popup unparented
+      // so it remains valid while the old toolbar row is being destroyed.
+      QMenu menu;
+      menu.setSeparatorsCollapsible(false);
+      menu.setStyleSheet(QStringLiteral(R"QSS(
+        QMenu {
+          background: #3C3C3E;
+          color: #FFFFFF;
+          border: 1px solid #55555A;
+          border-radius: 10px;
+          padding: 7px 0px;
+          font-family: "SF Pro Text", "SF Pro Display", "PingFang SC", "-apple-system", sans-serif;
+          font-size: 13px;
+        }
+        QMenu::item {
+          min-height: 34px;
+          padding: 0px 18px;
+          margin: 1px 6px;
+          border-radius: 6px;
+          color: #FFFFFF;
+          background: transparent;
+        }
+        QMenu::item:selected { background: #515154; }
+        QMenu::separator {
+          height: 1px;
+          background: #5A5A60;
+          margin: 7px 12px;
+        }
+      )QSS"));
+      const std::array<std::pair<const char*, ResetScope>, 4> entries = {
+          std::pair{"refine.reset.all", ResetScope::All},
+          std::pair{"refine.reset.portrait", ResetScope::Portrait},
+          std::pair{"refine.reset.color", ResetScope::Color},
+          std::pair{"refine.reset.post", ResetScope::Post},
+      };
+      for (std::size_t index = 0; index < entries.size(); ++index) {
+        if (index == 1) menu.addSeparator();
+        QAction* item = menu.addAction(qtext(entries[index].first));
+        const ResetScope scope = entries[index].second;
+        QObject::connect(item, &QAction::triggered, &menu, [actions, scope] { actions->request_reset(scope); });
+      }
+      menu.exec(reset->mapToGlobal(QPoint(0, reset->height())));
+    });
+  }
   if (guides_tool != nullptr) {
     guides_tool->setEnabled(actions->has_photo());
     if (!actions->has_photo()) guides_tool->setAccessibleDescription(qtext("refine.preview"));
@@ -2483,7 +2611,91 @@ QWidget* buildRefinePage(const PageContext& context) {
     preview->setAlignment(Qt::AlignCenter);
     canvas_layout->addWidget(preview, 1);
   }
-  canvas_layout->addWidget(action(qs(copyItem("refine-canvas", "compare").text), canvas), 0, Qt::AlignRight);
+  auto* canvas_status = new QHBoxLayout;
+  canvas_status->setContentsMargins(0, 0, 0, 0);
+  canvas_status->setSpacing(0);
+  auto* preview_status = new PreviewSizeStatus(canvas);
+  preview_status->setMaxEdge(actions->preview_max_edge());
+  preview_status->setAccessibleName(qtext("refine.preview-size.accessible"));
+  preview_status->onClicked([preview_status, actions] {
+    // Keep the popup unparented: selecting an item rebuilds the refine page,
+    // which destroys the status row while QMenu::exec() is still unwinding.
+    // A stack menu must therefore not be a child of that row.
+    QMenu menu;
+    menu.setAttribute(Qt::WA_TranslucentBackground);
+    menu.setMinimumWidth(286);
+    menu.setStyleSheet(QStringLiteral(R"QSS(
+      QMenu {
+        background: #3A3A40;
+        color: #FFFFFF;
+        border: none;
+        border-radius: 10px;
+        padding: 10px 12px;
+        font-family: "SF Pro Text", "SF Pro Display", "PingFang SC", "-apple-system", sans-serif;
+        font-size: 17px;
+      }
+      QMenu::item {
+        min-height: 36px;
+        padding: 0 14px 0 32px;
+        margin: 2px 0;
+        border-radius: 6px;
+      }
+      QMenu::item:selected { background: #4E4E57; }
+      QMenu::separator {
+        height: 1px;
+        background: #54545C;
+        margin: 10px;
+      }
+      QWidget#refine-preview-menu-info { background: transparent; }
+      QLabel#refine-preview-menu-info-icon { color: #B8B8BF; font-size: 15px; }
+      QLabel#refine-preview-menu-info-text { color: #B8B8BF; font-size: 14px; }
+    )QSS"));
+    auto* shadow = new QGraphicsDropShadowEffect(&menu);
+    shadow->setColor(QColor(0, 0, 0, 90));
+    shadow->setOffset(0, 4);
+    shadow->setBlurRadius(12);
+    menu.setGraphicsEffect(shadow);
+
+    auto* group = new QActionGroup(&menu);
+    group->setExclusive(true);
+    const std::array<std::uint32_t, 3> edges = {2000, 3000, 4000};
+    const std::uint32_t current = actions->preview_max_edge();
+    for (const std::uint32_t edge : edges) {
+      auto* item = menu.addAction(QStringLiteral("%1px").arg(edge));
+      item->setCheckable(true);
+      item->setChecked(edge == current);
+      group->addAction(item);
+      QObject::connect(item, &QAction::triggered, &menu, [actions, edge] {
+        actions->request_preview_max_edge(edge);
+      });
+    }
+    menu.addSeparator();
+
+    auto* info_action = new QWidgetAction(&menu);
+    auto* info_widget = new QWidget(&menu);
+    info_widget->setObjectName(QStringLiteral("refine-preview-menu-info"));
+    auto* info_layout = new QHBoxLayout(info_widget);
+    info_layout->setContentsMargins(4, 3, 4, 2);
+    info_layout->setSpacing(7);
+    auto* info_icon = new QLabel(qtext("refine.preview-size.info-icon"), info_widget);
+    info_icon->setObjectName(QStringLiteral("refine-preview-menu-info-icon"));
+    info_icon->setAlignment(Qt::AlignTop | Qt::AlignHCenter);
+    auto* info_text = new QLabel(qtext("refine.preview-size.info"), info_widget);
+    info_text->setObjectName(QStringLiteral("refine-preview-menu-info-text"));
+    info_text->setWordWrap(true);
+    info_text->setMinimumWidth(214);
+    info_layout->addWidget(info_icon, 0, Qt::AlignTop);
+    info_layout->addWidget(info_text, 1, Qt::AlignTop);
+    info_action->setDefaultWidget(info_widget);
+    menu.addAction(info_action);
+
+    menu.adjustSize();
+    const QPoint origin = preview_status->mapToGlobal(QPoint(0, -menu.sizeHint().height() - 4));
+    menu.exec(origin);
+  });
+  canvas_status->addWidget(preview_status, 0, Qt::AlignLeft | Qt::AlignVCenter);
+  canvas_status->addStretch(1);
+  canvas_layout->addLayout(canvas_status);
   center->addWidget(canvas, 1);
 
   // 右侧（官方 9.3.0 的层级）：预设栏 | 模块面板 | 图标栏。图标栏选一个模块，面板只显示这一个模块；色彩调节页里
@@ -2545,10 +2757,11 @@ QWidget* buildRefinePage(const PageContext& context) {
     if (!description.isEmpty()) button->setAccessibleDescription(description);
     // 图标在 assets/refine-modules/<编号>.svg。没有文件就用 pending-icon，名字只在悬停时出现。
     const QString asset = QStringLiteral("refine-modules/") + qs(entry.id) + QStringLiteral(".svg");
-    if (!shellAssetFile(asset).isEmpty()) {
-      applyAssetIcon(button, asset, 20);
-      button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-    }
+    const bool uploaded = !shellAssetFile(asset).isEmpty();
+    if (uploaded) applyAssetIcon(button, asset, 20);
+    button->setProperty("pending-icon", !uploaded);
+    button->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    showNameOnHover(button, 20);
     button->setCursor(Qt::PointingHandCursor);
     rail_group->addButton(button, index);
     rail_layout->addWidget(button, 0, Qt::AlignHCenter);
@@ -2628,13 +2841,30 @@ QWidget* buildRefinePage(const PageContext& context) {
       if (view) view->setHandTool(true);
     });
     std::vector<QPointer<PixCakeHistogram>> charts(histograms.begin(), histograms.end());
+    image_view->setCompareMode(actions->canvas_view_mode() == CanvasViewMode::Compare);
+    image_view->setCompareHint(qtext("refine.compare.hint"));
+    image_view->onOriginalPreviewChanged([actions](bool visible) {
+      actions->request_original_preview(visible);
+    });
     actions->watch_preview(image_view, [view, charts](const PreviewView& update) {
       if (view) {
-        if (!update.image.isNull()) view->setImage(update.image);
+        const QImage& shown = update.showing_original && !update.original_image.isNull()
+                                  ? update.original_image
+                                  : update.image;
+        if (!shown.isNull()) {
+          // The baseline may be the 600px interactive frame while the edited
+          // canvas keeps the last high-quality logical size for stable zoom.
+          // Use the displayed baseline's own dimensions so its fit geometry
+          // follows the same preview edge policy as the pixels.
+          const QSize logical = update.showing_original ? shown.size() : update.canvas_size;
+          view->setImage(shown, logical);
+        }
         view->setStatus(update.status);
       }
       for (const auto& chart : charts) {
-        if (chart) chart->setHistogram(update.histogram);
+        if (!chart) continue;
+        if (update.histogram_changed) chart->setHistogram(update.histogram);
+        chart->setInteractionHint(update.histogram_frozen);
       }
     });
     image_view->setGuideMenuLabels(qtext("guides.remove"), qtext("guides.remove-all"));

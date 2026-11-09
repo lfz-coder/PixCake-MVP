@@ -133,6 +133,11 @@ class PixCakeWorkspaceTool final : public QFrame {
  public:
   explicit PixCakeWorkspaceTool(QWidget* parent = nullptr) : QFrame(parent) {}
 
+  void setDropdownIndicator(bool enabled) {
+    dropdown_indicator_ = enabled;
+    update();
+  }
+
   void onClicked(std::function<void(Qt::KeyboardModifiers)> callback) {
     clicked_ = std::move(callback);
     setCursor(clicked_ ? Qt::PointingHandCursor : Qt::ArrowCursor);
@@ -155,8 +160,23 @@ class PixCakeWorkspaceTool final : public QFrame {
     QFrame::mouseReleaseEvent(event);
   }
 
+  void paintEvent(QPaintEvent* event) override {
+    QFrame::paintEvent(event);
+    if (!dropdown_indicator_) return;
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(QStringLiteral("#B8B8BF")));
+    const QPointF center(width() - 7.0, height() - 6.0);
+    QPolygonF triangle;
+    triangle << QPointF(center.x() - 3.0, center.y() - 1.5) << QPointF(center.x() + 3.0, center.y() - 1.5)
+             << QPointF(center.x(), center.y() + 2.0);
+    painter.drawPolygon(triangle);
+  }
+
  private:
   std::function<void(Qt::KeyboardModifiers)> clicked_;
+  bool dropdown_indicator_ = false;
 };
 
 class PixCakeStatusStrip final : public QFrame {
@@ -250,6 +270,11 @@ class PixCakeHistogram final : public QFrame {
     histogram_ = histogram;
     update();
   }
+  void setInteractionHint(bool visible) {
+    if (interaction_hint_ == visible) return;
+    interaction_hint_ = visible;
+    update();
+  }
   const ui::panels::RgbHistogram& histogram() const { return histogram_; }
 
  protected:
@@ -260,40 +285,50 @@ class PixCakeHistogram final : public QFrame {
     ground.setColorAt(0.0, QColor(0, 0, 0));
     ground.setColorAt(1.0, QColor(31, 34, 39));
     painter.fillRect(rect(), ground);
-    if (histogram_.peak == 0) return;
-    const qreal span = width();
-    const qreal bottom = height();
-    const qreal tall = height() - 2;
-    const auto path_of = [&](const std::array<std::uint32_t, 256>& bins, bool closed) {
-      QPainterPath path;
-      path.moveTo(0, bottom);
-      for (int i = 0; i < 256; ++i) {
-        const qreal y = bottom - tall * ui::panels::histogram_bar_height(histogram_, bins[static_cast<std::size_t>(i)]);
-        path.lineTo(span * i / 255.0, y);
+    if (histogram_.peak != 0) {
+      const qreal span = width();
+      const qreal bottom = height();
+      const qreal tall = height() - 2;
+      const auto path_of = [&](const std::array<std::uint32_t, 256>& bins, bool closed) {
+        QPainterPath path;
+        path.moveTo(0, bottom);
+        for (int i = 0; i < 256; ++i) {
+          const qreal y = bottom - tall * ui::panels::histogram_bar_height(histogram_, bins[static_cast<std::size_t>(i)]);
+          path.lineTo(span * i / 255.0, y);
+        }
+        path.lineTo(span, bottom);
+        if (closed) path.closeSubpath();
+        return path;
+      };
+      // 线色取自官方截图里最饱和的线像素。
+      const std::array<std::pair<const std::array<std::uint32_t, 256>*, QColor>, 3> channels = {
+          {{&histogram_.red, QColor(205, 20, 38)}, {&histogram_.green, QColor(0, 190, 73)}, {&histogram_.blue, QColor(0, 90, 255)}}};
+      painter.setPen(Qt::NoPen);
+      for (const auto& [bins, color] : channels) {
+        QColor fill = color;
+        fill.setAlpha(79);  // 31%
+        painter.setBrush(fill);
+        painter.drawPath(path_of(*bins, true));
       }
-      path.lineTo(span, bottom);
-      if (closed) path.closeSubpath();
-      return path;
-    };
-    // 线色取自官方截图里最饱和的线像素。
-    const std::array<std::pair<const std::array<std::uint32_t, 256>*, QColor>, 3> channels = {
-        {{&histogram_.red, QColor(205, 20, 38)}, {&histogram_.green, QColor(0, 190, 73)}, {&histogram_.blue, QColor(0, 90, 255)}}};
-    painter.setPen(Qt::NoPen);
-    for (const auto& [bins, color] : channels) {
-      QColor fill = color;
-      fill.setAlpha(79);  // 31%
-      painter.setBrush(fill);
-      painter.drawPath(path_of(*bins, true));
+      painter.setBrush(Qt::NoBrush);
+      for (const auto& [bins, color] : channels) {
+        painter.setPen(QPen(color, 1.0));
+        painter.drawPath(path_of(*bins, false));
+      }
     }
-    painter.setBrush(Qt::NoBrush);
-    for (const auto& [bins, color] : channels) {
-      painter.setPen(QPen(color, 1.0));
-      painter.drawPath(path_of(*bins, false));
+    if (interaction_hint_) {
+      painter.setPen(QColor(184, 184, 191, 220));
+      QFont hint_font = painter.font();
+      hint_font.setPixelSize(11);
+      painter.setFont(hint_font);
+      painter.drawText(rect().adjusted(10, 5, -10, -5), Qt::AlignTop | Qt::AlignRight,
+                       copyText("refine.histogram.interacting"));
     }
   }
 
  private:
   ui::panels::RgbHistogram histogram_;
+  bool interaction_hint_ = false;
 };
 
 // 可折叠分组（色彩调节页的“白平衡”“影调”等）：标题栏是一个可勾选的 QToolButton（左边三角箭头 + 分组名），右侧
@@ -707,9 +742,15 @@ class PixCakeImageView final : public QFrame {
     setFocusPolicy(Qt::StrongFocus);
   }
 
-  void setImage(QImage image) {
-    if (image.cacheKey() != image_.cacheKey()) scaled_preview_ = {};
+  // The interactive frame may be 600px, while logical_size remains the last
+  // high-quality frame's dimensions. The cached display pixmap is scaled into
+  // this stable canvas rect instead of changing fit/zoom geometry.
+  void setImage(QImage image, QSize logical_size = {}) {
+    if (!logical_size.isValid()) logical_size = image.size();
+    const bool pixels_changed = image.cacheKey() != image_.cacheKey();
     image_ = std::move(image);
+    if (pixels_changed || display_pixmap_.isNull()) display_pixmap_ = QPixmap::fromImage(image_);
+    logical_size_ = logical_size;
     status_.clear();
     clampPan();
     if (hovering_) reportPixel();
@@ -723,6 +764,7 @@ class PixCakeImageView final : public QFrame {
     update();
   }
   const QImage& image() const { return image_; }
+  QSize logicalImageSize() const { return logical_size_.isValid() ? logical_size_ : image_.size(); }
   SamplingMode samplingMode() const {
     if (image_.isNull()) return SamplingMode::Direct;
     const QRectF target = imageRect();
@@ -740,7 +782,7 @@ class PixCakeImageView final : public QFrame {
   // while fit mode keeps the historic device-pixel fit behavior.
   double zoom() const { return zoom_; }
   double effectiveZoom() const {
-    return image_.isNull() ? 1.0 : imageRect().width() / image_.width();
+    return image_.isNull() ? 1.0 : imageRect().width() / logicalImageSize().width();
   }
   inline static constexpr std::array<double, 8> zoomLevels = {0.05, 0.5, 1.0, 2.0, 3.0, 4.0, 8.0, 12.0};
   void setZoom(double value) {
@@ -785,6 +827,23 @@ class PixCakeImageView final : public QFrame {
     update();
   }
   bool handTool() const { return hand_tool_; }
+  void setCompareMode(bool enabled) {
+    if (compare_mode_ == enabled) return;
+    compare_mode_ = enabled;
+    if (!enabled && comparison_pressed_) {
+      comparison_pressed_ = false;
+      if (original_preview_changed_) original_preview_changed_(false);
+    }
+    update();
+  }
+  bool compareMode() const { return compare_mode_; }
+  void setCompareHint(QString hint) {
+    compare_hint_ = std::move(hint);
+    update();
+  }
+  void onOriginalPreviewChanged(std::function<void(bool)> callback) {
+    original_preview_changed_ = std::move(callback);
+  }
   void onZoomChanged(std::function<void(double)> callback) { zoom_changed_.push_back(std::move(callback)); }
   void onHandChanged(std::function<void(bool)> callback) { hand_changed_.push_back(std::move(callback)); }
   void setHooks(std::shared_ptr<CanvasHooks> hooks) {
@@ -875,7 +934,11 @@ class PixCakeImageView final : public QFrame {
       guide_selected_.reset();
       update();
     }
-    if (hand_tool_ && (event->button() == Qt::LeftButton || event->button() == Qt::MiddleButton)) {
+    if (compare_mode_ && event->button() == Qt::LeftButton && rect().contains(event->position().toPoint())) {
+      comparison_pressed_ = true;
+      if (original_preview_changed_) original_preview_changed_(true);
+      event->accept();
+    } else if (hand_tool_ && (event->button() == Qt::LeftButton || event->button() == Qt::MiddleButton)) {
       panning_ = true;
       pan_anchor_ = event->position();
       setCursor(Qt::ClosedHandCursor);
@@ -891,6 +954,10 @@ class PixCakeImageView final : public QFrame {
     hover_ = event->position();
     hovering_ = true;
     reportPixel();
+    if (comparison_pressed_) {
+      event->accept();
+      return;
+    }
     if (guide_dragging_ && guide_drag_index_ && guide_moved_) {
       const auto& guide = guides_[*guide_drag_index_];
       const QRectF target(0.0, 0.0, width(), height());
@@ -926,7 +993,11 @@ class PixCakeImageView final : public QFrame {
     QFrame::leaveEvent(event);
   }
   void mouseReleaseEvent(QMouseEvent* event) override {
-    if (guide_dragging_) {
+    if (comparison_pressed_ && event->button() == Qt::LeftButton) {
+      comparison_pressed_ = false;
+      if (original_preview_changed_) original_preview_changed_(false);
+      event->accept();
+    } else if (guide_dragging_) {
       guide_dragging_ = false;
       guide_drag_index_.reset();
       setCursor(hand_tool_ ? Qt::OpenHandCursor : Qt::ArrowCursor);
@@ -994,23 +1065,25 @@ class PixCakeImageView final : public QFrame {
     QPainter painter(this);
     if (!image_.isNull()) {
       const QRectF target = imageRect();
-      const QSize pixels(std::max(1, qRound(target.width() * devicePixelRatioF())),
-                         std::max(1, qRound(target.height() * devicePixelRatioF())));
       const SamplingMode mode = samplingMode();
-      const bool one_to_one = mode == SamplingMode::Direct;
-      const bool shrinking = mode == SamplingMode::DownsamplePyramid;
-      if (shrinking && scaled_preview_.size() != pixels) {
-        scaled_preview_ = downsamplePreview(image_, pixels);
+      painter.setRenderHint(QPainter::SmoothPixmapTransform, mode != SamplingMode::Direct);
+      if (!display_pixmap_.isNull()) {
+        painter.drawPixmap(target, display_pixmap_, QRectF(display_pixmap_.rect()));
+      } else {
+        painter.drawImage(target, image_);
       }
-      // 1:1 keeps source pixels crisp. Upscaling uses Qt's smooth painter
-      // sampler; minification is already filtered into the physical-size cache.
-      painter.setRenderHint(QPainter::SmoothPixmapTransform, !one_to_one);
-      painter.drawImage(target, shrinking && !scaled_preview_.isNull() ? scaled_preview_ : image_);
       if (hooks_ && hooks_->paint) {
         painter.setRenderHint(QPainter::Antialiasing);
         hooks_->paint(painter, target);
       }
       if (guides_visible_) paintGuides(painter, QRectF(0.0, 0.0, width(), height()));
+      if (compare_mode_ && !comparison_pressed_ && !compare_hint_.isEmpty()) {
+        painter.setPen(QColor(255, 255, 255, 135));
+        QFont hint_font = painter.font();
+        hint_font.setPixelSize(12);
+        painter.setFont(hint_font);
+        painter.drawText(rect().adjusted(12, 0, -12, -10), Qt::AlignBottom | Qt::AlignHCenter, compare_hint_);
+      }
       if (!hand_tool_ && hovering_ && hooks_ && hooks_->cursor_diameter && target.contains(hover_)) {
         const double diameter = hooks_->cursor_diameter();
         if (diameter > 0) {
@@ -1029,13 +1102,12 @@ class PixCakeImageView final : public QFrame {
     }
   }
 
- private:
+ public:
+  // Retain this helper for the sampling regression API. The display path uses
+  // the cached pixmap directly and does not resample the image in paintEvent.
   static QImage downsamplePreview(const QImage& source, const QSize& target) {
     if (source.isNull() || !target.isValid()) return {};
     QImage current = source;
-    // A pyramid avoids asking one filter pass to collapse a very large source
-    // into a tiny preview. Repeated smooth half-size passes approximate an
-    // area average while keeping each intermediate image bounded.
     while (current.width() > target.width() * 2 || current.height() > target.height() * 2) {
       const QSize next(std::max(target.width(), (current.width() + 1) / 2),
                        std::max(target.height(), (current.height() + 1) / 2));
@@ -1044,6 +1116,8 @@ class PixCakeImageView final : public QFrame {
     if (current.size() != target) current = current.scaled(target, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
     return current;
   }
+
+ private:
 
   void stepZoom(const QPointF& anchor, bool increase) {
     if (dragging_ || guide_dragging_) return;
@@ -1065,12 +1139,13 @@ class PixCakeImageView final : public QFrame {
   }
   QRectF imageRectWithoutPan() const {
     if (image_.isNull()) return {};
+    const QSize logical_size = logicalImageSize();
     QSizeF size;
     if (zoom_ > 0.0) {
-      size = QSizeF(image_.size()) * zoom_;
+      size = QSizeF(logical_size) * zoom_;
     } else {
       const qreal ratio = devicePixelRatioF();
-      size = QSizeF(image_.size()) / ratio;
+      size = QSizeF(logical_size) / ratio;
       size.scale(QSizeF(rect().size()).boundedTo(size), Qt::KeepAspectRatio);
     }
     return QRectF(QPointF((width() - size.width()) / 2, (height() - size.height()) / 2), size);
@@ -1143,12 +1218,16 @@ class PixCakeImageView final : public QFrame {
   }
 
   QImage image_;
-  QImage scaled_preview_;
+  QSize logical_size_;
+  QPixmap display_pixmap_;
   QString status_;
   std::shared_ptr<CanvasHooks> hooks_;
   bool dragging_ = false;
   bool panning_ = false;
   bool hand_tool_ = false;
+  bool compare_mode_ = false;
+  bool comparison_pressed_ = false;
+  QString compare_hint_;
   double zoom_ = 0.0;
   int wheel_remainder_ = 0;
   QPointF pan_;
@@ -1159,6 +1238,7 @@ class PixCakeImageView final : public QFrame {
   std::vector<std::function<void()>> image_changed_;
   std::vector<std::function<void(double)>> zoom_changed_;
   std::vector<std::function<void(bool)>> hand_changed_;
+  std::function<void(bool)> original_preview_changed_;
   std::vector<GuideLine> guides_;
   bool guides_visible_ = true;
   std::optional<std::size_t> guide_selected_;
@@ -1202,6 +1282,32 @@ inline QLabel* assetIcon(const QString& relative, int size, const QString& acces
 
 inline void applyAssetIcon(QAbstractButton* button, const QString& relative, int size) {
   const auto pixmap = loadAssetPixmap(relative, size);
+  if (pixmap.isNull() || button == nullptr) return;
+  QIcon icon;
+  icon.addPixmap(pixmap, QIcon::Normal);
+  icon.addPixmap(pixmap, QIcon::Disabled);
+  button->setIcon(icon);
+  button->setIconSize(QSize(size, size));
+}
+
+// 和 QLabel#pending-icon 同一套灰块：图标文件还没放进来时用它，不用别的图形代替。
+inline QPixmap pendingIconPixmap(int size) {
+  if (size <= 0) return {};
+  const qreal ratio = 2.0;
+  QPixmap pixmap(qRound(size * ratio), qRound(size * ratio));
+  pixmap.setDevicePixelRatio(ratio);
+  pixmap.fill(Qt::transparent);
+  QPainter painter(&pixmap);
+  painter.setRenderHint(QPainter::Antialiasing);
+  painter.setPen(QPen(QColor(0x55, 0x55, 0x55)));
+  painter.setBrush(QColor(0x30, 0x30, 0x30));
+  const qreal radius = size >= 24 ? 8.0 : 4.0;
+  painter.drawRoundedRect(QRectF(0.5, 0.5, size - 1.0, size - 1.0), radius, radius);
+  return pixmap;
+}
+
+inline void applyPendingIcon(QAbstractButton* button, int size) {
+  const auto pixmap = pendingIconPixmap(size);
   if (pixmap.isNull() || button == nullptr) return;
   QIcon icon;
   icon.addPixmap(pixmap, QIcon::Normal);

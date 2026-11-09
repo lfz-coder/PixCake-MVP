@@ -30,10 +30,13 @@ QWidget* buildLibraryPage(const PageContext& context) {
   auto* home = itemAction("library-nav", home_item, top, true);
   home->setObjectName(QStringLiteral("top-action"));
   home->setAccessibleName(qs(home_item.text));
+  showNameOnHover(home);
   PageActions* actions = &context.actions;
   QObject::connect(home, &QPushButton::clicked, home, [actions] { actions->request_page(Page::Home); });
   top_layout->addWidget(home);
-  top_layout->addWidget(itemAction("library-nav", copyItem("library-nav", "search"), top));
+  auto* search = itemAction("library-nav", copyItem("library-nav", "search"), top);
+  showNameOnHover(search);
+  top_layout->addWidget(search);
   top_layout->addStretch();
   auto* tabs = new QHBoxLayout;
   addPageTabs(tabs, context);
@@ -115,7 +118,7 @@ QWidget* buildLibraryPage(const PageContext& context) {
     QPointer<PixCakeImageView> guard(image_view);
     actions->watch_preview(image_view, [guard](const PreviewView& update) {
       if (!guard) return;
-      if (!update.image.isNull()) guard->setImage(update.image);
+      if (!update.image.isNull()) guard->setImage(update.image, update.canvas_size);
       guard->setStatus(update.status);
     });
   } else {

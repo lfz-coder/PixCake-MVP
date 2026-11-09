@@ -34,6 +34,11 @@ add_executable(test_rgb_histogram ui/test_rgb_histogram.cpp)
 target_link_libraries(test_rgb_histogram PRIVATE pixcake_ui_panels pixcake_warnings)
 add_test(NAME test_rgb_histogram COMMAND test_rgb_histogram)
 
+add_executable(test_histogram_refresh_gate ui/test_histogram_refresh_gate.cpp)
+target_include_directories(test_histogram_refresh_gate PRIVATE ${CMAKE_SOURCE_DIR}/apps/shell)
+target_link_libraries(test_histogram_refresh_gate PRIVATE pixcake_warnings)
+add_test(NAME test_histogram_refresh_gate COMMAND test_histogram_refresh_gate)
+
 add_executable(test_guide_copy kernel/workspace/test_guide_copy.cpp)
 target_link_libraries(test_guide_copy PRIVATE pixcake_workspace pixcake_warnings)
 add_test(NAME test_guide_copy COMMAND test_guide_copy)

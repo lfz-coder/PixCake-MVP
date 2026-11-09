@@ -40,14 +40,14 @@
 | B-40 | 图片宽或高为 0、负数，或宽高相乘溢出 | `test_b40_b90_bad_headers_are_rejected`（kernel/import/test_source_probe.cpp） |
 | B-41 | 裁剪目标的宽或高为 0 | 未实现：裁剪目标尺寸 |
 | B-42 | 排版行数或列数为 0 | 未实现：排版 |
-| B-43 | 预览缩放比为 0 或负数 | 未实现：画布预览缩放（画布未接） |
+| B-43 | 预览缩放比为 0 或负数 | `PixCakeImageView::setZoom` 拒绝非正数并保留上一次有效显示；下拉的“合适”通过独立的 `setFitZoom` 进入适配状态，`test_shell_app_smoke_refine` 检查两条路径 |
 | B-44 | 曝光、色温的内部换算 | 待补：曝光、色温的内部换算在渲染端，没有内核层断言 |
 | B-45 | 面部重绘按人扣点，但有效人数为 0 | 未实现：按人数报价，有效人数为 0 的判断 |
 | B-46 | 直方图或取色读到空缓冲 | 未实现：直方图、取色读像素 |
 | B-47 | 导出文件大小限制为 0 或负数 | `test_b32_b47_export_settings_parse_strictly`（kernel/exportq/test_export_queue.cpp） |
 | B-48 | 共享内存帧的宽、高、行距为 0、负数，或与字节数不符 | `test_b48_cancel_and_frame_header_reject_bad_values`（kernel/ipc/test_preview_protocol.cpp） |
 | B-50 | 登录、短信、生成、云传输、检查更新超时或断网 | `test_t03_b50_remote_timeout_fails_with_network_failed`（apps/test_generated.cpp）；`test_o13_b06_b50_b82_login_failures_are_distinct_and_stay_on_login`（services/account/test_account_session.cpp） |
-| B-51 | 等待发生在主线程的滑杆拖动、滚动或窗口缩放里 | 未实现：真实画布与主线程交互（第 4 关） |
+| B-51 | 等待发生在主线程的滑杆拖动、滚动或窗口缩放里 | 画布缩放、抓手和滚轮只更新 Qt 显示状态，不调用渲染等待；精修冒烟流程覆盖真实窗口预览交互，详见 `2026-11-09-refine-canvas-zoom.md` |
 | B-52 | 已提交命令后超过 2 秒仍没写完 | `test_b52_commit_slower_than_two_seconds_is_not_success`（kernel/editdoc/test_edit_document.cpp）；`test_b52_late_write_keeps_formal_file_and_is_not_success`（kernel/persist/test_atomic_file.cpp） |
 | B-53 | 生成或导出被用户取消 | `test_b11_b53_cancel_removes_temp_and_print_is_unavailable`（kernel/exportq/test_export_queue.cpp） |
 | B-54 | 第三方直到超时都没有返回，且还没有扣点事件 | 待补：真实传输接入后的“超时与扣点事件先后”；当前替身的超时发生在已扣点之后 |

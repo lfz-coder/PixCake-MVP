@@ -53,6 +53,7 @@ Texts build_texts() {
   t["app.title"] = "像素蛋糕";
   t["page.login"] = "登录页面";
   t["page.home"] = "主页面";
+  t["page.local-projects"] = "本地项目";
   t["page.library"] = kLibrary;
   t["page.refine"] = kRefine;
   t["page.creative"] = kCreative;
@@ -68,6 +69,12 @@ Texts build_texts() {
   t["refine.preview.loading"] = "正在生成预览";
   t["refine.profile.pending"] = "这个配置文件的资源还没有接入";
   t["refine.preview.failed"] = "预览失败：";
+  t["refine.preview-size.status"] = "预览，水印仅在预览显示";
+  t["refine.preview-size.info"] = "当前为预览尺寸，导出时为原图尺寸";
+  t["refine.preview-size.info-icon"] = "ⓘ";
+  t["refine.preview-size.accessible"] = "预览尺寸设置";
+  t["refine.compare.hint"] = "按住画布查看原图";
+  t["refine.histogram.interacting"] = "调节中，直方图暂未更新";
 
   t["region.login-account"] = "账号输入框";
   t["region.login-code"] = "验证码输入框";
@@ -87,6 +94,8 @@ Texts build_texts() {
   t["region.home-common"] = "常用功能";
   t["region.home-quick"] = "快捷功能";
   t["region.home-projects"] = "项目列表";
+  t["region.local-projects-nav"] = "本地项目导航";
+  t["region.local-projects-list"] = "本地项目列表";
   t["home.more_versions"] = "了解更多版本功能";
   t["home.search.name"] = "项目搜索";
   t["home.search.placeholder"] = "搜索所有项目";
@@ -100,6 +109,12 @@ Texts build_texts() {
   t["library.open.hint"] = "单击选中，双击查看大图";
   t["home.quick.empty"] = "暂无快捷功能";
   t["home.projects.empty"] = "暂无项目";
+  t["local-projects.search.name"] = "本地项目搜索";
+  t["local-projects.search.placeholder"] = "搜索本地项目";
+  t["local-projects.empty"] = "暂无本地项目";
+  t["local-projects.empty.hint"] = "导入照片后，项目会显示在这里";
+  t["local-projects.cloud-marked"] = "云端项目";
+  t["local-projects.separator"] = " - ";
 
   t["region.library-nav"] = "项目内导航";
   t["region.library-status"] = "显示状态";
@@ -151,6 +166,7 @@ Texts build_texts() {
   t["refine.card.none"] = "无";
   t["refine.portrait.scan"] = "人脸识别";
   t["refine.history.empty.name"] = "暂无已加载照片。关闭软件后再次打开时，先前步骤合并为上一次保存。当前不列出步骤。";
+  t["refine.zoom.fit"] = "合适";
   t["guides.create-horizontal"] = "创建水平参考线";
   t["guides.create-vertical"] = "创建垂直参考线";
   t["guides.hide"] = "隐藏参考线";
@@ -203,6 +219,11 @@ Texts build_texts() {
   t["preset.save.nothing"] = "这张图还没有可以存进预设的调整";
   t["preset.save.failed"] = "没有保存：%1";
   t["history.preset"] = "预设：%1";
+  t["history.reset"] = "%1";
+  t["refine.reset.all"] = "重置所有效果";
+  t["refine.reset.portrait"] = "重置人像效果";
+  t["refine.reset.color"] = "重置色彩调节效果";
+  t["refine.reset.post"] = "重置后期调色效果";
   // 复制、粘贴效果和批量同步（需求 §18）。
   t["sync.title"] = "同步到选中图片";
   t["sync.hint"] = "把当前图片的效果同步到选中的其他图片。可以只勾选二级功能；不能同步的项目已禁用。";
@@ -425,6 +446,7 @@ Lists build_lists() {
   lists["page-switch"] = {item("library", kLibrary), item("refine", kRefine), item("creative", kCreative)};
   lists["library-nav"] = {item("home", "首页"), item("search", kSearch)};
   for (const auto& entry : lists["page-switch"]) lists["library-nav"].push_back(entry);
+  lists["local-projects-nav"] = {item("home", "首页")};
   lists["refine-global"] = lists["global"];
   lists["refine-global"].push_back(item("export", kExport));
   lists["library-status"] = {item("show-raw", "显示RAW格式"), item("show-edit", "显示修图状态"),
@@ -596,7 +618,7 @@ const CopyItem& page_item(std::string_view list, std::string_view id) {
 }
 
 const std::vector<ShortcutEntry>& shortcut_table() {
-  // 需求 §23.1 里本程序已有功能对应的键；还没有的功能（放大缩小、抓手、查看对比、蒙版、手动工具、曲线…）不在表里。
+  // 需求 §23.1 里本程序已有功能对应的键；画布缩放和抓手是显示层状态，不进入参数文档。
   // 官方“上一张/下一张”的 ↑/↓ 会和滑杆的方向键调值冲突，没有做。
   static const std::vector<ShortcutEntry> table = {
       {"go-home", "Ctrl+Shift+0", "转到首页", "global"},
@@ -621,6 +643,10 @@ const std::vector<ShortcutEntry>& shortcut_table() {
       {"guide-horizontal", "Ctrl+R", "创建水平参考线", "refine"},
       {"guide-vertical", "Shift+R", "创建垂直参考线", "refine"},
       {"guide-toggle", "Alt+R", "隐藏或显示参考线", "refine"},
+      {"zoom-in", "Ctrl+=", "画布放大", "refine"},
+      {"zoom-out", "Ctrl+-", "画布缩小", "refine"},
+      {"zoom-default", "Ctrl+0", "画布默认尺寸", "refine"},
+      {"hand-tool", "H", "画布抓手", "refine"},
       {"preset-list", "Shift+S", "预设列表", "refine"},
       {"module-color", "E", "色彩", "refine"},
       {"module-local", "Ctrl+W", "局部调色", "refine"},

@@ -11,6 +11,7 @@ add_executable(pixcake_app_shell
   shell_icons.cpp
   login_page.cpp
   home_page.cpp
+  local_projects_page.cpp
   library_page.cpp
   refine_page.cpp
   export_dialog.cpp
@@ -20,6 +21,7 @@ add_executable(pixcake_app_shell
   preset_dialog.cpp
   creative_page.cpp
   guide_line.hpp
+  histogram_refresh_gate.hpp
   pixcake_widgets.hpp
 )
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/login-hero.png
@@ -95,7 +97,7 @@ if(PIXCAKE_DEV_PAGES)
                    -DWORK=${CMAKE_CURRENT_BINARY_DIR}/import-flow
                    -P ${CMAKE_SOURCE_DIR}/tests/apps/check_shell_import_flow.cmake)
   set_tests_properties(test_shell_app_import_flow PROPERTIES TIMEOUT 180)
-  foreach(shell_page IN ITEMS login home library refine creative)
+  foreach(shell_page IN ITEMS login home local-projects library refine creative)
     add_test(NAME test_shell_app_smoke_${shell_page}
              COMMAND pixcake_app_shell --page ${shell_page} --smoke)
     set_tests_properties(test_shell_app_smoke_${shell_page}

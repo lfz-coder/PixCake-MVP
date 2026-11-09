@@ -1,6 +1,7 @@
 #pragma once
 
 #include "page_kit.hpp"
+#include "histogram_refresh_gate.hpp"
 
 #include "pixcake/export_session/export_session.hpp"
 #include "pixcake/preview_channel/preview_session.hpp"
@@ -84,6 +85,7 @@ class ShellController final : public PageActions {
   void request_delete_preset(const std::string& id) override;
   bool preset_overwrites_color(const std::string& id) const override;
   void request_apply_preset(const std::string& id) override;
+  void request_reset(ResetScope scope) override;
   std::vector<HistoryRow> history() const override;
   void request_history_step(std::size_t index) override;
   void request_undo() override;
@@ -106,6 +108,9 @@ class ShellController final : public PageActions {
   bool has_photo() const override { return session_ != nullptr; }
   std::uint32_t preview_max_edge() const override { return preview_max_edge_; }
   void request_preview_max_edge(std::uint32_t max_edge) override;
+  CanvasViewMode canvas_view_mode() const override { return canvas_view_mode_; }
+  void request_canvas_view_mode(CanvasViewMode mode) override;
+  void request_original_preview(bool visible) override;
   void request_parameters(const std::vector<std::pair<ui::panels::SliderBinding, std::string>>& values) override;
   std::vector<GuideLine> guides() const override { return guides_; }
   bool guides_visible() const override { return guides_visible_; }
@@ -130,6 +135,8 @@ class ShellController final : public PageActions {
  private:
   void read_frames();
   void publish();
+  void mark_high_quality_preview_request();
+  void request_original_frame(bool interactive);
   void close_photo();
   void open_project_photo(std::int64_t photo_id);
   void request_thumbnails();
@@ -153,6 +160,16 @@ class ShellController final : public PageActions {
   QPointer<QObject> watcher_owner_;
   std::function<void(const PreviewView&)> watcher_;
   PreviewView view_;
+  HistogramRefreshGate histogram_refresh_gate_;
+  CanvasViewMode canvas_view_mode_ = CanvasViewMode::Single;
+  bool original_preview_visible_ = false;
+  std::optional<std::uint64_t> original_sequence_;
+  std::map<std::uint64_t, std::uint32_t> original_requests_;
+  std::uint32_t original_edge_ = 0;
+  QImage original_image_;
+  std::uint64_t last_edit_sequence_ = 0;
+  std::uint64_t last_edit_frame_sequence_ = 0;
+  bool last_edit_interactive_ = false;
   std::uint64_t frames_shown_ = 0;
   std::unique_ptr<project_session::ProjectSession> projects_;
   preview_channel::PreviewSessionOptions preview_options_;

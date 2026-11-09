@@ -105,6 +105,11 @@ void test_contract() {
   EXPECT(shell.navigate(Page::Home) == pixcake::ResultCode::Ok);
   EXPECT(!shell.in_project());
   EXPECT(shell.navigate(Page::Creative) == pixcake::ResultCode::StateConflict);
+  EXPECT(shell.navigate(Page::LocalProjects) == pixcake::ResultCode::Ok);
+  EXPECT(shell.page() == Page::LocalProjects && !shell.in_project());
+  EXPECT(shell.navigate(Page::Home) == pixcake::ResultCode::Ok);
+  const auto local_preview = ShellDisplay::dev_preview(Page::LocalProjects);
+  EXPECT(local_preview.page() == Page::LocalProjects && !local_preview.in_project());
 }
 }  // namespace
 
@@ -152,6 +157,7 @@ void test_q11_regions_take_copy_from_the_page_table() {
   using namespace pixcake::ui::shell;
   EXPECT(std::string(page_label(Page::Login)) == "登录页面");
   EXPECT(std::string(page_label(Page::Home)) == "主页面");
+  EXPECT(std::string(page_label(Page::LocalProjects)) == "本地项目");
   EXPECT(std::string(page_label(Page::Library)) == "图库");
   EXPECT(std::string(page_label(Page::Refine)) == "精修");
   EXPECT(std::string(page_label(Page::Creative)) == "创意");
@@ -175,6 +181,12 @@ void test_q11_regions_take_copy_from_the_page_table() {
   expect_region(home, "home-common", "常用功能", {});
   expect_region(home, "home-quick", "快捷功能", {});
   expect_region(home, "home-projects", "项目列表", {});
+
+  auto local = ShellDisplay::for_session(session);
+  EXPECT(local.navigate(Page::LocalProjects) == pixcake::ResultCode::Ok);
+  expect_ids(local.regions(), {"local-projects-nav", "local-projects-list"});
+  expect_region(local.regions(), "local-projects-nav", "本地项目导航", {"首页"});
+  expect_region(local.regions(), "local-projects-list", "本地项目列表", {});
 
   auto project = ShellDisplay::for_session(session);
   EXPECT(project.open_project() == pixcake::ResultCode::Ok);
@@ -333,7 +345,8 @@ void test_shortcut_table_has_no_conflicts() {
     }
   }
   for (const char* id : {"rating-0", "rating-5", "color-red", "color-blue", "flag-pick", "flag-exclude", "flag-clear",
-                         "undo", "redo", "copy-effect", "paste-effect", "sync-effect", "virtual-copy"}) {
+                         "undo", "redo", "zoom-in", "zoom-out", "zoom-default", "hand-tool", "copy-effect", "paste-effect",
+                         "sync-effect", "virtual-copy"}) {
     EXPECT(!pixcake::ui::shell::shortcut_key(id).empty());
   }
   EXPECT(pixcake::ui::shell::shortcut_key("color-red") == "6" && pixcake::ui::shell::shortcut_key("sync-effect") == "Ctrl+Shift+S");
@@ -351,6 +364,7 @@ int main() {
   test_s25_session_decides_the_page();
   EXPECT(std::string(pixcake::ui::shell::page_label(pixcake::ui::shell::Page::Login)) == "登录页面");
   EXPECT(std::string(pixcake::ui::shell::page_label(pixcake::ui::shell::Page::Home)) == "主页面");
+  EXPECT(std::string(pixcake::ui::shell::page_label(pixcake::ui::shell::Page::LocalProjects)) == "本地项目");
   EXPECT(std::string(pixcake::ui::shell::page_label(pixcake::ui::shell::Page::Library)) == "图库");
   EXPECT(std::string(pixcake::ui::shell::page_label(pixcake::ui::shell::Page::Refine)) == "精修");
   EXPECT(std::string(pixcake::ui::shell::page_label(pixcake::ui::shell::Page::Creative)) == "创意");

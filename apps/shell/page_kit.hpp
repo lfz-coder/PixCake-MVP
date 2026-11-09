@@ -12,6 +12,7 @@
 #include "pixcake/ui/shell/page_copy.hpp"
 #include "pixcake/ui/shell/shell_display.hpp"
 
+#include <QAbstractButton>
 #include <QFrame>
 #include <QImage>
 #include <QHBoxLayout>
@@ -39,17 +40,34 @@ using export_session::ExportRequest;
 using export_session::ExportCharge;
 using export_session::ExportRow;
 
+// Reset scopes are UI intents.  The controller maps them to capability
+// fragments; the page never edits a document directly.
+enum class ResetScope { All, Portrait, Color, Post };
+
 // 画布要显示的东西：最新一帧和它的直方图，或者一行状态（生成中、失败原因）。
+enum class CanvasViewMode { Single, Compare, Reference };
+
 struct PreviewView {
   QImage image;
+  // Stable display-space dimensions. Interactive frames may be 600px, but
+  // the canvas keeps the last high-quality frame's logical size for fit/zoom.
+  QSize canvas_size;
+  // Source-backed baseline frame used by compare view.  It is kept separate
+  // from image so edited rendering can continue while the baseline is shown.
+  QImage original_image;
+  bool showing_original = false;
   ui::panels::RgbHistogram histogram;
   QString status;
+  bool histogram_frozen = false;
+  bool histogram_changed = false;
 };
 
 // 主页项目列表的一项、图库里的一张照片（只读的显示数据）。
 struct ProjectEntry {
   std::int64_t id = 0;
   std::string name;
+  std::string origin;
+  bool cloud_marked = false;
 };
 // 回收站里的一行：项目、图片或虚拟副本。id 是项目编号、照片编号或副本编号（不是条目编号）。
 enum class TrashKind { Project, Photo, Copy };
@@ -105,6 +123,12 @@ class PageActions {
   virtual void request_parameter(const ui::panels::SliderBinding&, const std::string&, bool) {}
   // 同一个能力的多个参数一次提交（一步历史）：画布上拖一次渐变、添加一个子项。
   virtual void request_parameters(const std::vector<std::pair<ui::panels::SliderBinding, std::string>>&) {}
+  // 精修画布预览上限；只控制预览渲染链路，不影响导出尺寸或编辑公式。
+  virtual std::uint32_t preview_max_edge() const { return 4000; }
+  virtual void request_preview_max_edge(std::uint32_t) {}
+  virtual CanvasViewMode canvas_view_mode() const { return CanvasViewMode::Single; }
+  virtual void request_canvas_view_mode(CanvasViewMode) {}
+  virtual void request_original_preview(bool) {}
   // 画布登记显示回调；owner 删除后不再回调。登记时立即回调一次当前画面。
   virtual void watch_preview(QObject*, std::function<void(const PreviewView&)>) {}
 
@@ -166,6 +190,7 @@ class PageActions {
   virtual void request_delete_preset(const std::string&) {}
   virtual bool preset_overwrites_color(const std::string&) const { return false; }
   virtual void request_apply_preset(const std::string&) {}
+  virtual void request_reset(ResetScope) {}
   // 历史（需求 §8.3）：撤销、重做、点某一步回到那一步。步骤变了（提交、撤销）时回调 watch_history 登记的函数。
   virtual std::vector<HistoryRow> history() const { return {}; }
   virtual void request_history_step(std::size_t) {}
@@ -232,6 +257,8 @@ const CopyItem& copyItem(std::string_view list, std::string_view id);
 QLabel* text(const QString& value, bool muted = false);
 QPushButton* action(const QString& label, QWidget* parent, bool enabled = false);
 QPushButton* iconAction(const QString& label, const QString& icon, QWidget* parent, bool enabled = false, int size = 18);
+// 名字留在无障碍名和悬停提示里，按钮上不画字。没有图标文件时用 pending-icon。
+void showNameOnHover(QAbstractButton* button, int size = 18);
 // 文案表里一组中的一项，图标按同一组查。
 // 按快捷键表（ui/shell 的 shortcut_table）里的编号绑一个快捷键；objectName 是 shortcut-<编号>。
 QShortcut* bindShortcut(QWidget* owner, std::string_view id, std::function<void()> run,

@@ -13,11 +13,14 @@
 #include <QFileDialog>
 #include <QListWidget>
 #include <QMenu>
+#include <QActionGroup>
+#include <QGraphicsDropShadowEffect>
 #include <QPainter>
 #include <QPointer>
 #include <QShortcut>
 
 #include <vector>
+#include <array>
 
 #include <algorithm>
 
@@ -44,6 +47,15 @@ QPushButton* iconAction(const QString& label, const QString& icon, QWidget* pare
   auto* button = action(label, parent, enabled);
   if (!icon.isEmpty()) applyAssetIcon(button, icon, size);
   return button;
+}
+
+void showNameOnHover(QAbstractButton* button, int size) {
+  if (button == nullptr) return;
+  button->setText(QString());
+  button->setToolTip(button->accessibleName());
+  button->setProperty("icon-only", true);
+  button->setAttribute(Qt::WA_AlwaysShowToolTips, true);
+  if (button->icon().isNull()) applyPendingIcon(button, size);
 }
 
 QPushButton* itemAction(std::string_view list, const CopyItem& item, QWidget* parent, bool enabled, int size) {
@@ -337,6 +349,83 @@ QListWidget* photoList(QWidget* parent, PageActions* actions, bool grid, std::fu
   return list;
 }
 
+namespace {
+
+const char* canvasViewModeId(CanvasViewMode mode) {
+  switch (mode) {
+    case CanvasViewMode::Single: return "single";
+    case CanvasViewMode::Compare: return "compare-view";
+    case CanvasViewMode::Reference: return "reference";
+  }
+  return "single";
+}
+
+QPushButton* canvasViewModeButton(QWidget* parent, PageActions* actions) {
+  const std::array<std::pair<CanvasViewMode, const char*>, 3> modes = {
+      {{CanvasViewMode::Single, "single"}, {CanvasViewMode::Compare, "compare-view"},
+       {CanvasViewMode::Reference, "reference"}}};
+  const CanvasViewMode current = actions != nullptr ? actions->canvas_view_mode() : CanvasViewMode::Single;
+  const char* current_id = canvasViewModeId(current);
+  auto* button = new QPushButton(qs(copyItem("refine-thumbs", current_id).text), parent);
+  button->setObjectName(QStringLiteral("refine-view-mode"));
+  button->setAccessibleName(qs(copyItem("refine-thumbs", current_id).text));
+  button->setEnabled(actions != nullptr && actions->has_photo());
+  button->setCursor(Qt::PointingHandCursor);
+  const auto icon = iconPath("refine-thumbs", current_id);
+  if (!icon.isEmpty()) applyAssetIcon(button, icon, 18);
+  button->setIconSize(QSize(18, 18));
+  showNameOnHover(button);
+
+  QObject::connect(button, &QPushButton::clicked, button, [button, actions, modes, current] {
+    if (actions == nullptr) return;
+    QMenu menu;
+    menu.setAttribute(Qt::WA_TranslucentBackground);
+    menu.setMinimumWidth(220);
+    menu.setStyleSheet(QStringLiteral(R"QSS(
+      QMenu {
+        background: #3A3A40;
+        color: #FFFFFF;
+        border: none;
+        border-radius: 10px;
+        padding: 10px 12px;
+        font-family: "SF Pro Text", "SF Pro Display", "PingFang SC", "-apple-system", sans-serif;
+        font-size: 17px;
+      }
+      QMenu::item {
+        min-height: 36px;
+        padding: 0 14px 0 32px;
+        margin: 2px 0;
+        border-radius: 6px;
+      }
+      QMenu::item:selected { background: #4E4E57; }
+    )QSS"));
+    auto* shadow = new QGraphicsDropShadowEffect(&menu);
+    shadow->setColor(QColor(0, 0, 0, 90));
+    shadow->setOffset(0, 4);
+    shadow->setBlurRadius(12);
+    menu.setGraphicsEffect(shadow);
+    auto* group = new QActionGroup(&menu);
+    group->setExclusive(true);
+    for (const auto& entry : modes) {
+      const CanvasViewMode mode = entry.first;
+      const char* id = entry.second;
+      const CanvasViewMode mode_value = mode;
+      auto* item = menu.addAction(qs(copyItem("refine-thumbs", id).text));
+      item->setCheckable(true);
+      item->setChecked(mode_value == current);
+      group->addAction(item);
+      QObject::connect(item, &QAction::triggered, &menu, [actions, mode_value] {
+        actions->request_canvas_view_mode(mode_value);
+      });
+    }
+    menu.adjustSize();
+    menu.exec(button->mapToGlobal(QPoint(0, -menu.sizeHint().height() - 4)));
+  });
+  return button;
+}
+
+}  // namespace
+
 QFrame* thumbnailStrip(QWidget* parent, bool library, PageActions* actions, std::function<void(std::int64_t)> open) {
   auto* frame = new QFrame(parent);
   frame->setObjectName(QStringLiteral("workspace-thumbs"));
@@ -358,7 +447,15 @@ QFrame* thumbnailStrip(QWidget* parent, bool library, PageActions* actions, std:
     }
   }
   for (const auto& id : ids) {
-    layout->addWidget(filterAction("refine-thumbs", copyItem("refine-thumbs", id), frame, actions));
+    if (!library && id == "single") {
+      layout->addWidget(canvasViewModeButton(frame, actions));
+      continue;
+    }
+    if (!library && (id == "compare-view" || id == "reference")) continue;
+    auto* button = filterAction("refine-thumbs", copyItem("refine-thumbs", id), frame, actions);
+    button->setAccessibleName(qs(copyItem("refine-thumbs", id).text));
+    showNameOnHover(button);
+    layout->addWidget(button);
   }
   if (library) {
     auto* count = action(qtext("thumbs.selected").arg(0), frame);

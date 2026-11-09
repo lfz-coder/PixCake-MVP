@@ -103,6 +103,15 @@ void ShellController::close_photo() {
   session_.reset();
   current_photo_.reset();
   view_ = {};
+  original_preview_visible_ = false;
+  original_sequence_.reset();
+  original_requests_.clear();
+  original_edge_ = 0;
+  original_image_ = {};
+  last_edit_sequence_ = 0;
+  last_edit_frame_sequence_ = 0;
+  last_edit_interactive_ = false;
+  histogram_refresh_gate_.reset();
   guides_.clear();
   guides_visible_ = true;
   guides_changed();
@@ -209,6 +218,12 @@ void ShellController::attach_projects(std::unique_ptr<project_session::ProjectSe
                                       preview_channel::PreviewSessionOptions preview) {
   projects_ = std::move(projects);
   preview_options_ = std::move(preview);
+  if (preview_options_.max_edge == 2000 || preview_options_.max_edge == 3000 || preview_options_.max_edge == 4000) {
+    preview_max_edge_ = preview_options_.max_edge;
+  } else {
+    preview_max_edge_ = 4000;
+  }
+  preview_options_.max_edge = preview_max_edge_;
   if (changed_) changed_();
 }
 
@@ -246,7 +261,7 @@ std::vector<ProjectEntry> ShellController::projects() const {
   std::vector<ProjectEntry> out;
   std::vector<ProjectRow> rows;
   if (projects_ && projects_->list_projects(rows) == ResultCode::Ok) {
-    for (const auto& row : rows) out.push_back({row.id, row.name});
+    for (const auto& row : rows) out.push_back({row.id, row.name, row.origin, row.cloud_marked});
   }
   return out;
 }
@@ -356,6 +371,9 @@ QString history_text(const preview_channel::PreviewSession::HistoryEntry& entry)
   if (entry.capability_id == preview_channel::PreviewSession::kPresetStep) {
     return qtext("history.preset").arg(QString::fromStdString(entry.display_value));
   }
+  if (entry.capability_id == preview_channel::PreviewSession::kResetStep) {
+    return qtext("history.reset").arg(QString::fromStdString(entry.display_value));
+  }
   QString name = QString::fromStdString(entry.capability_id + "/" + entry.parameter_id);
   if (entry.capability_id == "color.local") {
     // 局部调色：带 m<N>: 前缀的是第 N 个蒙版的参数，名字取基础参数的滑杆名，前面加蒙版名。
@@ -420,6 +438,7 @@ void ShellController::request_history_step(std::size_t index) {
   std::string diagnostic;
   const ResultCode code = session_->select_history(index, diagnostic);
   if (code != ResultCode::Ok) qWarning("history: %s", diagnostic.c_str());
+  else mark_high_quality_preview_request();
   view_.status = qtext("refine.preview.loading");
   if (changed_) changed_();  // the sliders show the document as it is now
 }
@@ -428,6 +447,7 @@ void ShellController::request_undo() {
   if (!session_) return;
   std::string diagnostic;
   if (session_->undo(diagnostic) != ResultCode::Ok) return;  // nothing to undo is not an error
+  mark_high_quality_preview_request();
   view_.status = qtext("refine.preview.loading");
   if (changed_) changed_();
 }
@@ -436,6 +456,42 @@ void ShellController::request_redo() {
   if (!session_) return;
   std::string diagnostic;
   if (session_->redo(diagnostic) != ResultCode::Ok) return;
+  mark_high_quality_preview_request();
+  view_.status = qtext("refine.preview.loading");
+  if (changed_) changed_();
+}
+
+void ShellController::request_reset(ResetScope scope) {
+  if (!session_) return;
+  std::vector<std::string> capabilities;
+  const auto descriptors = CapabilityRegistry::phase_one().descriptors();
+  const auto selected = [scope](const std::string& id) {
+    switch (scope) {
+      case ResetScope::All:
+        return true;
+      case ResetScope::Portrait:
+        return id.rfind("portrait.", 0) == 0 || id == "manual.liquify";
+      case ResetScope::Color:
+        return id == "color.match" || id == "color.style" || id == "color.global" || id == "color.local" ||
+               id == "detail";
+      case ResetScope::Post:
+        return id == "color.post";
+    }
+    return false;
+  };
+  for (const auto& descriptor : descriptors) {
+    if (selected(descriptor.id)) capabilities.push_back(descriptor.id);
+  }
+  const char* label_key = "refine.reset.all";
+  if (scope == ResetScope::Portrait) label_key = "refine.reset.portrait";
+  if (scope == ResetScope::Color) label_key = "refine.reset.color";
+  if (scope == ResetScope::Post) label_key = "refine.reset.post";
+  std::string diagnostic;
+  if (session_->reset_effects(capabilities, qtext(label_key).toStdString(), diagnostic) != ResultCode::Ok) {
+    qWarning("reset effects: %s", diagnostic.c_str());
+    return;
+  }
+  mark_high_quality_preview_request();
   view_.status = qtext("refine.preview.loading");
   if (changed_) changed_();
 }
@@ -473,6 +529,7 @@ void ShellController::request_remove_local_mask(int instance) {
   std::string diagnostic;
   const ResultCode code = session_->remove_local_mask(instance, diagnostic);  // a step of its own in the history
   if (code != ResultCode::Ok) show_notices({}, NoticeScene::OpenDocument, code);
+  else mark_high_quality_preview_request();
   view_.status = qtext("refine.preview.loading");
 }
 
@@ -490,6 +547,7 @@ void ShellController::request_paste_effect() {
       std::string diagnostic;
       const ResultCode code = session_->paste(*clipboard_, diagnostic);  // a step of its own in the history
       if (code != ResultCode::Ok) failure = code;
+      else mark_high_quality_preview_request();
       view_.status = qtext("refine.preview.loading");
     } else {
       others.push_back(id);
@@ -568,6 +626,7 @@ void ShellController::request_apply_preset(const std::string& id) {
       std::string diagnostic;
       const ResultCode code = session_->apply_preset(projects_->preset_library(), *preset, diagnostic);
       if (code != ResultCode::Ok) failure = code;
+      else mark_high_quality_preview_request();
       view_.status = qtext("refine.preview.loading");
     } else {
       others.push_back(target);
@@ -726,6 +785,7 @@ void ShellController::open_project_photo(std::int64_t photo_id) {
     return;
   }
   auto options = preview_options_;
+  options.max_edge = preview_max_edge_;
   options.document_directory = projects_->document_directory();
   options.document_id = projects_->document_name(photo_id);
   if (open_photo(path, options, diagnostic) == ResultCode::Ok) {
@@ -743,6 +803,7 @@ ResultCode ShellController::open_photo(const std::string& photo_path,
   notifier_.reset();
   session_.reset();
   view_ = {};
+  histogram_refresh_gate_.reset();
   guides_.clear();
   guides_visible_ = true;
   guides_changed();
@@ -759,9 +820,38 @@ ResultCode ShellController::open_photo(const std::string& photo_path,
   const ui::panels::SliderBinding exposure{"color.global", "exposure"};
   const auto current = parameter_value(exposure);
   request_parameter(exposure, current ? *current : ui::panels::slider_spec("", exposure).default_text, false);
+  original_preview_visible_ = false;
+  original_sequence_.reset();
+  original_requests_.clear();
+  original_edge_ = 0;
+  original_image_ = {};
+  last_edit_sequence_ = session_->latest_sequence();
+  last_edit_frame_sequence_ = 0;
+  last_edit_interactive_ = false;
+  view_.original_image = {};
+  view_.showing_original = false;
   view_.status = qtext("refine.preview.loading");
   publish();
   return ResultCode::Ok;
+}
+
+void ShellController::request_preview_max_edge(std::uint32_t max_edge) {
+  if (max_edge != 2000 && max_edge != 3000 && max_edge != 4000) return;
+  preview_max_edge_ = max_edge;
+  preview_options_.max_edge = max_edge;
+  if (session_) {
+    session_->set_preview_max_edge(max_edge);
+    std::string diagnostic;
+    const ResultCode code = session_->refresh_preview(diagnostic);
+    if (code != ResultCode::Ok) qWarning("preview max edge %u: %s", max_edge, diagnostic.c_str());
+    else {
+      last_edit_sequence_ = session_->latest_sequence();
+      last_edit_interactive_ = false;
+      histogram_refresh_gate_.request_high_quality(session_->latest_sequence());
+    }
+  }
+  view_.histogram_frozen = histogram_refresh_gate_.frozen();
+  if (changed_) changed_();
 }
 
 std::optional<std::string> ShellController::parameter_value(const ui::panels::SliderBinding& binding) const {
@@ -772,17 +862,26 @@ std::optional<std::string> ShellController::parameter_value(const ui::panels::Sl
 void ShellController::request_parameter(const ui::panels::SliderBinding& binding, const std::string& display_value,
                                         bool commit) {
   if (!session_) return;
+  const bool first_request = session_->latest_sequence() == 0;
   std::string diagnostic;
   const ResultCode code = commit ? session_->commit(binding.capability_id, binding.parameter_id, display_value, diagnostic)
                                  : session_->preview(binding.capability_id, binding.parameter_id, display_value, diagnostic);
   if (code != ResultCode::Ok) {
     qWarning("preview %s/%s=%s: %s", binding.capability_id.c_str(), binding.parameter_id.c_str(),
              display_value.c_str(), diagnostic.c_str());
+    return;
   }
+  last_edit_sequence_ = session_->latest_sequence();
+  last_edit_interactive_ = !commit && !first_request;
+  histogram_refresh_gate_.request(session_->latest_sequence(), commit, first_request);
+  const bool hint_changed = view_.histogram_frozen != histogram_refresh_gate_.frozen();
+  view_.histogram_frozen = histogram_refresh_gate_.frozen();
+  if (hint_changed) publish();
 }
 
 void ShellController::request_parameters(const std::vector<std::pair<ui::panels::SliderBinding, std::string>>& values) {
   if (!session_ || values.empty()) return;
+  const bool first_request = session_->latest_sequence() == 0;
   const std::string capability = values.front().first.capability_id;
   std::vector<std::pair<std::string, std::string>> items;
   for (const auto& [binding, value] : values) {
@@ -791,7 +890,88 @@ void ShellController::request_parameters(const std::vector<std::pair<ui::panels:
   }
   std::string diagnostic;
   const ResultCode code = session_->commit_parameters(capability, items, diagnostic);
-  if (code != ResultCode::Ok) qWarning("commit %s: %s", capability.c_str(), diagnostic.c_str());
+  if (code != ResultCode::Ok) {
+    qWarning("commit %s: %s", capability.c_str(), diagnostic.c_str());
+    return;
+  }
+  last_edit_sequence_ = session_->latest_sequence();
+  last_edit_interactive_ = false;
+  histogram_refresh_gate_.request(session_->latest_sequence(), true, first_request);
+  const bool hint_changed = view_.histogram_frozen != histogram_refresh_gate_.frozen();
+  view_.histogram_frozen = histogram_refresh_gate_.frozen();
+  if (hint_changed) publish();
+}
+
+void ShellController::request_canvas_view_mode(CanvasViewMode mode) {
+  if (canvas_view_mode_ == mode) return;
+  canvas_view_mode_ = mode;
+  if (mode != CanvasViewMode::Compare) {
+    original_preview_visible_ = false;
+    view_.showing_original = false;
+    view_.original_image = original_image_;
+    view_.histogram_frozen = histogram_refresh_gate_.frozen();
+  }
+  if (changed_) changed_();
+}
+
+void ShellController::request_original_frame(bool interactive) {
+  if (!session_) return;
+  std::string diagnostic;
+  if (session_->request_original_preview(interactive, diagnostic) != ResultCode::Ok) {
+    qWarning("original preview request failed: %s", diagnostic.c_str());
+    return;
+  }
+  original_sequence_ = session_->latest_sequence();
+  original_edge_ = interactive && preview_options_.interactive_max_edge != 0
+                       ? std::min(preview_options_.interactive_max_edge, preview_max_edge_)
+                       : preview_max_edge_;
+  original_requests_[*original_sequence_] = original_edge_;
+  while (original_requests_.size() > 8) original_requests_.erase(original_requests_.begin());
+}
+
+void ShellController::request_original_preview(bool visible) {
+  if (canvas_view_mode_ != CanvasViewMode::Compare || !session_) return;
+  if (!visible) {
+    if (!original_preview_visible_) return;
+    original_preview_visible_ = false;
+    view_.showing_original = false;
+    view_.original_image = original_image_;
+    view_.histogram_frozen = histogram_refresh_gate_.frozen();
+    // Promote any interactive edit request that happened while the baseline
+    // was held to the selected high-quality edge before showing it again.
+    if (last_edit_sequence_ != 0 && last_edit_interactive_) {
+      std::string diagnostic;
+      if (session_->refresh_preview(diagnostic) == ResultCode::Ok) {
+        last_edit_sequence_ = session_->latest_sequence();
+        last_edit_interactive_ = false;
+        histogram_refresh_gate_.request_high_quality(last_edit_sequence_);
+        view_.histogram_frozen = histogram_refresh_gate_.frozen();
+      } else {
+        qWarning("edit preview restore failed: %s", diagnostic.c_str());
+      }
+    }
+    publish();
+    return;
+  }
+  if (original_preview_visible_) return;
+  original_preview_visible_ = true;
+  const bool interactive = last_edit_interactive_;
+  const std::uint32_t wanted_edge = interactive && preview_options_.interactive_max_edge != 0
+                                        ? std::min(preview_options_.interactive_max_edge, preview_max_edge_)
+                                        : preview_max_edge_;
+  if (!original_image_.isNull() && original_edge_ == wanted_edge) {
+    view_.original_image = original_image_;
+    view_.showing_original = true;
+    view_.histogram_frozen = true;
+    publish();
+    return;
+  }
+  if (original_edge_ != wanted_edge) original_image_ = {};
+  view_.original_image = original_image_;
+  view_.showing_original = !original_image_.isNull();
+  view_.histogram_frozen = true;
+  request_original_frame(interactive);
+  publish();
 }
 
 void ShellController::request_create_guide(bool vertical) {
@@ -847,16 +1027,34 @@ void ShellController::guides_changed() {
 void ShellController::watch_preview(QObject* owner, std::function<void(const PreviewView&)> show) {
   watcher_owner_ = owner;
   watcher_ = std::move(show);
+  // A rebuilt refine page gets a fresh histogram widget. Replay the cached
+  // snapshot once on registration even when the last frame was already
+  // published to the previous widget.
+  view_.histogram_changed = true;
   publish();
 }
 
+void ShellController::mark_high_quality_preview_request() {
+  if (!session_) return;
+  last_edit_sequence_ = session_->latest_sequence();
+  last_edit_interactive_ = false;
+  histogram_refresh_gate_.request_high_quality(session_->latest_sequence());
+  const bool hint_changed = view_.histogram_frozen != histogram_refresh_gate_.frozen();
+  view_.histogram_frozen = histogram_refresh_gate_.frozen();
+  if (hint_changed) publish();
+}
+
 void ShellController::publish() {
-  if (watcher_ && watcher_owner_) watcher_(view_);
+  if (watcher_ && watcher_owner_) {
+    watcher_(view_);
+    view_.histogram_changed = false;
+  }
 }
 
 void ShellController::read_frames() {
   if (!session_) return;
   bool changed = false;
+  std::optional<preview_channel::PreviewFrame> latest_frame;
   for (;;) {
     preview_channel::PreviewFrame frame;
     std::string diagnostic;
@@ -874,23 +1072,77 @@ void ShellController::read_frames() {
       break;
     }
     if (frame.result.code != ResultCode::Ok) {
-      view_.status = qtext("refine.preview.failed") +
-                     QString::fromStdString(frame.result.diagnostic);
+      const auto original_request = original_requests_.find(frame.result.client_sequence);
+      const bool original = original_request != original_requests_.end();
+      if (original) {
+        const bool current_original = original_sequence_ && frame.result.client_sequence == *original_sequence_;
+        original_requests_.erase(original_request);
+        if (current_original) original_sequence_.reset();
+        if (!original_preview_visible_) {
+          view_.status = qtext("refine.preview.failed") + QString::fromStdString(frame.result.diagnostic);
+        }
+      } else {
+        latest_frame.reset();
+        view_.status = qtext("refine.preview.failed") +
+                       QString::fromStdString(frame.result.diagnostic);
+      }
       changed = true;
       continue;
     }
+    const auto original_request = original_requests_.find(frame.result.client_sequence);
+    if (original_request != original_requests_.end()) {
+      const bool current_original = original_sequence_ && frame.result.client_sequence == *original_sequence_;
+      const std::uint32_t request_edge = original_request->second;
+      original_requests_.erase(original_request);
+      if (!current_original) continue;
+      const auto& header = frame.result.header;
+      QImage image(frame.rgba.data(), static_cast<int>(header.width), static_cast<int>(header.height),
+                   static_cast<qsizetype>(header.stride), QImage::Format_RGBA8888_Premultiplied);
+      original_image_ = image.copy();
+      original_sequence_.reset();
+      original_edge_ = request_edge;
+      view_.original_image = original_image_;
+      view_.showing_original = original_preview_visible_;
+      view_.histogram_frozen = true;
+      view_.status.clear();
+      changed = true;
+      continue;
+    }
+    const std::uint32_t frame_edge = std::max(frame.result.header.width, frame.result.header.height);
+    const bool high_quality_frame = preview_options_.interactive_max_edge == 0 ||
+                                    frame_edge > preview_options_.interactive_max_edge;
+    if (histogram_refresh_gate_.accept_frame(frame.result.client_sequence, high_quality_frame)) {
+      view_.histogram = ui::panels::rgb_histogram(frame.rgba.data(), frame.result.header.width,
+                                                  frame.result.header.height, frame.result.header.stride,
+                                                  frame.rgba.size());
+      view_.canvas_size = QSize(static_cast<int>(frame.result.header.width),
+                                static_cast<int>(frame.result.header.height));
+      view_.histogram_changed = true;
+    }
+    view_.histogram_frozen = original_preview_visible_ ? true : histogram_refresh_gate_.frozen();
+    last_edit_frame_sequence_ = frame.result.client_sequence;
+    // Drain all frames first and process only the newest one. During a fast
+    // drag, copying a stale 12 MP image and rebuilding its histogram here can
+    // otherwise keep the UI busy after renderd has already produced a newer
+    // value. The preview channel already guarantees monotonically newer
+    // sequences, so keeping the last successful frame preserves the latest
+    // value while dropping obsolete display work.
+    latest_frame = std::move(frame);
+    changed = true;
+  }
+  if (latest_frame.has_value()) {
+    const auto& frame = *latest_frame;
     const auto& header = frame.result.header;
     QImage image(frame.rgba.data(), static_cast<int>(header.width), static_cast<int>(header.height),
                  static_cast<qsizetype>(header.stride), QImage::Format_RGBA8888_Premultiplied);
     view_.image = image.copy();  // own the pixels; frame.rgba goes away
-    view_.histogram = ui::panels::rgb_histogram(frame.rgba.data(), header.width, header.height, header.stride,
-                                                frame.rgba.size());
+    view_.original_image = original_image_;
+    view_.showing_original = original_preview_visible_ && !original_image_.isNull();
     view_.status.clear();
     for (const auto& note : frame.result.diagnostics) {
       qInfo("preview note %s: %s", note.capability_id.c_str(), note.reason.c_str());
     }
     ++frames_shown_;
-    changed = true;
   }
   if (changed) publish();
 }

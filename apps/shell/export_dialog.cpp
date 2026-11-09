@@ -1144,6 +1144,7 @@ void bindProjectShortcuts(QWidget* page, PageActions* actions) {
 }
 
 QPushButton* toolbarAction(std::string_view list, const CopyItem& item, QWidget* parent, PageActions* actions) {
+  const bool labeled = item.id == "export" || item.id == "membership";
   if (item.id == "export") {
     auto* button = itemAction(list, item, parent, actions->export_target().has_value());
     // 选了照片才可用；图库里的选择变了跟着变。
@@ -1176,14 +1177,18 @@ QPushButton* toolbarAction(std::string_view list, const CopyItem& item, QWidget*
       menu.setToolTipsVisible(true);
       menu.exec(button->mapToGlobal(QPoint(0, button->height())));
     });
+    if (!labeled) showNameOnHover(button);
     return button;
   }
   if (item.id == "export-list") {
     auto* button = itemAction(list, item, parent, actions->has_exports());
     QObject::connect(button, &QPushButton::clicked, button, [button, actions] { openExportList(button->window(), actions); });
+    if (!labeled) showNameOnHover(button);
     return button;
   }
-  return itemAction(list, item, parent);
+  auto* button = itemAction(list, item, parent);
+  if (!labeled) showNameOnHover(button);
+  return button;
 }
 
 }  // namespace pixcake::shell

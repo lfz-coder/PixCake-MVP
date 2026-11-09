@@ -37,6 +37,9 @@ struct PixCakeTheme final {
     return QStringLiteral(R"QSS(
       * { outline: none; }
       QWidget { color: #f4f4f4; font-family: "PingFang SC", "Helvetica Neue", sans-serif; font-size: 13px; }
+      QToolTip { background: #222226; color: #FFFFFF; border: none; border-radius: 2px; padding: 4px 8px;
+                 font-family: "SF Pro Text", "SF Pro Display", "PingFang SC", "-apple-system", sans-serif;
+                 font-size: 12px; }
       QMainWindow, QWidget#shell-root, QWidget#login-page, QWidget#home-page,
       QWidget#refine-page, QWidget#library-page, QWidget#creative-page { background: #0b0b0b; }
       QWidget#login-panel { background: #0b0b0b; }
@@ -73,7 +76,9 @@ struct PixCakeTheme final {
       QLabel#home-brand { color: #f4f4f4; font-size: 19px; font-weight: 600; }
       QLabel#home-section-title { color: #f4f4f4; font-size: 15px; font-weight: 600; }
       QLabel#home-card-title { color: #f4f4f4; font-size: 15px; font-weight: 600; }
-      QLabel#workspace-tool-label { color: #d5d5d5; font-size: 11px; }
+      QPushButton[icon-only="true"] { background: transparent; border: none; padding: 4px; min-height: 28px; }
+      QPushButton[icon-only="true"]:hover { background: #2a2d33; }
+      QPushButton[icon-only="true"]:disabled { background: transparent; color: #747474; }
       QLabel#muted, QLabel[muted="true"], QLabel#empty-state { color: #999999; }
       QLabel[warning="true"] { color: #ffe000; }
       QPushButton { background: #1a1a1a; border: 1px solid #383838; border-radius: 4px; color: #f4f4f4; padding: 6px 11px; min-height: 32px; }
@@ -104,9 +109,9 @@ struct PixCakeTheme final {
       QFrame#home-feature, QFrame#home-card, QFrame#home-projects { background: #171717; border: 1px solid #2d2d2d; border-radius: 8px; }
       QFrame#home-import { background: #141414; border: 1px dashed #5b5b5b; border-radius: 8px; }
       QFrame#feature-icon { background: #303030; border: 1px solid #555555; border-radius: 8px; }
-      QFrame#workspace-tool-button { background: #1a1a1a; border: 1px solid #303030; border-radius: 4px; min-width: 66px; }
-      QFrame#workspace-tool-button:hover { border-color: #ffe000; }
-      QFrame#workspace-tool-button[emphasis="true"] { background: #292929; border-color: #ffe000; }
+      QFrame#workspace-tool-button { background: transparent; border: none; border-radius: 4px; }
+      QFrame#workspace-tool-button:hover { background: #2a2d33; }
+      QFrame#workspace-tool-button[emphasis="true"] { background: #33363d; }
       QFrame#pixcake-status-strip { background: #111111; border: 1px solid #303030; border-radius: 4px; }
       QFrame#pixcake-section { background: #171717; border: 1px solid #2d2d2d; border-radius: 8px; }
       QLabel#pending-icon { color: #777777; background: #303030; border: 1px solid #555555; border-radius: 8px; }
@@ -151,7 +156,7 @@ struct PixCakeTheme final {
       QFrame#refine-rail { background: #1b1d22; border-left: 1px solid #2a2c31; }
       QFrame#refine-rail-separator { background: #34363b; min-height: 1px; max-height: 1px; margin: 6px 10px; }
       QToolButton[rail="true"] { background: transparent; border: none; border-radius: 6px; color: #b8b8b8;
-        font-size: 11px; padding: 4px 2px; min-width: 40px; max-width: 40px; min-height: 40px; }
+        padding: 4px; min-width: 40px; max-width: 40px; min-height: 40px; max-height: 40px; }
       QToolButton[rail="true"]:hover { background: #2a2d33; color: #f4f4f4; }
       QToolButton[rail="true"]:checked { background: #33363d; color: #ffffff; }
       QFrame#refine-module-panel, QWidget#refine-module-page, QWidget#refine-module-content { background: #1f2126; }
@@ -197,6 +202,10 @@ struct PixCakeTheme final {
       QLabel#refine-help { color: #9a9da3; border: 1px solid #9a9da3; border-radius: 8px; font-size: 10px; }
       QToolButton#refine-expander { background: transparent; border: none; padding: 0; }
       QFrame#refine-child-box { background: #1a1c20; border-radius: 4px; }
+      QFrame#refine-preview-status { background: transparent; border-radius: 6px; min-height: 28px; }
+      QFrame#refine-preview-status:hover { background: #25282e; }
+      QLabel#refine-preview-status-info { color: #B8B8BF; font-size: 14px; }
+      QLabel#refine-preview-status-text { color: #B8B8BF; font-size: 14px; }
       QCheckBox#refine-switch::indicator { width: 28px; height: 16px; border-radius: 8px; background: #3a3d44; border: none; }
       QCheckBox#refine-switch::indicator:checked { background: #2f7cf6; }
       QToolButton#refine-card { background: #33363d; border: 1px solid transparent; border-radius: 3px; color: #d0d0d0;

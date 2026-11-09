@@ -24,7 +24,10 @@ QWidget* buildCreativePage(const PageContext& context) {
   top_layout->addLayout(tabs);
   top_layout->addStretch();
   for (const auto& entry : ui::shell::page_list("creative-top")) {
-    top_layout->addWidget(itemAction("creative-top", entry, top, false, entry.id == "help" ? 16 : 18));
+    const int size = entry.id == "help" ? 16 : 18;
+    auto* button = itemAction("creative-top", entry, top, false, size);
+    if (entry.id != "export") showNameOnHover(button, size);
+    top_layout->addWidget(button);
   }
   outer->addWidget(top);
 

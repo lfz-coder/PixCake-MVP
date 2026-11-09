@@ -31,6 +31,8 @@ const char* page_label(Page page) {
       return page_text("page.login").c_str();
     case Page::Home:
       return page_text("page.home").c_str();
+    case Page::LocalProjects:
+      return page_text("page.local-projects").c_str();
     case Page::Library:
       return page_text("page.library").c_str();
     case Page::Refine:
@@ -57,7 +59,9 @@ ShellDisplay ShellDisplay::for_session(const SessionState& session) {
 ShellDisplay ShellDisplay::dev_preview(Page page) {
   ShellDisplay display;
   display.page_ = page == Page::Login ? Page::Login : Page::Home;
-  if (page != Page::Login && page != Page::Home) {
+  if (page == Page::LocalProjects) {
+    display.page_ = Page::LocalProjects;
+  } else if (page != Page::Login && page != Page::Home) {
     display.page_ = page;
     display.in_project_ = true;
   }
@@ -111,11 +115,20 @@ ResultCode ShellDisplay::navigate(Page target) {
     return ResultCode::StateConflict;
   }
   if (target == Page::Home) {
-    if (!in_project_) {
+    if (!in_project_ && page_ != Page::LocalProjects) {
       return ResultCode::StateConflict;
     }
     page_ = Page::Home;
     in_project_ = false;
+    rebuild_regions();
+    return ResultCode::Ok;
+  }
+  if (target == Page::LocalProjects) {
+    if (in_project_ || (page_ != Page::Home && page_ != Page::LocalProjects)) {
+      return ResultCode::StateConflict;
+    }
+    page_ = Page::LocalProjects;
+    notices_.clear();
     rebuild_regions();
     return ResultCode::Ok;
   }
@@ -140,6 +153,10 @@ void ShellDisplay::rebuild_regions() {
                   region("home-search", P::Top),          region("home-global", P::Top, "global"),
                   region("home-common", P::Center),       region("home-quick", P::Center),
                   region("home-projects", P::Bottom)};
+      return;
+    case Page::LocalProjects:
+      regions_ = {region("local-projects-nav", P::Top, "local-projects-nav"),
+                  region("local-projects-list", P::Center)};
       return;
     case Page::Library:
       regions_ = {region("library-nav", P::Top, "library-nav"),

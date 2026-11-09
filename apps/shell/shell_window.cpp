@@ -92,6 +92,9 @@ void ShellWindow::render() {
     case Page::Home:
       page = buildHomePage(context);
       break;
+    case Page::LocalProjects:
+      page = buildLocalProjectsPage(context);
+      break;
     case Page::Library:
       page = buildLibraryPage(context);
       break;
