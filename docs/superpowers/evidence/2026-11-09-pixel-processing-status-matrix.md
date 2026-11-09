@@ -24,18 +24,18 @@ PhotoCraft 已有对应能力时，`photocraft-target` 是 PixCake 的目标行�
 
 | 能力/分组 | 行为来源 | 来源族与 PhotoCraft 目标 | PhotoCraft GPU | 移植状态 | CPU reference | GPU | 预览 | 导出 | 官方一致性 | 主要证据/限制 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 白平衡 `temperature` / `tint` | `photocraft-target` | A：`algo/src/camera_raw.rs:670` `white_balance_gains`、`camera_raw/per_pixel.rs:13-20` | 有（逐像素） | legacy-provisional | 有（旧 Bradford/黑盒曲线） | conditional | 已接入 | 已接入 | partial | 9.3.0 一张棚拍的 +100、-50、-100 测量保留为官方一致性证据；PhotoCraft 单位与 PixCake -100..100 的换算待登记 |
-| `exposure` | `photocraft-target` | A：`per_pixel::gains` 与 `camera_raw.rs` `balance()`（sRGB 解码 → ×2^EV → 编码） | 有（逐像素） | legacy-provisional | 有（旧 EV 路径） | conditional | 已接入 | 已接入 | unverified | 不是 Photoshop“曝光度”调整图层（`compose/src/adjust.rs:138-157`）；输入编码契约未闭环 |
-| `contrast` | `photocraft-target` | A：`camera_raw/per_pixel.rs:23-25`、`camera_raw.rs` 阶段 3 S 曲线 | 有（无纹理/清晰度时） | legacy-provisional | 有（旧 affine） | conditional | 已接入 | 已接入 | unverified | 旧 W3C affine 只作回归基线 |
+| 白平衡 `temperature` / `tint` | `photocraft-target` | A：`algo/src/camera_raw.rs:670` `white_balance_gains`、`camera_raw/per_pixel.rs:13-20` | 有（逐像素） | photocraft-reference-only | 有：PhotoCraft 移植（`gpu/render/src/camera_raw.cpp`，未接入 executor，executor 仍跑旧 Bradford/黑盒曲线） | conditional | 已接入 | 已接入 | partial | 9.3.0 一张棚拍的 +100、-50、-100 测量保留为官方一致性证据；PhotoCraft 单位与 PixCake -100..100 的换算待登记 |
+| `exposure` | `photocraft-target` | A：`per_pixel::gains` 与 `camera_raw.rs` `balance()`（sRGB 解码 → ×2^EV → 编码） | 有（逐像素） | photocraft-reference-only | 有：PhotoCraft 移植（未接入 executor，executor 仍跑旧 EV 路径） | conditional | 已接入 | 已接入 | unverified | 不是 Photoshop“曝光度”调整图层（`compose/src/adjust.rs:138-157`）；输入编码契约未闭环 |
+| `contrast` | `photocraft-target` | A：`camera_raw/per_pixel.rs:23-25`、`camera_raw.rs` 阶段 3 S 曲线 | 有（无纹理/清晰度时） | photocraft-reference-only | 有：PhotoCraft 移植（未接入 executor，executor 仍跑旧 affine） | conditional | 已接入 | 已接入 | unverified | 旧 W3C affine 只作回归基线 |
 | `brightness` | `photocraft-target`（用户裁决：按 Photoshop） | B：`compose/src/adjust/tone.rs:155` `modern_brightness`，`modern_lut(brightness, 0)` 逐通道作用于编码值 | 有（compose 路径） | legacy-provisional | 有（旧加法偏移） | conditional | 已接入 | 已接入 | unverified | 在 A 管线中的位置是 PixCake-specific 顺序：暂定阶段 1 之后、阶段 2 之前，待黑盒确认 |
 | `highlights` / `shadows` | `photocraft-target` | A：`camera_raw/local_tone.rs`（引导滤波基底加权的局部曝光） | 无（空间阶段，仅 CPU） | legacy-provisional | 有（旧 0.45 系数） | conditional | 已接入 | 已接入 | unverified | 依赖整幅图像统计；OpenGL 版以移植后的 C++ reference 为 oracle |
 | `whites` / `blacks` | `photocraft-target` | A：`camera_raw/whites_blacks.rs`、`per_pixel::white_black_points` | 有（逐像素，统计在 CPU） | legacy-provisional | 有（旧 0.20 系数） | conditional | 已接入 | 已接入 | unverified | 图像自适应曲线；预览代理与导出必须共用统计 |
 | `clarity` / `texture` | `photocraft-target` | A：`camera_raw/local_tone.rs`（分带局部对比度） | 无（空间阶段，仅 CPU） | legacy-provisional | 有（三者共用全局对比度） | conditional | 已接入 | 已接入 | unverified | 旧实现与目标语义差距大 |
 | `dehaze` | `photocraft-target` | A：`camera_raw.rs` 阶段 2 暗通道先验 + 引导滤波 | 无（空间阶段，仅 CPU） | legacy-provisional | 有（同上） | conditional | 已接入 | 已接入 | unverified | 同上 |
-| `vibrance` / `saturation` | `photocraft-target` | A：`camera_raw.rs` 阶段 4 Presence | 有（逐像素） | legacy-provisional | 有（旧最大通道衰减） | conditional | 已接入 | 已接入 | unverified | 不是 Photoshop“自然饱和度”调整图层 |
+| `vibrance` / `saturation` | `photocraft-target` | A：`camera_raw.rs` 阶段 4 Presence | 有（逐像素） | photocraft-reference-only | 有：PhotoCraft 移植（未接入 executor，executor 仍跑旧最大通道衰减） | conditional | 已接入 | 已接入 | unverified | 不是 Photoshop“自然饱和度”调整图层 |
 | 曲线 | `photocraft-target` | A：`camera_raw.rs` 阶段 5 参数曲线与 master/R/G/B 点曲线、`validate_curve` | 有（逐像素） | not-implemented | 无 | 无 | 不绘制 | 不绘制 | unverified | PixCake 曲线参数尚未注册；不能用旧色阶或占位曲线冒充 |
-| HSL 八色带 | `photocraft-target` | A：`camera_raw.rs` 阶段 6 Color Mixer（色带名与 PixCake 一致） | 有（逐像素） | legacy-provisional | 有（旧八色带线性权重） | conditional | 已接入 | 已接入 | unverified | 不是 Photoshop“色相/饱和度”六范围 |
-| 色彩分级 | `photocraft-target` | A：`camera_raw.rs` 阶段 7 四色轮 + Blending/Balance | 有（逐像素） | legacy-provisional | 有（旧三角分区） | conditional | 已接入 | 已接入 | unverified | PixCake 未注册 Balance；不是 Photoshop ColorBalance |
+| HSL 八色带 | `photocraft-target` | A：`camera_raw.rs` 阶段 6 Color Mixer（色带名与 PixCake 一致） | 有（逐像素） | photocraft-reference-only | 有：PhotoCraft 移植（未接入 executor，executor 仍跑旧八色带线性权重） | conditional | 已接入 | 已接入 | unverified | 不是 Photoshop“色相/饱和度”六范围 |
+| 色彩分级 | `photocraft-target` | A：`camera_raw.rs` 阶段 7 四色轮 + Blending/Balance | 有（逐像素） | photocraft-reference-only | 有：PhotoCraft 移植（未接入 executor，executor 仍跑旧三角分区） | conditional | 已接入 | 已接入 | unverified | PixCake 未注册 Balance；不是 Photoshop ColorBalance |
 | 颗粒 `amount/size/roughness` | `photocraft-target` | A：`camera_raw.rs` 阶段 9 grain | 有（逐像素，全分辨率坐标） | legacy-provisional | 有（旧值噪声） | conditional | 已接入 | 已接入 | unverified | 预览代理与导出须用同一全分辨率坐标 |
 | 颗粒 `shadows/midtones/highlights/color` | `PixCake-specific` | Camera Raw 无这些子参数 | — | legacy-provisional | 有 | conditional | 已接入 | 已接入 | unverified | PixCake 扩展，单独记录公式 |
 | 色阶（RGB 复合） | `photocraft-target` | B：`compose/src/adjust.rs:159-178`、`compose/src/adjust/tone.rs:299-367` | 有 | legacy-provisional | 有（仅复合 RGB） | conditional | 已接入 | 已接入 | unverified | per-channel/master、位深和 float 规则未移植；PixCake 没有独立 R/G/B 参数 |
@@ -57,11 +57,12 @@ PhotoCraft 已有对应能力时，`photocraft-target` 是 PixCake 的目标行�
 - GPU 支持判定：`PassRegistry::gpuSupported` 只接受已登记能力、通道和最多四个蒙版：`gpu/render/src/render_executor.cpp`。
 - 预览：`apps/renderd/src/render_service.cpp` 先尝试 GPU，失败或不满足条件时调用 `renderReference`。
 - 导出：`apps/exportd/src/export_service.cpp` 使用同一个 `RenderExecutor`，同样支持 GPU 和 reference fallback。
+- PhotoCraft Camera Raw 逐像素阶段的 C++ 移植与对照向量：[逐像素移植证据](2026-11-09-camera-raw-per-pixel-port.md)；`tests/gpu/test_camera_raw_port.cpp`。
 - 现有色彩分组逐像素和 GPU readback 证据：`docs/superpowers/evidence/2026-11-06-color-groups-reference-pixels.md`；该证据只能证明 PixCake 旧 reference 与 shader 对齐，不能证明 PhotoCraft parity。
 
 ## 验收结论
 
-当前可以说：**已登记的 PixCake 旧 reference 算法大部分接入了预览和导出，并有条件性 GPU 路径；除八色带黑白、颗粒扩展子参数、AI 业务和色彩编辑器外，基础调色各项都已有明确的 PhotoCraft 移植目标（亮度按 Photoshop 调整图层，其余多数在 Camera Raw 管线）。目前没有任何一项达到 `photocraft-reference-only` 或 `photocraft-ported`。**
+当前可以说：**已登记的 PixCake 旧 reference 算法大部分接入了预览和导出，并有条件性 GPU 路径；除八色带黑白、颗粒扩展子参数、AI 业务和色彩编辑器外，基础调色各项都已有明确的 PhotoCraft 移植目标（亮度按 Photoshop 调整图层，其余多数在 Camera Raw 管线）。白平衡、曝光、对比度、鲜艳度/饱和度、HSL 八色带和色彩分级六行已到 `photocraft-reference-only`：C++ 移植与 PhotoCraft 的 2044 个对照像素一致（最大差 8.34e-7），但尚未接入 executor、GPU 和预览/导出，见[逐像素移植证据](2026-11-09-camera-raw-per-pixel-port.md)。没有任何一项达到 `photocraft-ported`。**
 
 当前不能说：**PhotoCraft 已实现的能力都已移植到 PixCake，或旧 PixCake 公式、GPU readback 已经与 PhotoCraft/像素蛋糕官方逐像素一致。**
 

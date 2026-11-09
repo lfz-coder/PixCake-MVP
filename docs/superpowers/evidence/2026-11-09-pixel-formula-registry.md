@@ -20,17 +20,19 @@ PhotoCraft 参考副本当前提交为 `885a6ddf27cc58c07faf1722e5c327cd38953657
 
 这些路径定义移植目标，不改变 PixCake 的 C++/OpenGL 架构。下文“来源/结论”列先写来源（`photocraft-target`/`PixCake-specific`/`no-equivalent`），再写当前移植状态。
 
+**2026-11-09 移植进展**：temperature、tint、exposure、contrast、vibrance、saturation、HSL 八色带和色彩分级的 PhotoCraft Camera Raw 公式已移植为 `gpu/render/src/camera_raw.cpp`，与 PhotoCraft 对照向量一致，状态为 `photocraft-reference-only`（见[逐像素移植证据](2026-11-09-camera-raw-per-pixel-port.md)）。下文“当前实际公式”仍描述 `RenderExecutor` 正在执行的 legacy 公式，直到接入完成。
+
 ## 1. 全局色彩和影调
 
 ### 白平衡、风格、曝光、对比度
 
 | 参数 | UI 到内部值 | 当前实际公式 | 来源/结论 | 实现与证据 |
 | --- | --- | --- | --- | --- |
-| temperature | 当前 -100..100 为 PixCake 暂定映射 | 当前是旧 Bradford/D50-D65-D75 或黑盒曲线路径，具体以代码为准；PhotoCraft 目标为 `white_balance_gains(temperature, tint)` 按亮度归一的三通道增益，在线性光中相乘 | `photocraft-target`（A）；当前 `legacy-provisional`。9.3.0 的 +100/-50/-100 黑盒测量保留为官方一致性证据，不是公式来源 | white_balance_matrix()/apply_warm()；render_executor.cpp；PhotoCraft `algo/src/camera_raw.rs:670`、`camera_raw/per_pixel.rs:13-20` |
-| tint | 当前 t/100·0.5 stop | 旧路径为 Bradford 绿锥缩放；PhotoCraft 目标同上，与 temperature 共用一次增益 | `photocraft-target`（A）；当前 `legacy-provisional` | tint_matrix()；render_executor.cpp；同上 |
+| temperature | 当前 -100..100 为 PixCake 暂定映射 | 当前是旧 Bradford/D50-D65-D75 或黑盒曲线路径，具体以代码为准；PhotoCraft 目标为 `white_balance_gains(temperature, tint)` 按亮度归一的三通道增益，在线性光中相乘 | `photocraft-target`（A）；executor 仍为 `legacy-provisional`，C++ 移植为 `photocraft-reference-only`。9.3.0 的 +100/-50/-100 黑盒测量保留为官方一致性证据，不是公式来源 | white_balance_matrix()/apply_warm()；render_executor.cpp；PhotoCraft `algo/src/camera_raw.rs:670`、`camera_raw/per_pixel.rs:13-20` |
+| tint | 当前 t/100·0.5 stop | 旧路径为 Bradford 绿锥缩放；PhotoCraft 目标同上，与 temperature 共用一次增益 | `photocraft-target`（A）；executor 仍为 `legacy-provisional`，C++ 移植为 `photocraft-reference-only` | tint_matrix()；render_executor.cpp；同上 |
 | AI 风格 amount | a=clamp(amount/100,0,2) | r'=r+0.04a; g'=g+0.01a; b'=b-0.03a | `PixCake-specific`；没有 PhotoCraft 对应业务模型 | color()；render_executor.cpp:153-163 |
-| exposure | EV，范围 -5..5（与 Camera Raw 单位相同） | 旧路径 g=2^EV，作用于未闭环的“工作值”；PhotoCraft 目标为文档值按 sRGB 解码到线性光 → 乘 `2^exposure`（与白平衡增益合并）→ 非负裁剪 → 重新编码 | `photocraft-target`（A）；当前 `legacy-provisional`。Photoshop“曝光度”调整图层（`compose/src/adjust.rs:138-157`，带 offset/gamma）**不是**本滑杆的目标 | apply_exposure()、tone()；PhotoCraft `algo/src/camera_raw.rs` 的 `balance()` 与 `per_pixel::gains` |
-| contrast | k=1+contrast/100 | 旧路径 p'=(p-0.5)·k+0.5；PhotoCraft 目标是 Camera Raw 阶段 3 中围绕中灰的 S 曲线（强度 `contrast/100·0.6`），作用于亮度并保持颜色比例 | `photocraft-target`（A）；当前 `legacy-provisional` | render_executor.cpp:151-152,169-171；PhotoCraft `algo/src/camera_raw/per_pixel.rs:23-25` 与 `camera_raw.rs` 阶段 3 |
+| exposure | EV，范围 -5..5（与 Camera Raw 单位相同） | 旧路径 g=2^EV，作用于未闭环的“工作值”；PhotoCraft 目标为文档值按 sRGB 解码到线性光 → 乘 `2^exposure`（与白平衡增益合并）→ 非负裁剪 → 重新编码 | `photocraft-target`（A）；executor 仍为 `legacy-provisional`，C++ 移植为 `photocraft-reference-only`。Photoshop“曝光度”调整图层（`compose/src/adjust.rs:138-157`，带 offset/gamma）**不是**本滑杆的目标 | apply_exposure()、tone()；PhotoCraft `algo/src/camera_raw.rs` 的 `balance()` 与 `per_pixel::gains` |
+| contrast | k=1+contrast/100 | 旧路径 p'=(p-0.5)·k+0.5；PhotoCraft 目标是 Camera Raw 阶段 3 中围绕中灰的 S 曲线（强度 `contrast/100·0.6`），作用于亮度并保持颜色比例 | `photocraft-target`（A）；executor 仍为 `legacy-provisional`，C++ 移植为 `photocraft-reference-only` | render_executor.cpp:151-152,169-171；PhotoCraft `algo/src/camera_raw/per_pixel.rs:23-25` 与 `camera_raw.rs` 阶段 3 |
 
 ### 亮度、高光、阴影、白色、黑色
 
