@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace pixcake {
 
@@ -94,6 +95,22 @@ struct ExportLayout {
 // 相纸的像素大小（宽、高）；长或宽超过 20000 像素的设置不合法（parse 拒绝）。
 std::uint32_t layout_page_width(const ExportLayout& layout);
 std::uint32_t layout_page_height(const ExportLayout& layout);
+
+// 一张照片（宽×高像素）在这套排版下落在相纸的哪里：页面大小、边距窗口（[left,right)×[top,bottom)，
+// 窗口外是白的）和每张照片的矩形（相纸像素，可以伸出窗口或相纸，使用者自己裁）。导出进程和导出弹窗的预览
+// 共用这一份，两边不会对不上。普通照片排版 `scaled` 为真，只有一个矩形，是缩放后的大小；证件照排版是
+// rows×cols 个原始大小的矩形（见上面的画布规则）。相纸大小不合法（0 或超过 20000 像素）时返回 false。
+struct LayoutRect {
+  std::int64_t left = 0, top = 0, width = 0, height = 0;
+};
+struct LayoutGeometry {
+  std::uint32_t page_width = 0, page_height = 0;
+  std::int64_t window_left = 0, window_top = 0, window_right = 0, window_bottom = 0;
+  bool scaled = false;
+  std::vector<LayoutRect> photos;
+};
+bool layout_geometry(const ExportLayout& layout, std::uint32_t photo_width, std::uint32_t photo_height,
+                     LayoutGeometry& out);
 
 // 导出设置（需求第 19 节）。品质与文件大小限制二选一：最多给一个。
 struct ExportSettings {

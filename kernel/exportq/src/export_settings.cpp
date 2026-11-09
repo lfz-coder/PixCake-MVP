@@ -112,6 +112,46 @@ std::uint32_t layout_page_height(const ExportLayout& layout) {
   return static_cast<std::uint32_t>(std::llround(layout.paper_height_mm * layout.dpi / 25.4));
 }
 
+bool layout_geometry(const ExportLayout& layout, std::uint32_t photo_width, std::uint32_t photo_height,
+                     LayoutGeometry& out) {
+  const std::uint32_t width = layout_page_width(layout);
+  const std::uint32_t height = layout_page_height(layout);
+  if (width == 0 || height == 0 || width > 20000 || height > 20000 || photo_width == 0 || photo_height == 0) {
+    return false;
+  }
+  out = LayoutGeometry{};
+  out.page_width = width;
+  out.page_height = height;
+  const auto mm = [&](int value) { return static_cast<std::int64_t>(std::llround(value * layout.dpi / 25.4)); };
+  out.window_left = std::min<std::int64_t>(mm(layout.margin_left_mm), width);
+  out.window_top = std::min<std::int64_t>(mm(layout.margin_top_mm), height);
+  out.window_right = std::max<std::int64_t>(static_cast<std::int64_t>(width) - mm(layout.margin_right_mm), 0);
+  out.window_bottom = std::max<std::int64_t>(static_cast<std::int64_t>(height) - mm(layout.margin_bottom_mm), 0);
+  if (!layout.id_photo) {
+    // 整张照片缩放到正好放进相纸，居中。
+    const double scale = std::min(static_cast<double>(width) / photo_width, static_cast<double>(height) / photo_height);
+    const auto dw = std::min<std::int64_t>(width, std::max<std::int64_t>(1, std::llround(photo_width * scale)));
+    const auto dh = std::min<std::int64_t>(height, std::max<std::int64_t>(1, std::llround(photo_height * scale)));
+    out.scaled = true;
+    out.photos.push_back({(static_cast<std::int64_t>(width) - dw) / 2, (static_cast<std::int64_t>(height) - dh) / 2, dw, dh});
+    return true;
+  }
+  // 证件照排版：rows×cols 张原始大小的照片（格间 gap_px）拼成一整块画布，画布中心对准相纸中心，
+  // 相纸是这块画布上的窗口：画布大了裁、小了留白（2026-11-08 实测归纳）。
+  const std::int64_t iw = photo_width, ih = photo_height, gap = layout.gap_px;
+  const std::int64_t canvas_w = layout.cols * iw + (layout.cols - 1) * gap;
+  const std::int64_t canvas_h = layout.rows * ih + (layout.rows - 1) * gap;
+  const auto floor_half = [](std::int64_t v) { return v >= 0 ? v / 2 : -((-v + 1) / 2); };
+  const std::int64_t origin_x = floor_half(static_cast<std::int64_t>(width) - canvas_w);
+  const std::int64_t origin_y = floor_half(static_cast<std::int64_t>(height) - canvas_h);
+  for (int row = 0; row < layout.rows; ++row) {
+    for (int col = 0; col < layout.cols; ++col) {
+      out.photos.push_back({origin_x + col * (iw + gap), origin_y + row * (ih + gap), iw, ih});
+    }
+  }
+  return true;
+}
+
 WatermarkShape watermark_shape(std::uint32_t width, std::uint32_t height) {
   // 方图：长宽相差不超过 1%（test 版的判定没有测，取一个容得下取整误差的值）。
   const std::uint64_t longer = std::max(width, height);

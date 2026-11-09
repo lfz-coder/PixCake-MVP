@@ -102,39 +102,23 @@ ResultCode compose_layout(const ExportLayout& layout, RgbaSource& image, std::st
     diagnostic = "排版的照片是空的";
     return ResultCode::StateConflict;
   }
+  LayoutGeometry geometry;
+  if (!layout_geometry(layout, image.width, image.height, geometry)) {
+    diagnostic = "相纸尺寸不合法";
+    return ResultCode::StateConflict;
+  }
   Page page;
   page.width = width;
   page.height = height;
   page.rgba.assign(static_cast<std::size_t>(width) * height * 4, 255);
-  const auto mm = [&](int value) { return static_cast<std::int64_t>(std::llround(value * layout.dpi / 25.4)); };
-  const Rect window{std::min<std::int64_t>(mm(layout.margin_left_mm), width),
-                    std::min<std::int64_t>(mm(layout.margin_top_mm), height),
-                    std::max<std::int64_t>(width - mm(layout.margin_right_mm), 0),
-                    std::max<std::int64_t>(height - mm(layout.margin_bottom_mm), 0)};
+  const Rect window{geometry.window_left, geometry.window_top, geometry.window_right, geometry.window_bottom};
   const std::vector<std::uint8_t> photo = flatten(image);
-
-  if (!layout.id_photo) {
-    const double scale = std::min(static_cast<double>(width) / image.width, static_cast<double>(height) / image.height);
-    const auto dw = std::max<std::uint32_t>(1, static_cast<std::uint32_t>(std::llround(image.width * scale)));
-    const auto dh = std::max<std::uint32_t>(1, static_cast<std::uint32_t>(std::llround(image.height * scale)));
-    const auto scaled = resample(photo, image.width, image.height, std::min(dw, width), std::min(dh, height));
-    const std::uint32_t sw = std::min(dw, width), sh = std::min(dh, height);
-    blit(page, scaled, sw, sh, (static_cast<std::int64_t>(width) - sw) / 2, (static_cast<std::int64_t>(height) - sh) / 2, window);
+  if (geometry.scaled) {
+    const LayoutRect& at = geometry.photos.front();
+    const auto sw = static_cast<std::uint32_t>(at.width), sh = static_cast<std::uint32_t>(at.height);
+    blit(page, resample(photo, image.width, image.height, sw, sh), sw, sh, at.left, at.top, window);
   } else {
-    // 官方的做法（2026-11-08 实测归纳）：把 rows×cols 张原始大小的照片（格间 gap_px）拼成一整块画布，
-    // 画布中心对准相纸中心，相纸是这块画布上的一个窗口。画布比相纸大就裁（2 行时缝正好落在纸中间，
-    // 上格是照片下部、下格是照片上部；奇数行时中心落在中间那张照片里，只看到一张），小就留白。
-    const std::int64_t iw = image.width, ih = image.height, gap = layout.gap_px;
-    const std::int64_t canvas_w = layout.cols * iw + (layout.cols - 1) * gap;
-    const std::int64_t canvas_h = layout.rows * ih + (layout.rows - 1) * gap;
-    const auto floor_half = [](std::int64_t v) { return v >= 0 ? v / 2 : -((-v + 1) / 2); };
-    const std::int64_t origin_x = floor_half(static_cast<std::int64_t>(width) - canvas_w);
-    const std::int64_t origin_y = floor_half(static_cast<std::int64_t>(height) - canvas_h);
-    for (int row = 0; row < layout.rows; ++row) {
-      for (int col = 0; col < layout.cols; ++col) {
-        blit(page, photo, image.width, image.height, origin_x + col * (iw + gap), origin_y + row * (ih + gap), window);
-      }
-    }
+    for (const LayoutRect& at : geometry.photos) blit(page, photo, image.width, image.height, at.left, at.top, window);
   }
   image.width = width;
   image.height = height;

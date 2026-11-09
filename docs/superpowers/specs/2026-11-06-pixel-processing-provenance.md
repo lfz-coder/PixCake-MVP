@@ -106,7 +106,7 @@ W3C 规定 `contrast(100%)` 保持输入、`contrast(0%)` 变成中灰；项目�
 
 逐参数的当前状态以 [2026-11-09 像素处理来源与执行现状矩阵](../evidence/2026-11-09-pixel-processing-status-matrix.md) 为准。本文保留公式来源和证据等级；历史决策记录只说明当时为什么采用某个项目公式，不覆盖矩阵中的当前实现状态。若本文、矩阵、代码注释或测试名称出现冲突，必须在同一变更中修正，不能选择性引用。
 
-## 决策记录
+## 历史决策记录（不覆盖当前矩阵）
 
 2026-11-06：先采用有明确 EV 依据的 Exposure 作为第一条 GPU/reference 垂直切片；随后将 Temperature/Tint 改为 ICC Bradford 色适应 reference，将 Contrast 改为 W3C affine contrast reference。三者仍不报告为 GPU 已实现或官方等价效果。
 2026-11-06：完成 Temperature/Tint/Contrast 的 shader 参数绑定和 CPU/GPU 共用公式，但本机 Qt offscreen 与 native CGL 均无法创建 OpenGL context，因此没有把三者提升为 GPU `Implemented`；待真实 backend readback 成功后再更新门禁。

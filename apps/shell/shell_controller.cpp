@@ -1,5 +1,7 @@
 #include "shell_controller.hpp"
 
+#include <QImageReader>
+
 #include "pixcake/capability/capability_registry.hpp"
 
 #include <QDebug>
@@ -862,6 +864,14 @@ std::optional<ExportTarget> ShellController::export_target() const {
   if (projects_->resolve_photo(*selected_photo_, path, diagnostic) == ResultCode::Ok) {
     const auto slash = path.rfind('/');
     target.original_folder = slash == std::string::npos || slash == 0 ? "/" : path.substr(0, slash);
+    QImageReader reader(QString::fromStdString(path));
+    reader.setAutoTransform(true);
+    QSize size = reader.size();
+    if (size.isValid() && reader.transformation().testFlag(QImageIOHandler::TransformationRotate90)) size.transpose();
+    if (size.isValid()) {
+      target.product_width = size.width();
+      target.product_height = size.height();
+    }
   }
   target.defaults = exports_->defaults();
   target.estimate = exports_->estimate(target.photo_ids);

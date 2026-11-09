@@ -428,7 +428,16 @@ int smoke_export(pixcake::shell::ShellWindow& window, const QString& folder) {
                                    .arg(dpi ? dpi->value() : -1).arg(plain_layout && plain_layout->isChecked());
       // Plain layout hides the grid; the id layout shows it.
       bool grid_follows_kind = false;
+      // The preview shows the paper (89x127 portrait here) while the switch is on, when a thumbnail exists.
+      bool paper_in_preview = true;
       if (restored) {
+        if (auto* preview = dialog->findChild<QLabel*>(QStringLiteral("export-preview"))) {
+          const QPixmap shown = preview->pixmap();
+          if (!shown.isNull()) paper_in_preview = std::abs(shown.width() * 127.0 / (shown.height() * 89.0) - 1.0) < 0.03;
+        }
+      }
+      if (restored) {
+        screenshot(*dialog, "export-layout");
         const bool plain_hidden = !rows->isVisibleTo(dialog);
         dialog->findChild<QRadioButton*>(QStringLiteral("export-layout-id"))->setChecked(true);
         grid_follows_kind = plain_hidden && rows->isVisibleTo(dialog);
@@ -443,9 +452,9 @@ int smoke_export(pixcake::shell::ShellWindow& window, const QString& folder) {
         top->setValue(0);
       }
       tabs->setCurrentIndex(1);
-      if (!restored || !grid_follows_kind) {
+      if (!restored || !grid_follows_kind || !paper_in_preview) {
         problem = QStringLiteral("the layout tab differs from the observed one (restored %1, grid follows kind %2, %3)")
-                      .arg(restored).arg(grid_follows_kind).arg(snapshot);
+                      .arg(restored).arg(grid_follows_kind && paper_in_preview).arg(snapshot);
         dialog->reject();
         return;
       }

@@ -566,7 +566,54 @@ class ExportDialog final : public QDialog {
         painter.drawImage(QRectF(-w / 2.0, -h / 2.0, w, h), material_image_);
       }
     }
+    if (layout_ != nullptr && tabs_ != nullptr && tabs_->currentIndex() == 2 &&
+        static_cast<QGroupBox*>(layout_)->isChecked()) {
+      frame = paperPreview(frame);
+    }
     preview_->setPixmap(QPixmap::fromImage(frame));
+  }
+
+  // 排版印刷页的预览：把（已带水印的）缩略图按真实排版规则画到相纸上（kernel 的 layout_geometry，
+  // 与 exportd 同一份），整张相纸缩到预览框里；边距窗口外是白的，相纸四周画一圈灰线。
+  QImage paperPreview(const QImage& photo) const {
+    // 成品的像素大小：原图文件头的大小；裁剪或旋转让缩略图的长宽比对不上时，按缩略图的长宽比、
+    // 取原图长边估（官方也是按成品算，这里没有裁剪后的尺寸）。
+    int pw = target_.product_width, ph = target_.product_height;
+    if (pw <= 0 || ph <= 0) {
+      pw = 3000;
+      ph = std::max(1, static_cast<int>(std::lround(3000.0 * photo.height() / photo.width())));
+    } else if (std::abs(static_cast<double>(pw) / ph - static_cast<double>(photo.width()) / photo.height()) > 0.02 *
+                                                                                                    pw / ph) {
+      const double longer = std::max(pw, ph);
+      if (photo.width() >= photo.height()) {
+        pw = static_cast<int>(longer);
+        ph = std::max(1, static_cast<int>(std::lround(longer * photo.height() / photo.width())));
+      } else {
+        ph = static_cast<int>(longer);
+        pw = std::max(1, static_cast<int>(std::lround(longer * photo.width() / photo.height())));
+      }
+    }
+    const ExportLayout layout = currentLayout();
+    LayoutGeometry geometry;
+    if (!layout_geometry(layout, static_cast<std::uint32_t>(pw), static_cast<std::uint32_t>(ph), geometry)) return photo;
+    const double scale = std::min(320.0 / geometry.page_width, 320.0 / geometry.page_height);
+    QImage paper(std::max(1, static_cast<int>(std::lround(geometry.page_width * scale))),
+                 std::max(1, static_cast<int>(std::lround(geometry.page_height * scale))),
+                 QImage::Format_ARGB32_Premultiplied);
+    paper.fill(Qt::white);
+    QPainter painter(&paper);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform);
+    painter.scale(scale, scale);
+    painter.setClipRect(QRectF(geometry.window_left, geometry.window_top, geometry.window_right - geometry.window_left,
+                               geometry.window_bottom - geometry.window_top));
+    for (const LayoutRect& at : geometry.photos) {
+      painter.drawImage(QRectF(at.left, at.top, at.width, at.height), photo);
+    }
+    painter.setClipping(false);
+    painter.resetTransform();
+    painter.setPen(QColor(0x80, 0x80, 0x80));
+    painter.drawRect(paper.rect().adjusted(0, 0, -1, -1));
+    return paper;
   }
 
   // 记住水印开关和参数（导出时随默认值一起写；取消时单独写）。
@@ -690,6 +737,16 @@ class ExportDialog final : public QDialog {
     if (target_.defaults.layout) applyLayout(*target_.defaults.layout);  // 实测记住上次的全部参数
     connect(layout_id_, &QRadioButton::toggled, this, grid_visible);
     grid_visible();
+    // 预览跟着排版参数走。
+    connect(group, &QGroupBox::toggled, this, [this] { updatePreview(); });
+    for (QRadioButton* radio : {layout_id_, layout_plain_, layout_landscape_, layout_portrait_}) {
+      connect(radio, &QRadioButton::toggled, this, [this] { updatePreview(); });
+    }
+    connect(layout_paper_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] { updatePreview(); });
+    for (QSpinBox* box : {layout_dpi_, layout_rows_, layout_cols_, layout_gap_, layout_top_, layout_bottom_,
+                          layout_left_, layout_right_}) {
+      connect(box, qOverload<int>(&QSpinBox::valueChanged), this, [this] { updatePreview(); });
+    }
     return group;
   }
 
@@ -739,11 +796,12 @@ class ExportDialog final : public QDialog {
     const int tab = tabs_->currentIndex();
     const bool custom = tab == 1;
     const bool print = tab == 2;
-    preview_->setVisible(custom);
+    preview_->setVisible(custom || print);
     advanced_->setVisible(custom);
     watermark_->setVisible(custom);  // 快速导出页没有水印（实测）
     layout_->setVisible(print);
     resize(custom || print ? QSize(902, 650) : QSize(480, 449));  // 实测页面的窗口大小
+    updatePreview();
   }
 
   void submit_() {

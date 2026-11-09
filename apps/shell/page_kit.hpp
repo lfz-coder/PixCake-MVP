@@ -82,6 +82,9 @@ struct ExportTarget {
   std::string project_name;
   std::string original_folder;
   ExportDefaults defaults;
+  // 第一张照片成品的像素大小（预览排版用；读原图文件头估的，不含裁剪，0 表示读不到）。
+  int product_width = 0;
+  int product_height = 0;
   // 精修效果图、免费效果图、原图的预估张数和这次要扣的张数；剩余张数来自本机账本。
   export_session::ExportEstimate estimate;
   std::int64_t remaining_sheets = 0;

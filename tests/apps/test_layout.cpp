@@ -155,6 +155,21 @@ int main() {
     layout.id_photo = false;
     assert(compose_layout(layout, clear, why) == ResultCode::Ok && white(clear, 900, 600));
   }
+  // The geometry the preview shares: the 2-row id layout on a 1024x1536 photo puts the photos at y -939 and 607.
+  {
+    ExportLayout two;
+    two.rows = 2;
+    LayoutGeometry geometry;
+    assert(layout_geometry(two, 1024, 1536, geometry));
+    assert(geometry.page_width == 1795 && geometry.page_height == 1205 && !geometry.scaled);
+    assert(geometry.photos.size() == 2 && geometry.photos[0].top == -939 && geometry.photos[1].top == 607);
+    assert(geometry.photos[0].left == 385 && geometry.photos[0].width == 1024 && geometry.photos[0].height == 1536);
+    two.id_photo = false;
+    assert(layout_geometry(two, 1024, 1536, geometry) && geometry.scaled && geometry.photos.size() == 1);
+    assert(geometry.photos[0].height == 1205 && geometry.photos[0].width == 803 && geometry.photos[0].left == 496);
+    two.paper_width_mm = 0;
+    assert(!layout_geometry(two, 1024, 1536, geometry));
+  }
   std::puts("layout ok");
   return 0;
 }
