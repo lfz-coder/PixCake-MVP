@@ -148,6 +148,10 @@ int main() {
   assert(classify_export(document_at(scratch, "x", "color.post", "temperature", "20")) == ExportEffect::Free);
   ::unlink(scratch.c_str());
   assert(classify_export(document_at(scratch, "x", "color.local", "temperature", "20")) == ExportEffect::Refined);
+  // 局部调色的多个蒙版：带 m<N>: 前缀的非默认值同样算精修；默认值（0）和只有部位没有调整都不算。
+  assert(classify_export(document_at(scratch, "x", "color.local", "m2:temperature", "20")) == ExportEffect::Refined);
+  assert(classify_export(document_at(scratch, "x", "color.local", "m2:temperature", "0")) == ExportEffect::Original);
+  assert(classify_export(document_at(scratch, "x", "color.local", "m2:region", "person.hair")) == ExportEffect::Original);
 
   Session session;
   PathAccess access;

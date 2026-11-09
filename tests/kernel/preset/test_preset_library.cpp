@@ -250,7 +250,44 @@ void test_manage_infer_and_codec() {
   EXPECT(pixcake::PresetLibrary::infer_type({}, modules).empty() && modules.empty());
 }
 
+// 局部调色的多个蒙版随预设整体写入：带前缀的参数照常校验，不合法的前缀或取值整次拒绝、文档不变。
+void test_local_masks_travel_with_a_preset() {
+  auto document = *pixcake::EditDocument::create("img-masks");
+  pixcake::test::FakeFileSystem files;
+  EXPECT(document.write_snapshot(files, kPath) == pixcake::ResultCode::Ok);
+  pixcake::PresetLibrary library;
+  Latch latch;
+  const auto fragment = [](const char* first_id, const char* first, const char* second_id, const char* second) {
+    return pixcake::PresetFragment{
+        "color.local", 2,
+        pixcake::encode_fragment_records(
+            {{pixcake::kFragmentParameterRecord, pixcake::encode_parameter_record(first_id, first)},
+             {pixcake::kFragmentParameterRecord, pixcake::encode_parameter_record(second_id, second)}})};
+  };
+  pixcake::Preset preset;
+  preset.id = "masks";
+  preset.name = "two masks";
+  preset.type = pixcake::kPresetColor;
+  preset.fragments.push_back(fragment("m2:exposure", "1", "m3:region", "person.hair"));
+  EXPECT(library.apply(document, preset, 0, files, kPath, latch) == pixcake::ResultCode::Ok);
+  EXPECT(document.committed_parameter("color.local", "m2:exposure") == std::optional<std::string>("1"));
+  EXPECT(document.committed_parameter("color.local", "m3:region") == std::optional<std::string>("person.hair"));
+  EXPECT(document.fragment("color.local")->version == 2);
+  // A parameter with an invalid prefix is an unknown field: kept in the fragment like any unknown parameter, never drawn.
+  pixcake::Preset odd = preset;
+  odd.fragments[0] = fragment("m99:exposure", "1", "m3:region", "person.hair");
+  EXPECT(library.apply(document, odd, 1, files, kPath, latch) == pixcake::ResultCode::Ok);
+  EXPECT(!document.committed_parameter("color.local", "m2:exposure") && document.committed_parameter("color.local", "m3:region"));
+  // A value outside the range of a valid prefixed parameter is refused as a whole and nothing changes.
+  const auto saved = files.files[kPath];
+  pixcake::Preset bad_value = preset;
+  bad_value.fragments[0] = fragment("m2:exposure", "9", "m3:region", "person.hair");
+  EXPECT(library.apply(document, bad_value, 2, files, kPath, latch) == pixcake::ResultCode::StateConflict);
+  EXPECT(document.revision() == 2 && files.files[kPath] == saved);
+}
+
 int main() {
+  test_local_masks_travel_with_a_preset();
   test_manage_infer_and_codec();
   test_c31_preset_apply_validates_through_capability_modules();
   test_c44_b04_b20_b21_name_counts_characters_not_bytes();
