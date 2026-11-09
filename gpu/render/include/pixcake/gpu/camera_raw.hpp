@@ -40,6 +40,9 @@ float linearToSrgb(float v);
 float luma(const Rgb& c);
 // Channel gains for Temperature / Tint (-100..100), before normalising to unit luminance.
 Rgb whiteBalanceGains(float temperature, float tint);
+// Weights of the eight Color Mixer bands at hue (degrees): hat functions between centres.
+std::array<float, 8> bandWeights(float hue);
+Rgb hsvToRgb(float h, float s, float v);
 
 // One display-encoded pixel through stages 1, 3, 4, 6, 7, then clipped to 0..1 unless
 // the settings are an identity (PhotoCraft's develop with float = false).
