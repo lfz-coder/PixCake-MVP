@@ -8,6 +8,7 @@ namespace pixcake::shell {
 QWidget* buildLoginPage(const PageContext& context);
 QWidget* buildHomePage(const PageContext& context);
 QWidget* buildLibraryPage(const PageContext& context);
+void prepareRefinePageEntry();
 QWidget* buildRefinePage(const PageContext& context);
 QWidget* buildCreativePage(const PageContext& context);
 

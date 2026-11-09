@@ -16,6 +16,7 @@
 #include "shell_window.hpp"
 
 #include <QApplication>
+#include <QFrame>
 #include <QDialog>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -1330,8 +1331,104 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
     qCritical("canvas or histogram is empty");
     return 8;
   }
-  // Reference lines are a display overlay: the toolbar opens a three-item menu,
-  // repeated lines can overlap, and the canvas owns selection/deletion gestures.
+  // Display zoom is a real dropdown and stays in the canvas view state.  It must not
+  // change the preview image itself or enter the edit document.
+  auto* zoom = window.findChild<QComboBox*>(QStringLiteral("refine-zoom-ratio"));
+  const int hundred = zoom == nullptr ? -1 : zoom->findData(1.0);
+  if (zoom == nullptr || hundred < 0 || zoom->findData(0.0) < 0 ||
+      window.findChild<QShortcut*>(QStringLiteral("shortcut-zoom-in")) == nullptr ||
+      window.findChild<QShortcut*>(QStringLiteral("shortcut-zoom-out")) == nullptr ||
+      window.findChild<QShortcut*>(QStringLiteral("shortcut-zoom-default")) == nullptr ||
+      window.findChild<QShortcut*>(QStringLiteral("shortcut-hand-tool")) == nullptr) {
+    qCritical("canvas zoom dropdown or shortcuts are missing");
+    return 8;
+  }
+  zoom->setCurrentIndex(hundred);
+  emit zoom->activated(hundred);
+  const QRectF hundred_rect = view->imageRect();
+  if (std::abs(view->zoom() - 1.0) > 1e-6 || std::abs(hundred_rect.width() - view->image().width()) > 1.0 ||
+      std::abs(hundred_rect.height() - view->image().height()) > 1.0) {
+    qCritical("100%% zoom did not use image pixels: %.3f rect %.1fx%.1f image %dx%d", view->zoom(), hundred_rect.width(),
+              hundred_rect.height(), view->image().width(), view->image().height());
+    return 8;
+  }
+  zoom->setCurrentIndex(zoom->findData(0.0));
+  emit zoom->activated(zoom->currentIndex());
+  if (view->zoom() != 0.0 || view->imageRect().isEmpty()) {
+    qCritical("fit zoom did not restore the canvas");
+    return 8;
+  }
+  // Plain wheel input is the canvas zoom gesture; the hand tool reserves
+  // panning for a drag.
+  view->setZoom(0.5);
+  const QPointF wheel_point = view->imageRect().center();
+  QWheelEvent wheel_event(wheel_point, wheel_point, QPoint(0, 0), QPoint(0, 120), Qt::NoButton, Qt::NoModifier,
+                          Qt::NoScrollPhase, false);
+  QCoreApplication::sendEvent(view, &wheel_event);
+  if (std::abs(view->zoom() - 1.0) > 1e-6) {
+    qCritical("plain wheel did not zoom the canvas");
+    return 8;
+  }
+  const auto check_sampling = [view](pixcake::shell::PixCakeImageView::SamplingMode expected, const char* label) {
+    view->repaint();
+    if (view->samplingMode() != expected) {
+      qCritical("unexpected canvas sampling mode for %s: got %d expected %d", label,
+                static_cast<int>(view->samplingMode()), static_cast<int>(expected));
+      return false;
+    }
+    return true;
+  };
+  view->setZoom(1.0);
+  if (!check_sampling(pixcake::shell::PixCakeImageView::SamplingMode::Direct, "100%%")) return 8;
+  view->setZoom(0.05);
+  if (!check_sampling(pixcake::shell::PixCakeImageView::SamplingMode::DownsamplePyramid, "5%%")) return 8;
+  view->setZoom(2.0);
+  if (!check_sampling(pixcake::shell::PixCakeImageView::SamplingMode::SmoothUpscale, "200%%")) return 8;
+  view->setZoom(1.0);
+  view->setZoom(0.0);
+  view->setZoom(-1.0);
+  if (std::abs(view->zoom() - 1.0) > 1e-6) {
+    qCritical("invalid zoom changed the last valid display");
+    return 8;
+  }
+  std::optional<QColor> hovered;
+  view->onHoverPixel([&hovered](std::optional<QColor> color) { hovered = color; });
+  const QRectF pixel_rect = view->imageRect();
+  const QPointF pixel_point = pixel_rect.center();
+  QMouseEvent pixel_move(QEvent::MouseMove, pixel_point, pixel_point, Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+  QCoreApplication::sendEvent(view, &pixel_move);
+  const QColor expected_pixel = view->image().pixelColor(view->image().width() / 2, view->image().height() / 2);
+  if (!hovered || hovered->rgb() != expected_pixel.rgb()) {
+    qCritical("zoomed canvas hover did not map to the image pixel");
+    return 8;
+  }
+  view->setFitZoom();
+  QFrame* hand_tool = nullptr;
+  const QString hand_label = QString::fromStdString(pixcake::ui::shell::page_item("refine-tools", "hand").text);
+  for (auto* tool : window.findChildren<QFrame*>(QStringLiteral("workspace-tool-button"))) {
+    if (tool->accessibleName() == hand_label) hand_tool = tool;
+  }
+  if (hand_tool == nullptr) {
+    qCritical("hand toolbar tool is missing");
+    return 8;
+  }
+  if (!view->handTool()) {
+    qCritical("hand tool is not enabled by default");
+    return 8;
+  }
+  const QPointF hand_click(hand_tool->rect().center());
+  QMouseEvent hand_press(QEvent::MouseButtonPress, hand_click, hand_click, Qt::LeftButton, Qt::LeftButton,
+                         Qt::NoModifier);
+  QMouseEvent hand_release(QEvent::MouseButtonRelease, hand_click, hand_click, Qt::LeftButton, Qt::NoButton,
+                           Qt::NoModifier);
+  QCoreApplication::sendEvent(hand_tool, &hand_press);
+  QCoreApplication::sendEvent(hand_tool, &hand_release);
+  if (!view->handTool()) {
+    qCritical("hand toolbar click unexpectedly disabled the hand tool");
+    return 8;
+  }
+  // Reference lines are a display overlay: the toolbar click creates one,
+  // shortcuts add the other orientation, and hiding keeps the lines intact.
   QFrame* guide_tool = nullptr;
   const QString guide_label = QString::fromStdString(pixcake::ui::shell::page_item("refine-tools", "guides").text);
   for (auto* tool : window.findChildren<QFrame*>(QStringLiteral("workspace-tool-button"))) {
@@ -1359,12 +1456,15 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
       return QKeySequence(QString::fromStdString(pixcake::ui::shell::shortcut_key(id)))
           .toString(QKeySequence::NativeText);
     };
+    const QString horizontal_key = native_key("guide-horizontal");
+    const QString vertical_key = native_key("guide-vertical");
+    const QString toggle_key = native_key("guide-toggle");
     guide_menu_ok = actions[0]->text().contains(horizontal) &&
-                    actions[0]->text().contains(native_key("guide-horizontal")) &&
+                    actions[0]->text().contains(horizontal_key) &&
                     actions[1]->text().contains(vertical) &&
-                    actions[1]->text().contains(native_key("guide-vertical")) &&
+                    actions[1]->text().contains(vertical_key) &&
                     actions[0]->isEnabled() && actions[1]->isEnabled() && actions[2]->isSeparator() &&
-                    actions[3]->text().contains(hide) && actions[3]->text().contains(native_key("guide-toggle")) &&
+                    actions[3]->text().contains(hide) && actions[3]->text().contains(toggle_key) &&
                     actions[3]->isEnabled();
     popup->close();
   });
@@ -1380,16 +1480,27 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
     return 8;
   }
   const std::size_t guide_count = window.controller().guides().size();
+  // The menu itself was verified above; use the controller action for the
+  // following state assertions so the smoke run does not leave a second modal
+  // menu open without a user selection.
   window.controller().request_create_guide(false);
+  if (window.controller().guides().size() != guide_count + 1 || view->guides().size() != guide_count + 1) {
+    qCritical("reference-line toolbar click did not create a guide");
+    return 8;
+  }
   window.controller().request_create_guide(true);
+  if (window.controller().guides().size() != guide_count + 2 || !window.controller().guides()[1].vertical) {
+    qCritical("vertical reference line was not created");
+    return 8;
+  }
   window.controller().request_create_guide(false);
   if (window.controller().guides().size() != guide_count + 3 ||
       window.controller().guides()[2].position != window.controller().guides()[0].position) {
-    qCritical("reference-line creation did not preserve overlap");
+    qCritical("overlapping reference lines were not preserved");
     return 8;
   }
   window.controller().request_move_guide(0, 80.0);
-  if (view->guides().size() != guide_count + 3 || view->guides()[0].position != 80.0) {
+  if (window.controller().guides()[0].position != 80.0 || view->guides()[0].position != 80.0) {
     qCritical("reference-line movement was not published to the canvas");
     return 8;
   }
@@ -1413,9 +1524,13 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
     return 8;
   }
   window.controller().request_toggle_guides();
+  if (view->guidesVisible()) {
+    qCritical("reference-line visibility toggle did not hide guides");
+    return 8;
+  }
   const std::size_t hidden_count = window.controller().guides().size();
   window.controller().request_create_guide(false);
-  if (view->guidesVisible() || window.controller().guides().size() != hidden_count) {
+  if (window.controller().guides().size() != hidden_count) {
     qCritical("hidden reference lines still allowed creation");
     return 8;
   }

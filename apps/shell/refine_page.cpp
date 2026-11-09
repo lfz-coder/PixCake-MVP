@@ -26,6 +26,7 @@
 #include <QSignalBlocker>
 #include <QMenu>
 #include <QKeySequence>
+#include <QMouseEvent>
 #include <QPointer>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -313,6 +314,9 @@ struct RefineUiState {
   std::set<std::string> open_sections;  // “<页>/<分组名>”
   std::string local_tab = "subject";    // 局部调色的蒙版页签
   bool presets = true;
+  double zoom = 0.0;
+  // 抓手是精修画布的默认浏览工具；进入会产生画布笔触的工具时才暂时关闭。
+  bool hand = true;
   bool mask_list = true;  // 局部调色的蒙版列表浮窗开着（官方进局部调色时是开的）
 };
 RefineUiState& uiState() {
@@ -1277,6 +1281,7 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
             state->pending_region = region;
             state->draw = true;
             state->editing = true;  // 画笔设置、拖动开关在“编辑蒙版”里
+            if (canvas != nullptr) canvas->setHandTool(false);
             again();
           });
         }
@@ -1549,7 +1554,10 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
     draw->setObjectName(QStringLiteral("refine-local-draw"));
     draw->setCheckable(true);
     draw->setChecked(state->draw);
-    QObject::connect(draw, &QPushButton::toggled, draw, [state](bool on) { state->draw = on; });
+    QObject::connect(draw, &QPushButton::toggled, draw, [state, canvas](bool on) {
+      state->draw = on;
+      if (on && canvas != nullptr) canvas->setHandTool(false);
+    });
     item_buttons_layout->addWidget(draw);
     auto* add_item = action(qtext("local.item.add"), item_buttons, true);
     add_item->setObjectName(QStringLiteral("refine-local-item-add"));
@@ -1916,6 +1924,7 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
   // 画笔快捷键：K 选画笔并打开“在画布上拖动”；其余调当前画笔设置的滑杆（每次 10），只在画笔设置显示时起作用。
   bindShortcut(modules, "brush-tool", [=] {
     if (state->mask < 0) return;
+    if (view) view->setHandTool(false);
     for (auto* box : body->findChildren<QComboBox*>(QStringLiteral("refine-local-item-region"))) {
       const int index = box->findData(QStringLiteral("brush"));
       if (index >= 0) box->setCurrentIndex(index);
@@ -2229,12 +2238,141 @@ class ClickFilter final : public QObject {
   std::function<void()> run_;
 };
 
+class ZoomPopupRow final : public QFrame {
+ public:
+  ZoomPopupRow(int index, QString label, QString shortcut, QWidget* parent, std::function<void(int)> activate)
+      : QFrame(parent), index_(index), activate_(std::move(activate)) {
+    setObjectName(QStringLiteral("refine-zoom-popup-row"));
+    setAttribute(Qt::WA_Hover, true);
+    setFixedHeight(44);
+    auto* row = new QHBoxLayout(this);
+    row->setContentsMargins(16, 0, 16, 0);
+    row->setSpacing(8);
+    auto* text = new QLabel(std::move(label), this);
+    text->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    row->addWidget(text, 1);
+    if (!shortcut.isEmpty()) {
+      auto* key = new QLabel(std::move(shortcut), this);
+      key->setObjectName(QStringLiteral("refine-zoom-popup-shortcut"));
+      key->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+      row->addWidget(key, 0, Qt::AlignRight);
+    }
+  }
+
+ protected:
+  void mouseReleaseEvent(QMouseEvent* event) override {
+    if (event->button() == Qt::LeftButton && rect().contains(event->position().toPoint()) && activate_) {
+      activate_(index_);
+      event->accept();
+      return;
+    }
+    QFrame::mouseReleaseEvent(event);
+  }
+
+ private:
+  int index_ = 0;
+  std::function<void(int)> activate_;
+};
+
+// The zoom trigger keeps the toolbar compact, while its popup uses the same
+// measured rows and full-width separators as the editor menu.
+class ZoomPopupCombo final : public QComboBox {
+ public:
+  struct Item {
+    QString label;
+    double factor = 0.0;
+    QString shortcut;
+    bool separator_before = false;
+  };
+
+  explicit ZoomPopupCombo(QWidget* parent = nullptr) : QComboBox(parent) {}
+
+  void setPopupItems(std::vector<Item> items) { items_ = std::move(items); }
+
+ protected:
+  void showPopup() override {
+    if (popup_ != nullptr || items_.empty()) return;
+    auto* popup = new QFrame(nullptr, Qt::Popup | Qt::FramelessWindowHint);
+    popup_ = popup;
+    popup->setObjectName(QStringLiteral("refine-zoom-popup"));
+    popup->setAttribute(Qt::WA_DeleteOnClose);
+    popup->setMinimumWidth(184);
+    popup->setStyleSheet(QStringLiteral(R"QSS(
+      QFrame#refine-zoom-popup {
+        background: #3C3C3E;
+        color: #FFFFFF;
+        border: none;
+        border-radius: 8px;
+        padding: 8px 0px;
+        font-family: "SF Pro Text", "SF Pro Display", "-apple-system", sans-serif;
+        font-size: 13px;
+      }
+      QFrame#refine-zoom-popup-row { background: transparent; color: #FFFFFF; }
+      QFrame#refine-zoom-popup-row:hover { background: #515154; }
+      QLabel#refine-zoom-popup-shortcut {
+        color: #BDBDC2;
+        font-size: 11px;
+      }
+      QFrame#refine-zoom-popup-separator {
+        min-height: 1px; max-height: 1px;
+        background: #505054;
+        margin: 8px 0px;
+      }
+    )QSS"));
+    auto* layout = new QVBoxLayout(popup);
+    layout->setContentsMargins(0, 8, 0, 8);
+    layout->setSpacing(0);
+    for (std::size_t index = 0; index < items_.size(); ++index) {
+      const Item& item = items_[index];
+      if (item.separator_before && index != 0) {
+        auto* separator = new QFrame(popup);
+        separator->setObjectName(QStringLiteral("refine-zoom-popup-separator"));
+        layout->addWidget(separator);
+      }
+      auto* row = new ZoomPopupRow(static_cast<int>(index), item.label, item.shortcut, popup,
+                                   [this](int selected) {
+                                     if (selected < 0 || static_cast<std::size_t>(selected) >= items_.size()) return;
+                                     setCurrentIndex(selected);
+                                     Q_EMIT activated(selected);
+                                     hidePopup();
+                                   });
+      layout->addWidget(row);
+    }
+    popup->adjustSize();
+    popup->move(mapToGlobal(QPoint(0, height())));
+    popup->show();
+    popup->raise();
+    QObject::connect(popup, &QObject::destroyed, this, [this] { popup_ = nullptr; });
+  }
+
+  void hidePopup() override {
+    QFrame* popup = popup_.data();
+    popup_ = nullptr;
+    if (popup != nullptr) {
+      popup->close();
+      popup->deleteLater();
+    }
+  }
+
+ private:
+  std::vector<Item> items_;
+  QPointer<QFrame> popup_;
+};
+
+// One hit target for the status bar: the selected edge is blue while the
+// explanatory copy stays muted, matching the dark editor footer.
 void repolish(QWidget* widget) {
   widget->style()->unpolish(widget);
   widget->style()->polish(widget);
 }
 
 }  // namespace
+
+void prepareRefinePageEntry() {
+  // A new visit starts in navigation mode. Parameter-driven rebuilds keep the
+  // current hand state, so an active brush/guide gesture is not interrupted.
+  uiState().hand = true;
+}
 
 QWidget* buildRefinePage(const PageContext& context) {
   auto* page = new QWidget;
@@ -2278,12 +2416,49 @@ QWidget* buildRefinePage(const PageContext& context) {
   auto* toolbar = new PixCakeToolbar(QStringLiteral("workspace-tools"), page);
   auto* toolbar_layout = toolbar->row();
   toolbar_layout->setSpacing(4);
-  QFrame* preset_tool = nullptr;
+  ZoomPopupCombo* zoom_combo = nullptr;
+  QFrame* hand_tool = nullptr;
   QFrame* guides_tool = nullptr;
+  QFrame* preset_tool = nullptr;
   for (const auto& entry : ui::shell::page_list("refine-tools")) {
+    // 显示比例是显示层状态：点击后直接展开比例下拉框，不把比例写入项目参数。
+    if (entry.id == "zoom") {
+      zoom_combo = new ZoomPopupCombo(toolbar);
+      zoom_combo->setObjectName(QStringLiteral("refine-zoom-ratio"));
+      zoom_combo->setAccessibleName(qs(entry.text));
+      zoom_combo->setToolTip(qs(entry.text));
+      zoom_combo->setAttribute(Qt::WA_AlwaysShowToolTips, true);
+      zoom_combo->setCursor(Qt::PointingHandCursor);
+      zoom_combo->setMinimumWidth(88);
+      const QString asset = iconPath("refine-tools", entry.id);
+      const QIcon icon = asset.isEmpty() ? QIcon() : QIcon(loadAssetPixmap(asset, 18));
+      const auto add_zoom = [zoom_combo, icon](const QString& label, double factor) {
+        zoom_combo->addItem(icon, label, factor);
+      };
+      const std::vector<ZoomPopupCombo::Item> zoom_items = {
+          {qtext("refine.zoom.fit"), 0.0, qs(ui::shell::shortcut_key("zoom-default")), false},
+          {QStringLiteral("1:1"), 1.0, {}, true},
+          {QStringLiteral("5%"), 0.05, {}, true},
+          {QStringLiteral("50%"), 0.5, {}, false},
+          {QStringLiteral("100%"), 1.0, {}, true},
+          {QStringLiteral("200%"), 2.0, {}, false},
+          {QStringLiteral("300%"), 3.0, {}, false},
+          {QStringLiteral("400%"), 4.0, {}, false},
+          {QStringLiteral("800%"), 8.0, {}, false},
+          {QStringLiteral("1200%"), 12.0, {}, false},
+      };
+      zoom_combo->setPopupItems(zoom_items);
+      for (const auto& item : zoom_items) add_zoom(item.label, item.factor);
+      zoom_combo->setProperty("zoom-preset-count", zoom_combo->count());
+      zoom_combo->setEnabled(actions->has_photo());
+      zoom_combo->setCurrentIndex(0);
+      toolbar_layout->addWidget(zoom_combo);
+      continue;
+    }
     auto* tool = workspaceTool("refine-tools", entry, toolbar);
-    if (entry.id == "preset") preset_tool = tool;
+    if (entry.id == "hand") hand_tool = tool;
     if (entry.id == "guides") guides_tool = tool;
+    if (entry.id == "preset") preset_tool = tool;
     toolbar_layout->addWidget(tool);
   }
   toolbar_layout->addStretch();
@@ -2382,10 +2557,11 @@ QWidget* buildRefinePage(const PageContext& context) {
       rail_layout->addWidget(separator);
     }
     const std::string id = entry.id;
-    QObject::connect(button, &QToolButton::toggled, stack, [stack, index, id](bool on) {
+    QObject::connect(button, &QToolButton::toggled, stack, [stack, index, id, image_view](bool on) {
       if (!on) return;
       stack->setCurrentIndex(index);
       uiState().module = id;
+      if (id == "crop" && image_view != nullptr) image_view->setHandTool(false);
     });
     if (entry.id == uiState().module) {
       button->setChecked(true);
@@ -2396,6 +2572,60 @@ QWidget* buildRefinePage(const PageContext& context) {
 
   if (image_view != nullptr) {
     QPointer<PixCakeImageView> view(image_view);
+    if (zoom_combo != nullptr) {
+      QObject::connect(zoom_combo, qOverload<int>(&QComboBox::activated), zoom_combo, [view, zoom_combo](int index) {
+        if (!view || index < 0) return;
+        const double factor = zoom_combo->itemData(index).toDouble();
+        if (factor <= 0.0) {
+          view->setFitZoom();
+        } else {
+          view->setZoom(factor);
+        }
+      });
+      const auto sync_zoom = [combo = QPointer<QComboBox>(zoom_combo)](double factor) {
+        uiState().zoom = factor;
+        if (!combo) return;
+        const QSignalBlocker blocker(combo);
+        const int preset_count = combo->property("zoom-preset-count").toInt();
+        if (combo->count() > preset_count) combo->removeItem(preset_count);
+        int index = factor == 0.0 ? 0 : -1;
+        if (index < 0 && combo->currentIndex() >= 0 &&
+            std::abs(combo->currentData().toDouble() - factor) < 1e-6) {
+          index = combo->currentIndex();
+        }
+        if (index < 0) index = combo->findData(factor);
+        if (index < 0) {
+          combo->addItem(combo->itemIcon(0), QString::number(factor * 100.0, 'g', 3) + QLatin1Char('%'), factor);
+          index = combo->count() - 1;
+        }
+        combo->setCurrentIndex(index);
+      };
+      view->onZoomChanged(sync_zoom);
+      if (uiState().zoom > 0.0) view->setZoom(uiState().zoom);
+      sync_zoom(view->zoom());
+    }
+    view->onHandChanged([hand_tool = QPointer<QFrame>(hand_tool)](bool enabled) {
+      uiState().hand = enabled;
+      if (hand_tool) {
+        hand_tool->setProperty("emphasis", enabled);
+        repolish(hand_tool);
+      }
+    });
+    view->setHandTool(uiState().hand);
+    bindShortcut(page, "zoom-in", [view] {
+      if (view) view->zoomIn();
+    });
+    bindShortcut(page, "zoom-out", [view] {
+      if (view) view->zoomOut();
+    });
+    bindShortcut(page, "zoom-default", [view] {
+      if (view) view->setFitZoom();
+    });
+    // The hand tile is an always-on navigation affordance: clicking it does
+    // not toggle the mode. H re-enables it after a conflicting canvas tool.
+    bindShortcut(page, "hand-tool", [view] {
+      if (view) view->setHandTool(true);
+    });
     std::vector<QPointer<PixCakeHistogram>> charts(histograms.begin(), histograms.end());
     actions->watch_preview(image_view, [view, charts](const PreviewView& update) {
       if (view) {
@@ -2451,9 +2681,9 @@ QWidget* buildRefinePage(const PageContext& context) {
     preset_tool->setCursor(Qt::PointingHandCursor);
     preset_tool->installEventFilter(new ClickFilter(preset_tool, toggle_presets));
   }
-  bindShortcut(page, "preset-list", toggle_presets);
   if (auto* tool = dynamic_cast<PixCakeWorkspaceTool*>(guides_tool)) {
-    tool->onClicked([actions, tool](Qt::KeyboardModifiers) {
+    tool->onClicked([actions, tool, image_view](Qt::KeyboardModifiers) {
+      if (image_view != nullptr) image_view->setHandTool(false);
       QMenu menu(tool);
       menu.setSeparatorsCollapsible(false);
       menu.setStyleSheet(QStringLiteral(R"QSS(
@@ -2500,8 +2730,15 @@ QWidget* buildRefinePage(const PageContext& context) {
       menu.exec(tool->mapToGlobal(QPoint(0, tool->height())));
     });
   }
-  bindShortcut(page, "guide-horizontal", [actions] { actions->request_create_guide(false); });
-  bindShortcut(page, "guide-vertical", [actions] { actions->request_create_guide(true); });
+  bindShortcut(page, "preset-list", toggle_presets);
+  bindShortcut(page, "guide-horizontal", [actions, image_view] {
+    if (image_view != nullptr) image_view->setHandTool(false);
+    actions->request_create_guide(false);
+  });
+  bindShortcut(page, "guide-vertical", [actions, image_view] {
+    if (image_view != nullptr) image_view->setHandTool(false);
+    actions->request_create_guide(true);
+  });
   bindShortcut(page, "guide-toggle", [actions] { actions->request_toggle_guides(); });
   // 模块快捷键（需求 §8.1）：切到那个模块；还没有的模块（AI 色彩风格）不绑。
   const std::pair<const char*, const char*> modules_keys[] = {

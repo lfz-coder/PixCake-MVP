@@ -7,6 +7,7 @@
 #include <QTimer>
 #include <QWidget>
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -29,6 +30,7 @@ class ShellWindow final : public QMainWindow {
   void flushIconDrop();
 
   ShellController controller_;
+  std::optional<Page> rendered_page_;
   QWidget* body_ = nullptr;
   QLabel* title_ = nullptr;
   // Files dropped on the app icon arrive one QFileOpenEvent each; a drop is

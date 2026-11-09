@@ -139,6 +139,11 @@ struct PixCakeTheme final {
       QComboBox:disabled { color: #6a6a6a; border-color: #2c2c2c; }
       QComboBox QAbstractItemView { background: #262626; color: #e6e6e6; selection-background-color: #3a3a3a;
                                     border: 1px solid #3a3a3a; }
+      QComboBox#refine-zoom-ratio { background: #3C3C3E; color: #FFFFFF; border: 1px solid #505054;
+                                    border-radius: 8px; padding: 0 10px; min-height: 32px;
+                                    font-family: "SF Pro Text", "SF Pro Display", "-apple-system", sans-serif; }
+      QComboBox#refine-zoom-ratio::drop-down { width: 20px; border: none; }
+      QComboBox#refine-zoom-ratio:hover { background: #515154; }
       QSlider::groove:horizontal { height: 4px; background: #4a4a4a; border-radius: 2px; }
       QSlider::sub-page:horizontal { background: #d0d0d0; border-radius: 2px; }
       QSlider::handle:horizontal { width: 14px; height: 14px; margin: -5px 0; background: #d9d9d9; border-radius: 7px; }

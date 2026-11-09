@@ -78,6 +78,10 @@ ResultCode ShellWindow::openPhoto(const std::string& photo_path,
 
 void ShellWindow::render() {
   const ShellDisplay& display = controller_.display();
+  if (display.page() == Page::Refine && (!rendered_page_ || *rendered_page_ != Page::Refine)) {
+    prepareRefinePageEntry();
+  }
+  rendered_page_ = display.page();
   title_->setText(QString::fromUtf8(ui::shell::page_label(display.page())));
   const PageContext context{display, controller_};
   QWidget* page = nullptr;

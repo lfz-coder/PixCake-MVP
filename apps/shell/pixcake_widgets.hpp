@@ -19,6 +19,8 @@
 #include <QToolButton>
 #include <QTreeWidget>
 #include <QResizeEvent>
+#include <QWheelEvent>
+#include <QNativeGestureEvent>
 #include <QLinearGradient>
 #include <QStringList>
 #include <QSvgRenderer>
@@ -33,6 +35,7 @@
 #include "guide_line.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
 #include <memory>
@@ -556,10 +559,13 @@ class PixCakeMaskTree final : public QTreeWidget {
   }
 };
 
-// The refine canvas: shows the latest preview frame fitted into the widget
-// (aspect kept, never enlarged past 1:1 device pixels), or a status line.
+// The refine canvas: shows the latest preview frame fitted into the widget or at
+// an explicit display zoom.  This is display state only: the render document
+// and export geometry never receive the zoom value.
 class PixCakeImageView final : public QFrame {
  public:
+  enum class SamplingMode { Direct, DownsamplePyramid, SmoothUpscale };
+
   explicit PixCakeImageView(QWidget* parent = nullptr) : QFrame(parent) {
     setObjectName(QStringLiteral("refine-canvas-image"));
     setAccessibleName(copyText("widget.canvas"));
@@ -569,8 +575,11 @@ class PixCakeImageView final : public QFrame {
   }
 
   void setImage(QImage image) {
+    if (image.cacheKey() != image_.cacheKey()) scaled_preview_ = {};
     image_ = std::move(image);
     status_.clear();
+    clampPan();
+    if (hovering_) reportPixel();
     update();
     for (const auto& changed : image_changed_) changed();
   }
@@ -581,6 +590,70 @@ class PixCakeImageView final : public QFrame {
     update();
   }
   const QImage& image() const { return image_; }
+  SamplingMode samplingMode() const {
+    if (image_.isNull()) return SamplingMode::Direct;
+    const QRectF target = imageRect();
+    const bool one_to_one = std::abs(target.width() - image_.width()) < 1e-6 &&
+                            std::abs(target.height() - image_.height()) < 1e-6;
+    if (one_to_one) return SamplingMode::Direct;
+    const QSize pixels(std::max(1, qRound(target.width() * devicePixelRatioF())),
+                       std::max(1, qRound(target.height() * devicePixelRatioF())));
+    return pixels.width() < image_.width() && pixels.height() < image_.height() ? SamplingMode::DownsamplePyramid
+                                                                                 : SamplingMode::SmoothUpscale;
+  }
+
+  // A value of 0 means “合适”; otherwise the value is the image display scale
+  // (1.0 is 100%).  Explicit zoom uses image pixels as logical canvas units,
+  // while fit mode keeps the historic device-pixel fit behavior.
+  double zoom() const { return zoom_; }
+  double effectiveZoom() const {
+    return image_.isNull() ? 1.0 : imageRect().width() / image_.width();
+  }
+  inline static constexpr std::array<double, 8> zoomLevels = {0.05, 0.5, 1.0, 2.0, 3.0, 4.0, 8.0, 12.0};
+  void setZoom(double value) {
+    // B-43: reject invalid scale without changing the previous valid view.
+    if (!std::isfinite(value) || value <= 0.0) return;
+    value = std::clamp(value, zoomLevels.front(), zoomLevels.back());
+    if (std::abs(zoom_ - value) < 1e-6) return;
+    zoom_ = value;
+    pan_ = {};
+    clampPan();
+    notifyZoomChanged();
+    update();
+  }
+  void setFitZoom() {
+    if (zoom_ == 0.0 && pan_.isNull()) return;
+    zoom_ = 0.0;
+    pan_ = {};
+    notifyZoomChanged();
+    update();
+  }
+  void zoomIn() { stepZoom(QRectF(rect()).center(), true); }
+  void zoomOut() { stepZoom(QRectF(rect()).center(), false); }
+  void zoomAt(const QPointF& anchor, double value) {
+    if (image_.isNull() || !std::isfinite(value) || value <= 0.0 ||
+        !std::isfinite(anchor.x()) || !std::isfinite(anchor.y())) return;
+    const QRectF before = imageRect();
+    const QPointF relative = before.isEmpty() ? QPointF(0.5, 0.5)
+                                               : QPointF(std::clamp((anchor.x() - before.left()) / before.width(), 0.0, 1.0),
+                                                         std::clamp((anchor.y() - before.top()) / before.height(), 0.0, 1.0));
+    zoom_ = std::clamp(value, zoomLevels.front(), zoomLevels.back());
+    const QRectF after = imageRectWithoutPan();
+    pan_ = anchor - QPointF(after.left() + relative.x() * after.width(), after.top() + relative.y() * after.height());
+    clampPan();
+    notifyZoomChanged();
+    update();
+  }
+  void setHandTool(bool enabled) {
+    hand_tool_ = enabled;
+    if (!enabled) panning_ = false;
+    setCursor(enabled ? Qt::OpenHandCursor : Qt::ArrowCursor);
+    for (const auto& changed : hand_changed_) changed(enabled);
+    update();
+  }
+  bool handTool() const { return hand_tool_; }
+  void onZoomChanged(std::function<void(double)> callback) { zoom_changed_.push_back(std::move(callback)); }
+  void onHandChanged(std::function<void(bool)> callback) { hand_changed_.push_back(std::move(callback)); }
   void setHooks(std::shared_ptr<CanvasHooks> hooks) {
     hooks_ = std::move(hooks);
     update();
@@ -611,13 +684,23 @@ class PixCakeImageView final : public QFrame {
   // 图像在控件里显示的矩形；没有图像时为空。
   QRectF imageRect() const {
     if (image_.isNull()) return {};
-    const qreal ratio = devicePixelRatioF();
-    QSizeF size = QSizeF(image_.size()) / ratio;
-    size.scale(QSizeF(rect().size()).boundedTo(size), Qt::KeepAspectRatio);
-    return QRectF(QPointF((width() - size.width()) / 2, (height() - size.height()) / 2), size);
+    QRectF target = imageRectWithoutPan();
+    target.translate(pan_);
+    return target;
   }
 
  protected:
+  bool event(QEvent* event) override {
+    if (event->type() == QEvent::NativeGesture && !image_.isNull() && !dragging_ && !guide_dragging_) {
+      const auto* gesture = static_cast<QNativeGestureEvent*>(event);
+      if (gesture->gestureType() == Qt::ZoomNativeGesture) {
+        zoomAt(gesture->position(), effectiveZoom() * (1.0 + gesture->value()));
+        event->accept();
+        return true;
+      }
+    }
+    return QFrame::event(event);
+  }
   void mousePressEvent(QMouseEvent* event) override {
     if (event->button() == Qt::RightButton) {
       const auto index = guideAt(event->position());
@@ -647,9 +730,11 @@ class PixCakeImageView final : public QFrame {
       if (index) {
         guide_selected_ = *index;
         setFocus(Qt::MouseFocusReason);
-        guide_drag_index_ = *index;
-        guide_dragging_ = true;
-        setCursor(guides_[*index].vertical ? Qt::SizeHorCursor : Qt::SizeVerCursor);
+        if (!hand_tool_) {
+          guide_drag_index_ = *index;
+          guide_dragging_ = true;
+          setCursor(guides_[*index].vertical ? Qt::SizeHorCursor : Qt::SizeVerCursor);
+        }
         update();
         event->accept();
         return;
@@ -657,7 +742,12 @@ class PixCakeImageView final : public QFrame {
       guide_selected_.reset();
       update();
     }
-    if (takes(event)) {
+    if (hand_tool_ && (event->button() == Qt::LeftButton || event->button() == Qt::MiddleButton)) {
+      panning_ = true;
+      pan_anchor_ = event->position();
+      setCursor(Qt::ClosedHandCursor);
+      event->accept();
+    } else if (takes(event)) {
       dragging_ = true;
       hooks_->drag(0, percent(event->position()));
     } else {
@@ -681,6 +771,13 @@ class PixCakeImageView final : public QFrame {
       }
       update();
       event->accept();
+    } else if (panning_) {
+      pan_ += event->position() - pan_anchor_;
+      pan_anchor_ = event->position();
+      clampPan();
+      reportPixel();
+      update();
+      event->accept();
     } else if (dragging_ && hooks_) {
       hooks_->drag(1, percent(event->position()));
       update();
@@ -699,7 +796,11 @@ class PixCakeImageView final : public QFrame {
     if (guide_dragging_) {
       guide_dragging_ = false;
       guide_drag_index_.reset();
-      setCursor(Qt::ArrowCursor);
+      setCursor(hand_tool_ ? Qt::OpenHandCursor : Qt::ArrowCursor);
+      event->accept();
+    } else if (panning_) {
+      panning_ = false;
+      setCursor(hand_tool_ ? Qt::OpenHandCursor : Qt::ArrowCursor);
       event->accept();
     } else if (dragging_ && hooks_) {
       dragging_ = false;
@@ -720,18 +821,64 @@ class PixCakeImageView final : public QFrame {
     }
     QFrame::keyPressEvent(event);
   }
+  void wheelEvent(QWheelEvent* event) override {
+    if (image_.isNull()) {
+      event->ignore();
+      return;
+    }
+    // Keep one brush/guide gesture in one coordinate system until release.
+    if (dragging_ || guide_dragging_) {
+      event->accept();
+      return;
+    }
+    // The hand tool owns panning with a drag. Wheel input always zooms around
+    // the pointer, including on trackpads and with Ctrl/Command held.
+    const QPoint pixel_delta = event->pixelDelta();
+    const QPoint angle_delta = event->angleDelta();
+    const int delta_y = pixel_delta.isNull() ? angle_delta.y() : pixel_delta.y();
+    if (delta_y == 0) {
+      event->ignore();
+      return;
+    }
+    if (!pixel_delta.isNull()) {
+      zoomAt(event->position(), effectiveZoom() * std::exp(pixel_delta.y() / 240.0));
+    } else {
+      wheel_remainder_ += angle_delta.y();
+      while (std::abs(wheel_remainder_) >= 120) {
+        const bool increase = wheel_remainder_ > 0;
+        stepZoom(event->position(), increase);
+        wheel_remainder_ += increase ? -120 : 120;
+      }
+    }
+    event->accept();
+  }
+  void resizeEvent(QResizeEvent* event) override {
+    QFrame::resizeEvent(event);
+    clampPan();
+    if (hovering_) reportPixel();
+  }
   void paintEvent(QPaintEvent*) override {
     QPainter painter(this);
     if (!image_.isNull()) {
       const QRectF target = imageRect();
-      painter.setRenderHint(QPainter::SmoothPixmapTransform);
-      painter.drawImage(target, image_);
+      const QSize pixels(std::max(1, qRound(target.width() * devicePixelRatioF())),
+                         std::max(1, qRound(target.height() * devicePixelRatioF())));
+      const SamplingMode mode = samplingMode();
+      const bool one_to_one = mode == SamplingMode::Direct;
+      const bool shrinking = mode == SamplingMode::DownsamplePyramid;
+      if (shrinking && scaled_preview_.size() != pixels) {
+        scaled_preview_ = downsamplePreview(image_, pixels);
+      }
+      // 1:1 keeps source pixels crisp. Upscaling uses Qt's smooth painter
+      // sampler; minification is already filtered into the physical-size cache.
+      painter.setRenderHint(QPainter::SmoothPixmapTransform, !one_to_one);
+      painter.drawImage(target, shrinking && !scaled_preview_.isNull() ? scaled_preview_ : image_);
       if (hooks_ && hooks_->paint) {
         painter.setRenderHint(QPainter::Antialiasing);
         hooks_->paint(painter, target);
       }
       if (guides_visible_) paintGuides(painter, QRectF(0.0, 0.0, width(), height()));
-      if (hovering_ && hooks_ && hooks_->cursor_diameter && target.contains(hover_)) {
+      if (!hand_tool_ && hovering_ && hooks_ && hooks_->cursor_diameter && target.contains(hover_)) {
         const double diameter = hooks_->cursor_diameter();
         if (diameter > 0) {
           painter.setRenderHint(QPainter::Antialiasing);
@@ -750,6 +897,62 @@ class PixCakeImageView final : public QFrame {
   }
 
  private:
+  static QImage downsamplePreview(const QImage& source, const QSize& target) {
+    if (source.isNull() || !target.isValid()) return {};
+    QImage current = source;
+    // A pyramid avoids asking one filter pass to collapse a very large source
+    // into a tiny preview. Repeated smooth half-size passes approximate an
+    // area average while keeping each intermediate image bounded.
+    while (current.width() > target.width() * 2 || current.height() > target.height() * 2) {
+      const QSize next(std::max(target.width(), (current.width() + 1) / 2),
+                       std::max(target.height(), (current.height() + 1) / 2));
+      current = current.scaled(next, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    }
+    if (current.size() != target) current = current.scaled(target, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    return current;
+  }
+
+  void stepZoom(const QPointF& anchor, bool increase) {
+    if (dragging_ || guide_dragging_) return;
+    const double current = effectiveZoom();
+    const double next = nextZoom(current, increase);
+    if ((increase && next > current) || (!increase && next < current)) zoomAt(anchor, next);
+  }
+  static double nextZoom(double current, bool increase) {
+    if (increase) {
+      for (double value : zoomLevels) {
+        if (value > current + 1e-6) return value;
+      }
+      return std::max(current, zoomLevels.back());
+    }
+    for (std::size_t index = zoomLevels.size(); index-- > 0;) {
+      if (zoomLevels[index] < current - 1e-6) return zoomLevels[index];
+    }
+    return std::min(current, zoomLevels.front());
+  }
+  QRectF imageRectWithoutPan() const {
+    if (image_.isNull()) return {};
+    QSizeF size;
+    if (zoom_ > 0.0) {
+      size = QSizeF(image_.size()) * zoom_;
+    } else {
+      const qreal ratio = devicePixelRatioF();
+      size = QSizeF(image_.size()) / ratio;
+      size.scale(QSizeF(rect().size()).boundedTo(size), Qt::KeepAspectRatio);
+    }
+    return QRectF(QPointF((width() - size.width()) / 2, (height() - size.height()) / 2), size);
+  }
+  void clampPan() {
+    const QRectF target = imageRectWithoutPan();
+    const qreal horizontal = std::max<qreal>(0.0, (target.width() - width()) / 2.0);
+    const qreal vertical = std::max<qreal>(0.0, (target.height() - height()) / 2.0);
+    pan_.setX(std::clamp(pan_.x(), -horizontal, horizontal));
+    pan_.setY(std::clamp(pan_.y(), -vertical, vertical));
+  }
+  void notifyZoomChanged() {
+    if (hovering_) reportPixel();
+    for (const auto& changed : zoom_changed_) changed(zoom_);
+  }
   void reportPixel() {
     if (hover_pixel_.empty()) return;
     const QRectF target = imageRect();
@@ -774,12 +977,12 @@ class PixCakeImageView final : public QFrame {
     return {std::clamp((at.x() - target.left()) / target.width() * 100.0, 0.0, 100.0),
             std::clamp((at.y() - target.top()) / target.height() * 100.0, 0.0, 100.0)};
   }
-
   std::optional<std::size_t> guideAt(const QPointF& at) const {
     if (!guides_visible_ || image_.isNull()) return std::nullopt;
     const QRectF target(0.0, 0.0, width(), height());
     if (!target.contains(at)) return std::nullopt;
     constexpr qreal kHitDistance = 8.0;
+    // Iterate from the newest guide so overlapping lines remain individually selectable.
     for (std::size_t index = guides_.size(); index-- > 0;) {
       const qreal line = guides_[index].vertical
                              ? target.left() + target.width() * guides_[index].position / 100.0
@@ -807,13 +1010,22 @@ class PixCakeImageView final : public QFrame {
   }
 
   QImage image_;
+  QImage scaled_preview_;
   QString status_;
   std::shared_ptr<CanvasHooks> hooks_;
   bool dragging_ = false;
+  bool panning_ = false;
+  bool hand_tool_ = false;
+  double zoom_ = 0.0;
+  int wheel_remainder_ = 0;
+  QPointF pan_;
+  QPointF pan_anchor_;
   QPointF hover_;
   bool hovering_ = false;
   std::vector<std::function<void(std::optional<QColor>)>> hover_pixel_;
   std::vector<std::function<void()>> image_changed_;
+  std::vector<std::function<void(double)>> zoom_changed_;
+  std::vector<std::function<void(bool)>> hand_changed_;
   std::vector<GuideLine> guides_;
   bool guides_visible_ = true;
   std::optional<std::size_t> guide_selected_;
