@@ -123,7 +123,7 @@ L' = clamp01(L + light * 0.5 * S0 * (light>0 ? 1-L : L))
 RGB' = HSL_to_RGB(H', S', L')
 ~~~
 
-HSL 转换本身是常见色彩空间算法；当前 ±100→±30°、明亮度半余量、按原饱和度缩放和相邻两带线性权重是旧 PixCake `legacy-provisional`。目标是 PhotoCraft Camera Raw 阶段 6 Color Mixer（A）：同样的八个色带、色相环上的帽函数权重（`third_party/photocraft/crates/algo/src/camera_raw.rs` 的 `hsl_hue/hsl_sat/hsl_lum`）。Photoshop“色相/饱和度”调整图层（`compose/src/adjust/color.rs:6-71`）只有六个范围，不是本分组的目标。灰色 S=0 时的行为仍需在 parity 中固定。
+HSL 转换本身是常见色彩空间算法；当前 ±100→±30°、明亮度半余量、按原饱和度缩放和相邻两带线性权重是旧 PixCake `legacy-provisional`。目标是 PhotoCraft Camera Raw 阶段 6 Color Mixer（A）：同样的八个色带、色相环上的帽函数权重（`third_party/photocraft/crates/algo/src/camera_raw.rs` 的 `hsl_hue/hsl_sat/hsl_lum`）。Photoshop“色相/饱和度”调整图层（`compose/src/adjust/color.rs:6-71`）只有六个范围，不是本分组的目标。灰色（HSV 饱和度 ≤ 1e-4）原样通过，已由移植测试 `test_hsl_leaves_greys` 固定；executor 的旧路径尚未切换。
 
 实现：to_hsl()、band_weights()、apply_hsl()，render_executor.cpp:204-258,339-358；GPU：shader_sources.hpp:101-149,176-187。
 
@@ -222,7 +222,7 @@ hash01 的整数常量、三次平滑插值和尺寸映射都是项目选择，�
 
 ## 10. 这次审查确认的缺口
 
-1. **还没有任何参数完成来源迁移。** 白平衡、曝光、对比度、高光/阴影/白色/黑色、纹理/清晰度/去雾、鲜艳度/饱和度、曲线、HSL、色彩分级和颗粒基础三项以 Camera Raw（A）为目标；亮度、色阶、可选颜色、3D LUT 和混合以调整图层/合成（B）为目标；PixCake 当前对它们都只有旧公式。亮度按用户裁决以 Photoshop `modern_brightness`（B）为目标；八色带黑白、颗粒扩展子参数和 AI 业务是 PixCake-specific；色彩编辑器是 no-equivalent。
+1. **还没有任何参数在 executor 中完成来源迁移。** 白平衡、曝光、对比度、鲜艳度/饱和度、HSL 和色彩分级已有 PhotoCraft 移植的 C++ reference（`photocraft-reference-only`，见[逐像素移植证据](2026-11-09-camera-raw-per-pixel-port.md)），但预览和导出仍执行旧公式。来源目标：白平衡、曝光、对比度、高光/阴影/白色/黑色、纹理/清晰度/去雾、鲜艳度/饱和度、曲线、HSL、色彩分级和颗粒基础三项以 Camera Raw（A）为目标；亮度、色阶、可选颜色、3D LUT 和混合以调整图层/合成（B）为目标；RenderExecutor 当前对它们执行的都还是旧公式。亮度按用户裁决以 Photoshop `modern_brightness`（B）为目标；八色带黑白、颗粒扩展子参数和 AI 业务是 PixCake-specific；色彩编辑器是 no-equivalent。
 2. **色阶不是红绿蓝独立色阶。** 当前只有一套 RGB 复合黑/灰/白参数，代码对 R/G/B 复用同一映射；用户所说的红、绿、蓝独立黑场/灰场/白场目前没有实现。
 3. **黑白混合的 Rec.709 来源链接没有在登记中固定。** 代码和测试都写了权重，但来源登记仍不完整。
 4. **GPU 证据只证明 CPU reference 对齐。** test_gpu_backend_C57_C60、test_gpu_shader_path 和 test_reference_color_groups 不能证明 PhotoCraft parity 或官方 PixCake 逐像素一致；PhotoCraft 目标必须单独引入向量/器件测试。
