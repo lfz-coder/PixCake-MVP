@@ -46,6 +46,7 @@ int main() {
   options.renderd_executable = PIXCAKE_RENDERD_EXE;
   options.log_directory = base + "-logs";
   options.document_directory = base + "-docs";
+  options.interactive_max_edge = 16;
   std::string diagnostic;
   PreviewFrame frame;
 
@@ -56,11 +57,17 @@ int main() {
     assert(PreviewSession::open(photo, options, session, diagnostic) == ResultCode::Ok);
     assert(session->fd() >= 0);
 
-    // Dragging: several previews, the frame for the last one arrives.
+    // Opening the image keeps the selected high-quality edge for the first
+    // frame. Once that frame has been shown, subsequent drag previews use the
+    // temporary interactive edge and the latest request wins.
     assert(session->preview("color.global", "exposure", "0.50", diagnostic) == ResultCode::Ok);
+    assert(session->wait_latest_frame(frame, 15'000, diagnostic) == ResultCode::Ok);
+    assert(frame.result.code == ResultCode::Ok && frame.result.header.width == 40 && frame.result.header.height == 20);
+    const int initial = frame.rgba[0];
+    assert(initial > 90);
     assert(session->preview("color.global", "exposure", "1.00", diagnostic) == ResultCode::Ok);
     assert(session->wait_latest_frame(frame, 15'000, diagnostic) == ResultCode::Ok);
-    assert(frame.result.code == ResultCode::Ok && frame.result.header.width == 40);
+    assert(frame.result.code == ResultCode::Ok && frame.result.header.width == 16 && frame.result.header.height == 8);
     bright = frame.rgba[0];
     assert(bright > 120);
 
@@ -70,7 +77,8 @@ int main() {
     revision = session->document().revision();
     assert(revision > 0);
     assert(session->wait_latest_frame(frame, 15'000, diagnostic) == ResultCode::Ok);
-    assert(frame.result.code == ResultCode::Ok && frame.rgba[0] == bright);
+    assert(frame.result.code == ResultCode::Ok && frame.result.header.width == 40 && frame.result.header.height == 20 &&
+           frame.rgba[0] == bright);
 
     // Another parameter at its neutral value keeps the committed exposure.
     assert(session->preview("color.global", "temperature", "0", diagnostic) == ResultCode::Ok);

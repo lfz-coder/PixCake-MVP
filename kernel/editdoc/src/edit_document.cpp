@@ -836,6 +836,15 @@ ResultCode EditDocument::commit_fragment_replacement_steps(
                                        return true;
                                      }),
                       next.records_.end());
+  // A fragment replacement is also used by the reset command.  Discard any
+  // in-memory previews belonging to removed capabilities so the next redraw
+  // cannot resurrect an effect that was just reset.
+  for (const auto& capability_id : remove_capability_ids) {
+    for (auto it = next.preview_.begin(); it != next.preview_.end();) {
+      if (it->first.first == capability_id) it = next.preview_.erase(it);
+      else ++it;
+    }
+  }
   for (const auto& fragment : replacements) {
     next.store_fragment(fragment.capability_id, fragment.version, fragment.inner);
   }

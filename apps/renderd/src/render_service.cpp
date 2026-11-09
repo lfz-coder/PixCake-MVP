@@ -55,7 +55,8 @@ bool RenderService::has_enabled_operations(const render::RenderDescription& desc
 ResultCode RenderService::submit(PreviewWork work, std::string& diagnostic) {
   if (work.client_sequence == 0 || work.request.max_edge == 0 || work.request.max_edge > 4000 ||
       (work.request.mode != preview::PreviewMode::FullEffect &&
-       work.request.mode != preview::PreviewMode::ColorOnly)) {
+       work.request.mode != preview::PreviewMode::ColorOnly &&
+       work.request.mode != preview::PreviewMode::Original)) {
     diagnostic = "preview request has an invalid sequence, mode or maximum edge";
     return ResultCode::StateConflict;
   }

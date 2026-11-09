@@ -6,6 +6,7 @@
 
 #include <chrono>
 #include <cstring>
+#include <array>
 
 namespace pixcake::renderd {
 namespace {
@@ -114,19 +115,29 @@ ipc::PreviewResultMessage PreviewServer::render(const ipc::PreviewRequestMessage
     source.decoded_edge = request.max_edge;
   }
 
-  EditDocument document = *source.document;
-  if (document.set_preview(request.capability_id, request.parameter_id, request.display_value) != ResultCode::Ok) {
-    return fail(ResultCode::StateConflict, "the parameter cannot be previewed: " + request.capability_id + "/" +
-                                               request.parameter_id);
+  render::RenderDescription description;
+  if (request.mode == preview::PreviewMode::Original) {
+    // Keep the source identity and revision for the normal render contract,
+    // but leave the operation list empty so render_now copies source pixels.
+    description.image_id = source.document->image_id();
+    description.editing_instance_id = source.message.editing_instance_id;
+    description.document_revision = source.document->revision();
+  } else {
+    EditDocument document = *source.document;
+    if (document.set_preview(request.capability_id, request.parameter_id, request.display_value) != ResultCode::Ok) {
+      return fail(ResultCode::StateConflict, "the parameter cannot be previewed: " + request.capability_id + "/" +
+                                                 request.parameter_id);
+    }
+    auto compiled = render::compile(document);
+    if (compiled.code != ResultCode::Ok) return fail(compiled.code, "render description cannot be compiled");
+    description = std::move(compiled.description);
+    description.editing_instance_id = source.message.editing_instance_id;
   }
-  auto compiled = render::compile(document);
-  if (compiled.code != ResultCode::Ok) return fail(compiled.code, "render description cannot be compiled");
-  compiled.description.editing_instance_id = source.message.editing_instance_id;
 
   PreviewWork work;
   work.client_sequence = message.client_sequence;
   work.request = request;
-  work.description = std::move(compiled.description);
+  work.description = std::move(description);
   work.input = *source.image;
   std::string why;
   const ResultCode submitted = service_.submit(std::move(work), why);
@@ -143,7 +154,12 @@ ipc::PreviewResultMessage PreviewServer::render(const ipc::PreviewRequestMessage
 }
 
 ResultCode PreviewServer::step(preview_channel::Channel& channel, int timeout_ms, std::string& diagnostic) {
-  std::optional<ipc::PreviewRequestMessage> latest;
+  // Edit and baseline requests share the channel, but are independent display
+  // products. Keeping one latest request for each mode means pressing to view
+  // the original cannot cancel an edit frame that is already queued; release
+  // can still consume that edit frame immediately.
+  std::optional<ipc::PreviewRequestMessage> latest_edit;
+  std::optional<ipc::PreviewRequestMessage> latest_original;
   bool any = false;
   int wait = timeout_ms;
   for (;;) {
@@ -175,7 +191,11 @@ ResultCode PreviewServer::step(preview_channel::Channel& channel, int timeout_ms
       ipc::PreviewRequestMessage request;
       const ResultCode code = ipc::decode_preview_request(bytes, request);
       if (code == ResultCode::Ok) {
-        latest = std::move(request);  // latest wins; replaced requests get no result
+        if (request.request.mode == preview::PreviewMode::Original) {
+          latest_original = std::move(request);
+        } else {
+          latest_edit = std::move(request);  // latest edit wins; replaced requests get no result
+        }
       } else {
         note("renderd.request", code, "malformed preview request");
       }
@@ -189,24 +209,39 @@ ResultCode PreviewServer::step(preview_channel::Channel& channel, int timeout_ms
       }
     } else if (kind == ipc::PreviewMessageKind::Cancel) {
       ipc::PreviewCancelMessage cancel;
-      if (ipc::decode_preview_cancel(bytes, cancel) == ResultCode::Ok && latest &&
-          latest->client_sequence == cancel.client_sequence && latest->request.image_id == cancel.image_id &&
-          latest->request.editing_instance_id == cancel.editing_instance_id &&
-          latest->request.base_revision == cancel.base_revision) {
-        latest.reset();
+      if (ipc::decode_preview_cancel(bytes, cancel) == ResultCode::Ok) {
+        const auto matches = [&cancel](const auto& candidate) {
+          return candidate && candidate->client_sequence == cancel.client_sequence &&
+                 candidate->request.image_id == cancel.image_id &&
+                 candidate->request.editing_instance_id == cancel.editing_instance_id &&
+                 candidate->request.base_revision == cancel.base_revision;
+        };
+        if (matches(latest_edit)) latest_edit.reset();
+        if (matches(latest_original)) latest_original.reset();
       }
     }
   }
   if (!any && thumbnails_.empty()) return ResultCode::Cancelled;
 
-  if (latest) {
+  // Preserve client sequence order when both products were queued. This keeps
+  // PreviewSession's normal stale-frame discard rule valid even if a baseline
+  // request arrived just before a newer edit request.
+  std::array<const ipc::PreviewRequestMessage*, 2> requests{};
+  std::size_t request_count = 0;
+  if (latest_edit) requests[request_count++] = &*latest_edit;
+  if (latest_original) requests[request_count++] = &*latest_original;
+  if (request_count == 2 && requests[1]->client_sequence < requests[0]->client_sequence) {
+    std::swap(requests[0], requests[1]);
+  }
+  for (std::size_t index = 0; index < request_count; ++index) {
+    const auto& request = *requests[index];
     const auto start = std::chrono::steady_clock::now();
     PreviewResult frame;
-    ipc::PreviewResultMessage result = render(*latest, frame);
+    ipc::PreviewResultMessage result = render(request, frame);
     const auto ms = static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count());
-    if (const ResultCode sent =
-            send_result(channel, std::move(result), frame, false, latest->request.image_id, ms, diagnostic);
+    if (const ResultCode sent = send_result(channel, std::move(result), frame, false, request.request.image_id, ms,
+                                            diagnostic);
         sent != ResultCode::Ok) {
       return sent;
     }

@@ -30,9 +30,11 @@ class PreviewServer {
   ResultCode serve(preview_channel::Channel& channel, std::string& diagnostic);
 
   // One round: reads every message already waiting (blocking up to
-  // timeout_ms for the first), keeps only the latest preview request, renders
-  // it and sends its result, then renders at most one queued thumbnail.
-  // Cancelled when nothing arrived and no thumbnail was waiting.  For tests.
+  // timeout_ms for the first), keeps the latest edit request and latest source
+  // request independently, renders both when present, then renders at most one
+  // queued thumbnail.  A source request therefore cannot discard an edit frame
+  // that was already waiting in the channel. Cancelled when nothing arrived and
+  // no thumbnail was waiting. For tests.
   ResultCode step(preview_channel::Channel& channel, int timeout_ms, std::string& diagnostic);
 
   std::size_t decodes() const { return decodes_; }

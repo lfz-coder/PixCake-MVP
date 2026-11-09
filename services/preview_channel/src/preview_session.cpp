@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <algorithm>
 #include <chrono>
 #include <string_view>
 #include <set>
@@ -180,7 +181,8 @@ ResultCode PreviewSession::send_source(std::string& diagnostic) {
 }
 
 ResultCode PreviewSession::send_request(const std::string& capability_id, const std::string& parameter_id,
-                                        const std::string& display_value, std::string& diagnostic) {
+                                        const std::string& display_value, std::uint32_t max_edge,
+                                        preview::PreviewMode mode, std::string& diagnostic) {
   ipc::PreviewRequestMessage message;
   message.client_sequence = ++sequence_;
   message.request.image_id = document_.image_id();
@@ -189,7 +191,8 @@ ResultCode PreviewSession::send_request(const std::string& capability_id, const 
   message.request.capability_id = capability_id;
   message.request.parameter_id = parameter_id;
   message.request.display_value = display_value;
-  message.request.max_edge = options_.max_edge;
+  message.request.mode = mode;
+  message.request.max_edge = max_edge == 0 ? options_.max_edge : std::min(max_edge, options_.max_edge);
   return client_.send_request(message, diagnostic);
 }
 
@@ -207,7 +210,30 @@ ResultCode PreviewSession::preview(const std::string& capability_id, const std::
     diagnostic = std::string("preview refused: ") + result_code_label(result.code);
     return result.code;
   }
-  return send_request(capability_id, parameter_id, display_value, diagnostic);
+  const std::uint32_t interactive_edge = sequence_ == 0 || options_.interactive_max_edge == 0
+                                             ? options_.max_edge
+                                             : std::min(options_.interactive_max_edge, options_.max_edge);
+  return send_request(capability_id, parameter_id, display_value, interactive_edge,
+                      preview::PreviewMode::FullEffect, diagnostic);
+}
+
+ResultCode PreviewSession::request_original_preview(bool interactive, std::string& diagnostic) {
+  const std::uint32_t edge = interactive && options_.interactive_max_edge != 0
+                                 ? std::min(options_.interactive_max_edge, options_.max_edge)
+                                 : options_.max_edge;
+  const std::string capability = last_capability_.empty() ? "color.global" : last_capability_;
+  const std::string parameter = last_parameter_.empty() ? "exposure" : last_parameter_;
+  std::string display = document_.effective_parameter(capability, parameter).value_or("0.00");
+  return send_request(capability, parameter, display, edge, preview::PreviewMode::Original, diagnostic);
+}
+
+void PreviewSession::set_preview_max_edge(std::uint32_t max_edge) {
+  if (max_edge == 0) return;
+  options_.max_edge = std::min(max_edge, std::uint32_t{4000});
+}
+
+ResultCode PreviewSession::refresh_preview(std::string& diagnostic) {
+  return redraw({{last_capability_, last_parameter_}}, diagnostic);
 }
 
 ResultCode PreviewSession::commit(const std::string& capability_id, const std::string& parameter_id,
@@ -232,7 +258,8 @@ ResultCode PreviewSession::commit(const std::string& capability_id, const std::s
   if (committed_) committed_();
   // New revision: renderd needs the committed document before the next request.
   if (const ResultCode code = send_source(diagnostic); code != ResultCode::Ok) return code;
-  return send_request(capability_id, parameter_id, display_value, diagnostic);
+  return send_request(capability_id, parameter_id, display_value, options_.max_edge,
+                      preview::PreviewMode::FullEffect, diagnostic);
 }
 
 namespace {
@@ -300,7 +327,8 @@ ResultCode PreviewSession::redraw(const std::vector<std::pair<std::string, std::
     }
   }
   const auto value = document_.effective_parameter(capability, parameter);
-  return send_request(capability, parameter, value ? *value : default_display(capability, parameter), diagnostic);
+  return send_request(capability, parameter, value ? *value : default_display(capability, parameter), options_.max_edge,
+                      preview::PreviewMode::FullEffect, diagnostic);
 }
 
 ResultCode PreviewSession::apply_preset(PresetLibrary& library, const Preset& preset, std::string& diagnostic) {
@@ -340,7 +368,8 @@ ResultCode PreviewSession::commit_parameters(const std::string& capability_id,
   last_parameter_ = last.first;
   if (committed_) committed_();
   if (const ResultCode code = send_source(diagnostic); code != ResultCode::Ok) return code;
-  return send_request(capability_id, last.first, last.second, diagnostic);
+  return send_request(capability_id, last.first, last.second, options_.max_edge,
+                      preview::PreviewMode::FullEffect, diagnostic);
 }
 
 ResultCode PreviewSession::remove_local_mask(int instance, std::string& diagnostic) {
@@ -350,6 +379,22 @@ ResultCode PreviewSession::remove_local_mask(int instance, std::string& diagnost
     return result.code;
   }
   history_.record_committed(document_.image_id(), document_, kRemoveMaskStep, "", "", false);
+  if (committed_) committed_();
+  return redraw({{last_capability_, last_parameter_}}, diagnostic);
+}
+
+ResultCode PreviewSession::reset_effects(const std::vector<std::string>& capability_ids, const std::string& label,
+                                         std::string& diagnostic) {
+  if (capability_ids.empty()) {
+    diagnostic = "no reset capabilities";
+    return ResultCode::StateConflict;
+  }
+  const CommandResult result = gate_->reset_effects(capability_ids, document_.revision());
+  if (result.code != ResultCode::Ok) {
+    diagnostic = std::string("reset refused: ") + result_code_label(result.code);
+    return result.code;
+  }
+  history_.record_committed(document_.image_id(), document_, kResetStep, "", label, false);
   if (committed_) committed_();
   return redraw({{last_capability_, last_parameter_}}, diagnostic);
 }

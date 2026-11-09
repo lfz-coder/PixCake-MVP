@@ -24,7 +24,8 @@ constexpr std::size_t kMaxIdBytes = 1024;
 constexpr std::size_t kMaxDisplayBytes = 256;
 
 bool valid_mode(preview::PreviewMode mode) {
-  return mode == preview::PreviewMode::FullEffect || mode == preview::PreviewMode::ColorOnly;
+  return mode == preview::PreviewMode::FullEffect || mode == preview::PreviewMode::ColorOnly ||
+         mode == preview::PreviewMode::Original;
 }
 
 bool valid_request(const PreviewRequestMessage& message) {
@@ -88,7 +89,7 @@ ResultCode decode_preview_request(const std::vector<std::uint8_t>& bytes, Previe
       !reader.u32(9, request.max_edge)) {
     return ResultCode::StateConflict;
   }
-  if (mode > static_cast<std::uint32_t>(preview::PreviewMode::ColorOnly)) return ResultCode::UnsupportedFormat;
+  if (mode > static_cast<std::uint32_t>(preview::PreviewMode::Original)) return ResultCode::UnsupportedFormat;
   request.mode = static_cast<preview::PreviewMode>(mode);
   if (!valid_request(message)) return ResultCode::StateConflict;
   out = std::move(message);

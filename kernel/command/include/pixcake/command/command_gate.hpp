@@ -67,6 +67,9 @@ class CommandGate {
   CommandResult paste(const EffectClipboard& clipboard, std::uint64_t revision);
   // 局部调色删除第 instance 个蒙版（去掉它带 "m<N>:" 前缀的全部参数；实例 0 是没有前缀的那一组）。
   CommandResult remove_local_mask(int instance, std::uint64_t revision);
+  // Remove selected effect capability fragments in one command.  Metadata such
+  // as masks and the source image remain untouched.
+  CommandResult reset_effects(const std::vector<std::string>& capability_ids, std::uint64_t revision);
   // 同一个能力的多个参数一次提交（一个修订号，一步历史）。values 是 (参数编号, 显示值)，先写预览值再整体提交。
   CommandResult commit_parameters(const std::string& capability_id,
                                   const std::vector<std::pair<std::string, std::string>>& values,

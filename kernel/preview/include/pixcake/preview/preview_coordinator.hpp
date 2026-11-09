@@ -17,6 +17,8 @@ namespace pixcake::preview {
 enum class PreviewMode {
   FullEffect,
   ColorOnly,
+  // Source-backed pixels without any edit operations.
+  Original,
 };
 
 struct PreviewRequest {

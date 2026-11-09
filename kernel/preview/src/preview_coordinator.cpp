@@ -14,14 +14,16 @@ ResultCode PreviewCoordinator::submit(EditDocument& document, const PreviewReque
       request.capability_id.empty() || request.parameter_id.empty()) {
     return ResultCode::StateConflict;
   }
-  if (find_parameter_mode(request.capability_id, request.parameter_id) == nullptr ||
-      !validate_parameter_display_value(request.capability_id, request.parameter_id, request.display_value)) {
-    return ResultCode::StateConflict;
-  }
-  const ResultCode updated = document.set_preview(request.capability_id, request.parameter_id,
-                                                  request.display_value);
-  if (updated != ResultCode::Ok) {
-    return updated;
+  if (request.mode != PreviewMode::Original) {
+    if (find_parameter_mode(request.capability_id, request.parameter_id) == nullptr ||
+        !validate_parameter_display_value(request.capability_id, request.parameter_id, request.display_value)) {
+      return ResultCode::StateConflict;
+    }
+    const ResultCode updated = document.set_preview(request.capability_id, request.parameter_id,
+                                                    request.display_value);
+    if (updated != ResultCode::Ok) {
+      return updated;
+    }
   }
 
   std::optional<std::uint64_t> replaced_revision;
@@ -90,11 +92,17 @@ PreviewTakeResult PreviewCoordinator::take_latest_steps(const EditDocument& docu
       pending.request.base_revision != document.revision()) {
     return {ResultCode::StateConflict, std::nullopt};
   }
-  const auto compiled = render::compile(document, registry);
-  if (compiled.code != ResultCode::Ok) {
-    return {compiled.code, std::nullopt};
+  if (pending.request.mode == PreviewMode::Original) {
+    pending.description.image_id = document.image_id();
+    pending.description.editing_instance_id = document.editing_instance_id();
+    pending.description.document_revision = document.revision();
+  } else {
+    const auto compiled = render::compile(document, registry);
+    if (compiled.code != ResultCode::Ok) {
+      return {compiled.code, std::nullopt};
+    }
+    pending.description = compiled.description;
   }
-  pending.description = compiled.description;
   return {ResultCode::Ok, std::move(pending)};
 }
 

@@ -43,6 +43,9 @@ struct PreviewSessionOptions {
   // Where the session's edit document is written on commit.
   std::string document_directory;
   std::uint32_t max_edge = 4000;
+  // Interactive drags use a smaller frame so the next slider value can reach
+  // the screen quickly.  The first frame and every commit render at max_edge.
+  std::uint32_t interactive_max_edge = 600;
   int connect_timeout_ms = 10'000;
   // The edit document's image id (file <document_id>.pxedit).  Empty: derived
   // from the photo path (photos opened outside a project).
@@ -71,6 +74,13 @@ class PreviewSession {
   // In-memory value while dragging; renderd renders the latest one.
   ResultCode preview(const std::string& capability_id, const std::string& parameter_id,
                      const std::string& display_value, std::string& diagnostic);
+  // Requests the source image through the normal preview channel without
+  // changing the edit document or its pending preview values.
+  ResultCode request_original_preview(bool interactive, std::string& diagnostic);
+  // Changes only the preview cap. The next refresh uses the selected high-quality edge;
+  // exports and the edit formulas are independent of this setting.
+  void set_preview_max_edge(std::uint32_t max_edge);
+  ResultCode refresh_preview(std::string& diagnostic);
   // Writes the value into the document (new revision) and shows it.
   ResultCode commit(const std::string& capability_id, const std::string& parameter_id,
                     const std::string& display_value, std::string& diagnostic);
@@ -100,6 +110,11 @@ class PreviewSession {
   // 局部调色删除第 instance 个蒙版：写盘、进历史（步骤名 kRemoveMaskStep）、重画。
   static constexpr char kRemoveMaskStep[] = "local.remove";
   ResultCode remove_local_mask(int instance, std::string& diagnostic);
+  // Clear a group of effect fragments, record one history snapshot, and redraw
+  // through the normal high-quality request path.
+  static constexpr char kResetStep[] = "effects.reset";
+  ResultCode reset_effects(const std::vector<std::string>& capability_ids, const std::string& label,
+                           std::string& diagnostic);
   // 同一个能力的多个参数一次提交：一个修订号、一步历史（步骤名取最后一个参数）。
   ResultCode commit_parameters(const std::string& capability_id,
                                const std::vector<std::pair<std::string, std::string>>& values, std::string& diagnostic);
@@ -121,7 +136,8 @@ class PreviewSession {
   // 参数当请求的锚点，都没有就用曝光。
   ResultCode redraw(const std::vector<std::pair<std::string, std::string>>& prefer, std::string& diagnostic);
   ResultCode send_request(const std::string& capability_id, const std::string& parameter_id,
-                          const std::string& display_value, std::string& diagnostic);
+                          const std::string& display_value, std::uint32_t max_edge,
+                          preview::PreviewMode mode, std::string& diagnostic);
 
   class Latch final : public FastExportLatch {
    public:

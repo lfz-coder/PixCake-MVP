@@ -1,5 +1,6 @@
 #include "pixcake/command/command_gate.hpp"
 
+#include "pixcake/capability/fragment_codec.hpp"
 #include "pixcake/capabilities/module_set.hpp"
 
 #include <algorithm>
@@ -9,6 +10,46 @@
 namespace {
 std::mutex g_registry_mu;
 std::unordered_map<std::string, std::uint64_t> g_document_revisions;
+
+// color.local stores both adjustment values and the mask definition in one
+// fragment.  A reset of color effects must keep the latter, including
+// per-instance/sub-item prefixes, so the mask remains available to the user.
+bool is_local_mask_parameter(const std::string& parameter_id) {
+  int instance = 0;
+  std::string_view base;
+  if (!pixcake::split_local_parameter(parameter_id, instance, base)) return false;
+  int item = 0;
+  std::string_view leaf;
+  if (!pixcake::split_local_item(base, item, leaf)) return false;
+  return leaf == "region" || leaf == "mode" || leaf == "invert" || leaf == "strokes" ||
+         leaf == "name" || leaf.rfind("gradient_", 0) == 0 || leaf.rfind("range_", 0) == 0 ||
+         leaf.rfind("lum_", 0) == 0;
+}
+
+std::optional<pixcake::FragmentView> local_mask_fragment_after_reset(const pixcake::EditDocument& document) {
+  const auto existing = document.fragment("color.local");
+  if (!existing) return std::nullopt;
+  std::vector<pixcake::FragmentRecord> records;
+  if (!pixcake::decode_fragment_records(existing->inner, records)) return std::nullopt;
+  std::vector<pixcake::FragmentRecord> kept;
+  for (const auto& record : records) {
+    if (record.type != pixcake::kFragmentParameterRecord) {
+      // Unknown records are metadata owned by the capability; preserve them
+      // so newer mask encodings survive an older reset operation.
+      if (record.type != pixcake::kFragmentMatchWritebackRecord) kept.push_back(record);
+      continue;
+    }
+    std::string parameter_id;
+    std::string value;
+    if (!pixcake::decode_parameter_record(record.payload, parameter_id, value)) return std::nullopt;
+    if (is_local_mask_parameter(parameter_id)) kept.push_back(record);
+  }
+  pixcake::FragmentView replacement;
+  replacement.capability_id = existing->capability_id;
+  replacement.version = existing->version;
+  replacement.inner = pixcake::encode_fragment_records(kept);
+  return replacement;
+}
 }
 
 namespace pixcake {
@@ -200,6 +241,21 @@ CommandResult CommandGate::remove_local_mask(int instance, std::uint64_t revisio
     if (instance < 0 || instance > kMaxLocalInstances) return ResultCode::StateConflict;
     return document_.commit_parameter_prefix_removal(revision, "color.local", local_instance_prefix(instance), files_,
                                                      path_);
+  });
+}
+
+CommandResult CommandGate::reset_effects(const std::vector<std::string>& capability_ids, std::uint64_t revision) {
+  return run_document_command("effects.reset", revision, [&] {
+    if (capability_ids.empty()) return ResultCode::StateConflict;
+    std::vector<FragmentView> replacements;
+    if (std::find(capability_ids.begin(), capability_ids.end(), "color.local") != capability_ids.end()) {
+      const auto local = local_mask_fragment_after_reset(document_);
+      if (document_.fragment("color.local") && !local) return ResultCode::DocumentCorrupt;
+      // An empty filtered fragment means the capability contained adjustments
+      // only; omitting the replacement removes it completely.
+      if (local && !local->inner.empty()) replacements.push_back(*local);
+    }
+    return document_.commit_fragment_replacement(revision, capability_ids, replacements, files_, path_);
   });
 }
 
