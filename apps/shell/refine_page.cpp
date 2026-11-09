@@ -185,17 +185,18 @@ void addDisabledSlider(QWidget* parent, QLayout* layout, const panels::SliderSpe
   row_layout->setVerticalSpacing(4);
   QLabel* name = nullptr;
   auto* name_box = decoratedName(row, qs(spec.label), decor, &name);
-  auto* slider = new QSlider(Qt::Horizontal, row);
+  auto* slider = new PixCakeSlider(row);
   if (!object_name.isEmpty()) slider->setObjectName(object_name);
   if (binding && (binding->parameter_id == "temperature" || binding->parameter_id == "tint")) {
-    slider->setProperty("track", qs(binding->parameter_id));
+    slider->setTrack(qs(binding->parameter_id));
   } else if (decor != nullptr && !decor->track.empty()) {
-    slider->setProperty("track", qs(decor->track));
+    slider->setTrack(qs(decor->track));
   }
   slider->setRange(0, spec.tick_count);
   slider->setSingleStep(1);
   slider->setValue(spec.default_tick);
   if (!spec.bound) shapeUnboundSlider(slider, decor);
+  slider->setDefaultValue(slider->value());  // 初始位置标记画在默认值处
   slider->setEnabled(false);
   slider->setAccessibleName(qs(spec.accessible_name));
   scrollPastOnWheel(slider);

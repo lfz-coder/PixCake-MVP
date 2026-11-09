@@ -16,6 +16,9 @@
 #include <QPaintEvent>
 #include <QPixmap>
 #include <QPushButton>
+#include <QSlider>
+#include <QStyle>
+#include <QStyleOptionSlider>
 #include <QToolButton>
 #include <QTreeWidget>
 #include <QResizeEvent>
@@ -383,6 +386,136 @@ class PixCakeFoldSection final : public QFrame {
   QHBoxLayout* actions_ = nullptr;
   QWidget* body_ = nullptr;
   std::function<void(bool)> on_toggled_;
+};
+
+// 精修的参数滑杆，整个自己画（官方 PixCake 9.3.0 窗口截图实测，2026-11-09）：
+// - 轨道 2px 高、铺满控件宽，普通轨道 #36383d；轨道在滑块周围断开 1px。
+// - 色带（色温、色调、肤色色温、肤色色调）的渐变按整条轨道铺满，位置只和数值对应，不随滑块伸缩。色带上每一点的
+//   颜色就是滑块停在那里时画面偏色的方向（往左偏冷/偏绿，往右偏暖/偏品红/偏紫），中点是中性色。色带没有填充段。
+// - 默认值处一条 2×6 的竖线（初始位置标记），滑块离开默认值后露出来；默认值在两端的滑杆不画。普通轨道上
+//   标记到滑块之间是 2px 的填充段。
+// - 滑块外径 14、圈宽 2、中间透明。鼠标在滑杆上（或正在拖）时滑块圈、填充段、标记是白色，否则是浅灰。
+// 不能用样式表的 ::sub-page 画色带：Qt 会把整条渐变压缩进滑块左边那一段，拖动时颜色跟着变。样式表只给滑块定尺寸
+// （决定拖动的命中区域和滑块的行程）。
+class PixCakeSlider final : public QSlider {
+ public:
+  explicit PixCakeSlider(QWidget* parent = nullptr) : QSlider(Qt::Horizontal, parent) { setAttribute(Qt::WA_Hover); }
+
+  // 色带名（"temperature"、"tint"、"skin-temperature"、"skin-tint"）；空串是普通的灰轨道。
+  void setTrack(const QString& track) {
+    track_ = track;
+    setProperty("track", track);
+    update();
+  }
+  QString track() const { return track_; }
+  void setDefaultValue(std::optional<int> value) {
+    default_ = value;
+    update();
+  }
+  std::optional<int> defaultValue() const { return default_; }
+
+  // 色带的色标（位置 0..1 → 颜色），每 1/8 一个，取自官方窗口截图；被滑块或标记盖住的点用两侧插值。
+  // 普通轨道为空。
+  static std::vector<std::pair<qreal, QColor>> trackStops(const QString& track) {
+    const auto stops = [](std::initializer_list<QColor> colors) {
+      std::vector<std::pair<qreal, QColor>> out;
+      const qreal step = 1.0 / static_cast<qreal>(colors.size() - 1);
+      qreal at = 0.0;
+      for (const QColor& color : colors) {
+        out.emplace_back(std::min(at, 1.0), color);
+        at += step;
+      }
+      return out;
+    };
+    if (track == QStringLiteral("temperature")) {  // 蓝 → 中性 → 黄
+      return stops({QColor(32, 42, 151), QColor(54, 59, 145), QColor(77, 79, 137), QColor(100, 100, 130),
+                    QColor(123, 121, 123), QColor(145, 143, 116), QColor(169, 166, 108), QColor(195, 191, 99),
+                    QColor(220, 215, 91)});
+    }
+    if (track == QStringLiteral("tint")) {  // 绿 → 中性 → 品红
+      return stops({QColor(52, 149, 53), QColor(66, 135, 62), QColor(78, 122, 72), QColor(89, 109, 82),
+                    QColor(99, 97, 92), QColor(108, 85, 101), QColor(117, 72, 110), QColor(124, 60, 121),
+                    QColor(132, 47, 130)});
+    }
+    if (track == QStringLiteral("skin-temperature")) {  // 青 → 暖白 → 橙
+      return stops({QColor(130, 233, 255), QColor(163, 233, 245), QColor(198, 232, 233), QColor(229, 232, 221),
+                    QColor(250, 226, 208), QColor(255, 212, 190), QColor(255, 193, 170), QColor(255, 175, 151),
+                    QColor(255, 157, 132)});
+    }
+    if (track == QStringLiteral("skin-tint")) {  // 绿 → 浅灰 → 紫
+      return stops({QColor(45, 221, 59), QColor(100, 214, 98), QColor(142, 206, 139), QColor(181, 199, 180),
+                    QColor(209, 185, 214), QColor(213, 159, 230), QColor(208, 128, 240), QColor(200, 99, 249),
+                    QColor(194, 71, 255)});
+    }
+    return {};
+  }
+  bool highlighted() const { return isEnabled() && (underMouse() || isSliderDown()); }
+
+  // 值为 value 时滑块中心的横坐标（控件坐标）。
+  qreal handleCenterFor(int value) const {
+    QStyleOptionSlider option;
+    initStyleOption(&option);
+    option.sliderPosition = value;
+    option.sliderValue = value;
+    return QRectF(style()->subControlRect(QStyle::CC_Slider, &option, QStyle::SC_SliderHandle, this)).center().x();
+  }
+
+ protected:
+  void paintEvent(QPaintEvent*) override {
+    QStyleOptionSlider option;
+    initStyleOption(&option);
+    const QRect groove = style()->subControlRect(QStyle::CC_Slider, &option, QStyle::SC_SliderGroove, this);
+    const QRectF handle = style()->subControlRect(QStyle::CC_Slider, &option, QStyle::SC_SliderHandle, this);
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+    const bool lit = highlighted();
+    const bool enabled = isEnabled();
+    const QColor ring = !enabled ? QColor(0x5a, 0x5d, 0x63) : lit ? QColor(Qt::white) : QColor(0xb4, 0xb6, 0xb8);
+    const QColor fill = !enabled ? QColor(0x5a, 0x5d, 0x63) : lit ? QColor(Qt::white) : QColor(0xbd, 0xbf, 0xc1);
+    const QColor mark = !enabled ? QColor(0x5a, 0x5d, 0x63) : lit ? QColor(Qt::white) : QColor(0xbd, 0xbd, 0xbd);
+    const qreal mid = QRectF(groove).center().y();
+    const QPointF centre(handle.center().x(), mid);
+    const qreal radius = 7.0;  // 外径 14
+    // 轨道在滑块周围断开 1px：滑块中间透明，露出面板底色。
+    QPainterPath outside;
+    outside.addRect(QRectF(rect()));
+    QPainterPath hole;
+    hole.addEllipse(centre, radius + 1.0, radius + 1.0);
+    painter.setClipPath(outside.subtracted(hole));
+    const QRectF line(groove.left(), mid - 1.0, groove.width(), 2.0);
+    const auto stops = trackStops(track_);
+    if (stops.empty()) {
+      painter.fillRect(line, QColor(0x36, 0x38, 0x3d));
+    } else {
+      QLinearGradient band(line.left(), 0, line.right(), 0);
+      for (const auto& [at, color] : stops) band.setColorAt(at, color);
+      painter.fillRect(line, band);
+    }
+    if (default_ && *default_ > minimum() && *default_ < maximum()) {
+      const qreal x = handleCenterFor(*default_);
+      if (stops.empty()) {
+        painter.fillRect(QRectF(std::min(x, centre.x()), mid - 1.0, std::abs(centre.x() - x), 2.0), fill);
+      }
+      painter.fillRect(QRectF(x - 1.0, mid - 3.0, 2.0, 6.0), mark);
+    }
+    painter.setClipping(false);
+    painter.setPen(QPen(ring, 2.0));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawEllipse(centre, radius - 1.0, radius - 1.0);
+  }
+
+  void enterEvent(QEnterEvent* event) override {
+    QSlider::enterEvent(event);
+    update();
+  }
+  void leaveEvent(QEvent* event) override {
+    QSlider::leaveEvent(event);
+    update();
+  }
+
+ private:
+  QString track_;
+  std::optional<int> default_;
 };
 
 // 画布上的交互叠加（局部调色的渐变手柄）：画在图像上的内容、是否接管鼠标、拖动（阶段 0 按下、1 移动、2 松开；

@@ -104,6 +104,113 @@ int check_disabled_labels(const QWidget& window, const char* object_name, std::s
 }
 
 // 精修色彩面板的滑杆只能来自参数模式：绑定的 95 支与内核规格一致，其余一律“范围待确认”。
+// 色温、色调色带：整条轨道铺满，同一位置的颜色不随数值变化；默认值处有初始位置标记，滑块离开后露出来。
+int check_track_sliders(const QWidget& window) {
+  using pixcake::shell::PixCakeSlider;
+  for (const char* track : {"temperature", "tint"}) {
+    bool found = false;
+    for (const auto* candidate : window.findChildren<QSlider*>()) {
+      const auto* slider = dynamic_cast<const PixCakeSlider*>(candidate);
+      if (slider == nullptr || slider->track() != QLatin1String(track)) continue;
+      found = true;
+      if (!slider->defaultValue() || *slider->defaultValue() != (slider->minimum() + slider->maximum()) / 2) {
+        qCritical("%s slider has no centre default marker", track);
+        return 4;
+      }
+    }
+    if (!found) {
+      qCritical("no %s colour band slider on the refine page", track);
+      return 4;
+    }
+  }
+  QWidget body;
+  body.setObjectName(QStringLiteral("refine-section-body"));
+  body.resize(300, 40);
+  auto* slider = new PixCakeSlider(&body);
+  slider->setTrack(QStringLiteral("temperature"));
+  slider->setRange(0, 200);
+  slider->setDefaultValue(100);
+  slider->setGeometry(20, 10, 260, 20);
+  body.ensurePolished();
+  const auto shot = [slider](int value) {
+    slider->setValue(value);
+    QImage image = slider->grab().toImage();
+    image.setDevicePixelRatio(1.0);
+    return image.scaled(slider->size(), Qt::IgnoreAspectRatio, Qt::FastTransformation);
+  };
+  const QImage left = shot(30);
+  const QImage right = shot(170);
+  // Development aid: with PIXCAKE_SMOKE_SCREENSHOT=<file.png>, save both positions next to it.
+  if (const char* file = std::getenv("PIXCAKE_SMOKE_SCREENSHOT"); file != nullptr && *file != '\0') {
+    body.setAutoFillBackground(true);
+    QPalette dark = body.palette();
+    dark.setColor(QPalette::Window, QColor(0x1f, 0x21, 0x26));
+    body.setPalette(dark);
+    for (const QString& track : {QStringLiteral("temperature"), QStringLiteral("tint"), QStringLiteral("skin-temperature"),
+                                 QStringLiteral("skin-tint"), QString()}) {
+      slider->setTrack(track);
+      for (const int value : {30, 100, 170}) {
+        for (const bool hovered : {false, true}) {
+          slider->setValue(value);
+          slider->setAttribute(Qt::WA_UnderMouse, hovered);
+          QString path = QString::fromLocal8Bit(file);
+          path.insert(path.lastIndexOf(QLatin1Char('.')), QStringLiteral("-slider-%1-%2%3")
+                                                              .arg(track.isEmpty() ? QStringLiteral("plain") : track)
+                                                              .arg(value)
+                                                              .arg(hovered ? QStringLiteral("-hover") : QString()));
+          body.grab(slider->geometry()).save(path);
+        }
+      }
+    }
+    slider->setAttribute(Qt::WA_UnderMouse, false);
+    slider->setTrack(QStringLiteral("temperature"));
+  }
+  const int mid_y = slider->height() / 2;
+  const int marker_x = qRound(slider->handleCenterFor(100));
+  const auto same = [](QColor a, QColor b) {
+    return std::abs(a.red() - b.red()) <= 3 && std::abs(a.green() - b.green()) <= 3 && std::abs(a.blue() - b.blue()) <= 3;
+  };
+  // 两个滑块位置之外的几处：颜色一样（色带不跟着滑块伸缩）。
+  for (const int x : {2, 90, 110, 257}) {
+    if (!same(left.pixelColor(x, mid_y), right.pixelColor(x, mid_y))) {
+      qCritical("temperature band at x=%d changed with the value: %s vs %s", x,
+                qPrintable(left.pixelColor(x, mid_y).name()), qPrintable(right.pixelColor(x, mid_y).name()));
+      return 4;
+    }
+  }
+  // 左端是蓝、右端是黄（官方色标），不是灰轨道。
+  const QColor blue = left.pixelColor(1, mid_y);
+  const QColor yellow = left.pixelColor(slider->width() - 2, mid_y);
+  if (blue.blue() < 140 || blue.red() > 70 || yellow.blue() > 110 || yellow.red() < 200) {
+    qCritical("temperature band ends are %s / %s", qPrintable(blue.name()), qPrintable(yellow.name()));
+    return 4;
+  }
+  // 滑块离开默认值：标记露出来，比色带亮、在中线上下都有。
+  for (const int dy : {-2, 2}) {
+    const QColor mark = left.pixelColor(marker_x, mid_y + dy);
+    if (mark.red() < 180 || mark.green() < 180 || mark.blue() < 180) {
+      qCritical("default marker missing at x=%d: %s", marker_x, qPrintable(mark.name()));
+      return 4;
+    }
+  }
+  // 色带没有填充段：标记和滑块之间仍是色带颜色。
+  const int between_x = (qRound(slider->handleCenterFor(30)) + marker_x) / 2;
+  if (!same(left.pixelColor(between_x, mid_y), right.pixelColor(between_x, mid_y))) {
+    qCritical("temperature band has a fill segment at x=%d", between_x);
+    return 4;
+  }
+  // 普通轨道：标记到滑块之间是浅色填充段，另一侧是 #36383d 轨道。
+  slider->setTrack(QString());
+  const QImage plain = shot(30);
+  const QColor filled = plain.pixelColor(between_x, mid_y);
+  const QColor bare = plain.pixelColor(slider->width() - 30, mid_y);
+  if (filled.red() < 180 || filled.green() < 180 || bare != QColor(0x36, 0x38, 0x3d)) {
+    qCritical("plain slider fill %s / track %s", qPrintable(filled.name()), qPrintable(bare.name()));
+    return 4;
+  }
+  return 0;
+}
+
 int check_refine_sliders(const QWidget& window) {
   const auto* panel = window.findChild<QWidget*>(QStringLiteral("refine-color-labels"));
   if (panel == nullptr) {
@@ -176,6 +283,9 @@ int smoke(QWidget& window, Page first_page) {
       qCritical("missing shell asset: %s", qPrintable(relative));
       return 2;
     }
+  }
+  if (first_page == Page::Refine) {
+    if (const int tracks = check_track_sliders(window); tracks != 0) return tracks;
   }
   if (first_page == Page::Refine) {
     if (const int crop = check_disabled_labels(window, "refine-crop-labels", "refine-crop",

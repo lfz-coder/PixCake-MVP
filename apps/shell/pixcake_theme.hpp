@@ -212,9 +212,6 @@ struct PixCakeTheme final {
       QPushButton#refine-person:checked { background: #2f7cf6; color: #ffffff; }
       QPushButton#refine-ai-button { background: #2a2d33; border: 1px solid #3a3d44; border-radius: 6px; min-height: 40px;
         text-align: left; padding: 0 16px; color: #e6c35a; }
-      QWidget#refine-section-body QSlider[track="skin-temperature"]::groove:horizontal,
-      QWidget#refine-section-body QSlider[track="skin-temperature"]::sub-page:horizontal {
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #8fd8f0, stop:0.5 #e8e8e8, stop:1 #f0a080); }
       QPushButton#refine-local-tab { background: #33363d; border: 1px solid transparent; border-radius: 3px;
         min-height: 26px; padding: 0 12px; color: #d0d0d0; }
       QPushButton#refine-local-tab:checked { background: #1f2126; border-color: #e6e6e6; color: #ffffff; }
@@ -239,17 +236,13 @@ struct PixCakeTheme final {
       QToolButton#refine-section-action:disabled { color: #6f7277; }
       QWidget#refine-section-body QLabel { color: #d0d0d0; }
       QWidget#refine-section-body QLabel:disabled { color: #6f7277; }
-      QWidget#refine-section-body QSlider::groove:horizontal { height: 2px; background: #5a5d63; border-radius: 1px; }
-      QWidget#refine-section-body QSlider::sub-page:horizontal { background: #5a5d63; border-radius: 1px; }
-      QWidget#refine-section-body QSlider::handle:horizontal { width: 12px; height: 12px; margin: -7px 0;
-        background: #2a2d33; border: 2px solid #e6e6e6; border-radius: 8px; }
+      QWidget#refine-section-body QSlider::groove:horizontal { height: 2px; background: #36383d; border-radius: 1px; }
+      QWidget#refine-section-body QSlider::sub-page:horizontal { background: #36383d; border-radius: 1px; }
+      QWidget#refine-section-body QSlider::handle:horizontal { width: 10px; height: 10px; margin: -6px 0;
+        background: transparent; border: 2px solid #b4b6b8; border-radius: 7px; }
+      QWidget#refine-section-body QSlider::handle:horizontal:hover { border-color: #ffffff; }
       QWidget#refine-section-body QSlider::handle:horizontal:disabled { border-color: #5a5d63; }
-      QWidget#refine-section-body QSlider[track="temperature"]::groove:horizontal,
-      QWidget#refine-section-body QSlider[track="temperature"]::sub-page:horizontal {
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3b47d4, stop:0.5 #8a8a8a, stop:1 #e6dc3c); }
-      QWidget#refine-section-body QSlider[track="tint"]::groove:horizontal,
-      QWidget#refine-section-body QSlider[track="tint"]::sub-page:horizontal {
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3fae3f, stop:0.5 #8a8a8a, stop:1 #b347b3); }
+      /* Slider tracks, color bands, and the initial marker are painted by PixCakeSlider. */
     )QSS");
   }
 

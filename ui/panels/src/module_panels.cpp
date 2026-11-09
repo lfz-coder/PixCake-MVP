@@ -103,7 +103,7 @@ constexpr Def kPortrait[] = {
     // 色块颜色取自截图像素（显示器色彩配置下的近似值）；第一个是“无”。
     {K::Swatches, "肤色选择-色块", 0, {}, "|#ffffff|#f1d8da|#e8f6fc|#f5e2cb|#b27e75|#b67e64|#73534c|#734438"},
     {K::Slider, "肤色色温", kCenter, {}, "track:skin-temperature"},
-    {K::Slider, "肤色色调", kCenter, {}, "track:tint"},
+    {K::Slider, "肤色色调", kCenter, {}, "track:skin-tint"},  // 官方肤色色调是自己的绿→紫色带
     {K::AiButton, "AI补光"},
     {K::AiButton, "柔化阴影"},
     {K::AiButton, "AI面部重绘"},
