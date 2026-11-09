@@ -9,6 +9,7 @@
 #include "pixcake/capability/capability_registry.hpp"
 #include "pixcake/mask/brush_mask.hpp"
 #include "pixcake/mask/semantic_parts.hpp"
+#include "pixcake/ui/panels/portrait_panel.hpp"
 #include "pixcake/ui/panels/slider_spec.hpp"
 
 #include <QAbstractScrollArea>
@@ -100,34 +101,103 @@ void scrollPastOnWheel(QSlider* slider) {
 
 // 范围、步进、默认值只来自内核参数模式（ui/panels 的 slider_spec）。照片打开时，绑定全图色彩的
 // 滑杆可用：拖动发预览，松手（或键盘改值）经命令入口提交。
+// 名字后面的修饰（官方画面）：问号说明、New/Beta 角标。
+void addNameDecor(QHBoxLayout* row, QWidget* parent, const panels::PanelRow* decor) {
+  if (decor == nullptr) return;
+  if (decor->help) {
+    auto* help = new QLabel(QStringLiteral("?"), parent);
+    help->setObjectName(QStringLiteral("refine-help"));
+    help->setAlignment(Qt::AlignCenter);
+    help->setFixedSize(16, 16);
+    row->addWidget(help);
+  }
+  if (!decor->badge.empty()) {
+    auto* badge = new QLabel(qs(decor->badge), parent);
+    badge->setObjectName(QStringLiteral("refine-badge"));
+    badge->setFixedHeight(16);
+    badge->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    row->addWidget(badge, 0, Qt::AlignVCenter);
+  }
+}
+
+// 名字一格：名字加修饰。
+QWidget* decoratedName(QWidget* parent, const QString& label, const panels::PanelRow* decor, QLabel** name_out = nullptr,
+                       bool enabled = false) {
+  auto* box = new QWidget(parent);
+  auto* row = new QHBoxLayout(box);
+  row->setContentsMargins(0, 0, 0, 0);
+  row->setSpacing(6);
+  auto* name = text(label);
+  name->setEnabled(enabled);
+  row->addWidget(name);
+  addNameDecor(row, box, decor);
+  row->addStretch(1);
+  if (name_out != nullptr) *name_out = name;
+  return box;
+}
+
+// 数值右边的 ▸：带子项的行点它展开子项框。没有子项（还没核对）时禁用。
+QToolButton* expanderButton(QWidget* parent) {
+  auto* button = new QToolButton(parent);
+  button->setObjectName(QStringLiteral("refine-expander"));
+  button->setCheckable(true);
+  button->setIcon(PixCakeFoldSection::triangleIcon(false));
+  button->setIconSize(QSize(8, 8));
+  QObject::connect(button, &QToolButton::toggled, button,
+                   [button](bool open) { button->setIcon(PixCakeFoldSection::triangleIcon(open)); });
+  return button;
+}
+
+// 没有参数模式的滑杆：截图里滑块在中间的（双向）放在中间，档位滑杆按档数；都禁用，无障碍名写“范围待确认”。
+void shapeUnboundSlider(QSlider* slider, const panels::PanelRow* decor) {
+  if (decor == nullptr) return;
+  if (decor->ticks > 0) {
+    slider->setRange(0, decor->ticks - 1);
+  } else if (decor->centered) {
+    slider->setRange(0, 2);
+    slider->setValue(1);
+  }
+}
+
 void addDisabledSlider(QWidget* parent, QLayout* layout, const panels::SliderSpec& spec, const QString& object_name,
                        PageActions* actions = nullptr, const std::optional<panels::SliderBinding>& binding = {},
-                       const Refresh& refresh = nullptr) {
+                       const Refresh& refresh = nullptr, const panels::PanelRow* decor = nullptr,
+                       QToolButton** expander_out = nullptr) {
   // 官方的滑杆行：上面左边是名字、右边是数值，下面是整行宽的滑杆（白平衡的色温、色调画成色带）。
   auto* row = new QWidget(parent);
   auto* row_layout = new QGridLayout(row);
   row_layout->setContentsMargins(0, 0, 0, 0);
   row_layout->setHorizontalSpacing(6);
   row_layout->setVerticalSpacing(4);
-  auto* name = text(qs(spec.label));
-  name->setEnabled(false);
+  QLabel* name = nullptr;
+  auto* name_box = decoratedName(row, qs(spec.label), decor, &name);
   auto* slider = new QSlider(Qt::Horizontal, row);
   if (!object_name.isEmpty()) slider->setObjectName(object_name);
   if (binding && (binding->parameter_id == "temperature" || binding->parameter_id == "tint")) {
     slider->setProperty("track", qs(binding->parameter_id));
+  } else if (decor != nullptr && !decor->track.empty()) {
+    slider->setProperty("track", qs(decor->track));
   }
   slider->setRange(0, spec.tick_count);
   slider->setSingleStep(1);
   slider->setValue(spec.default_tick);
+  if (!spec.bound) shapeUnboundSlider(slider, decor);
   slider->setEnabled(false);
   slider->setAccessibleName(qs(spec.accessible_name));
   scrollPastOnWheel(slider);
   auto* reading = text(qs(spec.default_text));
   reading->setEnabled(false);
   reading->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-  row_layout->addWidget(name, 0, 0);
+  row_layout->addWidget(name_box, 0, 0);
   row_layout->addWidget(reading, 0, 1);
-  row_layout->addWidget(slider, 1, 0, 1, 2);
+  int columns = 2;
+  if (decor != nullptr && decor->expandable) {
+    auto* expander = expanderButton(row);
+    row_layout->addWidget(expander, 0, 2);
+    if (expander_out != nullptr) *expander_out = expander;
+    columns = 3;
+  }
+  row_layout->addWidget(slider, 1, 0, 1, columns);
   layout->addWidget(row);
   if (!previewable(actions, spec, binding)) return;
 
@@ -373,7 +443,191 @@ void addColorPageTop(QWidget* parent, QVBoxLayout* layout, PageActions* actions,
   layout->addWidget(rule);
 }
 
-// 一列可折叠分组（色彩调节、局部调色、后期调色共用）。行来自 ui/panels 的同一张表；page 区分各页的展开状态
+// 下面是分组里各种行的画法（官方 9.3.0 的控件）。还没有效果的行都禁用。
+
+QWidget* toggleRow(QWidget* parent, const panels::PanelRow& row) {
+  auto* line = new QWidget(parent);
+  auto* layout = new QHBoxLayout(line);
+  layout->setContentsMargins(0, 0, 0, 0);
+  layout->addWidget(decoratedName(line, qs(row.label), &row), 1);
+  auto* toggle = new QCheckBox(line);
+  toggle->setObjectName(QStringLiteral("refine-switch"));
+  toggle->setAccessibleName(qs(row.label));
+  toggle->setEnabled(false);
+  layout->addWidget(toggle);
+  return line;
+}
+
+// 左右联动滑杆：名字一行，下面“左 数值 | 右 数值”，再下面左滑杆、联动按钮、右滑杆。
+QWidget* pairSliderRow(QWidget* parent, const panels::PanelRow& row, QToolButton** expander_out) {
+  auto* box = new QWidget(parent);
+  auto* grid = new QGridLayout(box);
+  grid->setContentsMargins(0, 0, 0, 0);
+  grid->setHorizontalSpacing(8);
+  grid->setVerticalSpacing(4);
+  auto* title = new QWidget(box);
+  auto* title_row = new QHBoxLayout(title);
+  title_row->setContentsMargins(0, 0, 0, 0);
+  title_row->addWidget(decoratedName(title, qs(row.label), &row), 1);
+  if (row.expandable) {
+    auto* expander = expanderButton(title);
+    title_row->addWidget(expander);
+    if (expander_out != nullptr) *expander_out = expander;
+  }
+  grid->addWidget(title, 0, 0, 1, 3);
+  int column = 0;
+  for (const char* side : {"refine.side.left", "refine.side.right"}) {
+    auto* head = new QWidget(box);
+    auto* head_row = new QHBoxLayout(head);
+    head_row->setContentsMargins(0, 0, 0, 0);
+    const auto spec = panels::slider_spec(row.label + "-" + qtext(side).toStdString(), std::nullopt);
+    auto* side_name = text(qtext(side));
+    side_name->setEnabled(false);
+    auto* reading = text(qs(spec.default_text));
+    reading->setEnabled(false);
+    head_row->addWidget(side_name);
+    head_row->addStretch(1);
+    head_row->addWidget(reading);
+    grid->addWidget(head, 1, column);
+    auto* slider = new QSlider(Qt::Horizontal, box);
+    slider->setRange(0, 0);
+    shapeUnboundSlider(slider, &row);
+    slider->setEnabled(false);
+    slider->setAccessibleName(qs(spec.accessible_name));
+    scrollPastOnWheel(slider);
+    grid->addWidget(slider, 2, column);
+    column += 2;
+  }
+  auto* link = pendingIcon(box, 24, qtext("refine.side.link"));
+  link->setToolTip(qtext("refine.side.link"));
+  link->setEnabled(false);
+  grid->addWidget(link, 2, 1);
+  grid->setColumnStretch(0, 1);
+  grid->setColumnStretch(2, 1);
+  return box;
+}
+
+// 卡片单选（脸型预设、发色选择……）：四列，第一张“无”默认选中。卡片图片没有素材，只画名字。
+QWidget* cardsRow(QWidget* parent, const panels::PanelRow& row) {
+  auto* box = new QWidget(parent);
+  box->setAccessibleName(qs(row.label));
+  auto* grid = new QGridLayout(box);
+  grid->setContentsMargins(0, 0, 0, 0);
+  grid->setSpacing(8);
+  auto* group = new QButtonGroup(box);
+  int index = 0;
+  for (const auto& option : row.options) {
+    auto* card = new QToolButton(box);
+    card->setObjectName(QStringLiteral("refine-card"));
+    card->setText(qs(option));
+    card->setAccessibleName(qs(option));
+    card->setCheckable(true);
+    card->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    card->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    card->setFixedHeight(72);
+    card->setChecked(index == 0 && option == qtext("refine.card.none").toStdString());
+    card->setEnabled(false);
+    group->addButton(card);
+    grid->addWidget(card, index / 4, index % 4);
+    ++index;
+  }
+  for (int column = 0; column < 4; ++column) grid->setColumnStretch(column, 1);
+  return box;
+}
+
+// 色块单选（肤色选择）：颜色来自表；空串是“无”。
+QWidget* swatchesRow(QWidget* parent, const panels::PanelRow& row) {
+  auto* box = new QWidget(parent);
+  box->setAccessibleName(qs(row.label));
+  auto* grid = new QGridLayout(box);
+  grid->setContentsMargins(0, 0, 0, 0);
+  grid->setSpacing(6);
+  int index = 0;
+  for (const auto& color : row.options) {
+    auto* swatch = new QToolButton(box);
+    swatch->setObjectName(QStringLiteral("refine-swatch"));
+    swatch->setCheckable(true);
+    swatch->setFixedSize(28, 28);
+    swatch->setEnabled(false);
+    if (color.empty()) {
+      swatch->setChecked(true);
+      swatch->setAccessibleName(qtext("refine.card.none"));
+    } else {
+      swatch->setAccessibleName(qs(color));
+      swatch->setProperty("swatch", qs(color));
+      swatch->setStyleSheet(QStringLiteral("QToolButton#refine-swatch { background: %1; }").arg(qs(color)));
+    }
+    grid->addWidget(swatch, index / 8, index % 8);
+    ++index;
+  }
+  return box;
+}
+
+QWidget* tabsRow(QWidget* parent, const panels::PanelRow& row) {
+  auto* box = new QWidget(parent);
+  box->setAccessibleName(qs(row.label));
+  auto* column = new QVBoxLayout(box);
+  column->setContentsMargins(0, 0, 0, 0);
+  column->setSpacing(8);
+  QHBoxLayout* line = nullptr;
+  // 一行放不下就换行：按按钮实际宽度算，可用宽度是分组内容区（面板宽减两边留白）。
+  const int available = PixCakeTheme::kWorkspaceSideWidth + 14 - 24;
+  int used = 0;
+  int index = 0;
+  for (const auto& option : row.options) {
+    auto* tab = new QPushButton(qs(option), box);
+    tab->setObjectName(QStringLiteral("refine-tab"));
+    tab->setCheckable(true);
+    tab->setChecked(index == 0);
+    tab->setEnabled(false);  // 只看到第一页的内容；第一页也只是显示
+    tab->ensurePolished();
+    const int width = tab->sizeHint().width();
+    if (line == nullptr || used + width > available) {
+      if (line != nullptr) line->addStretch(1);
+      line = new QHBoxLayout;
+      line->setSpacing(8);
+      column->addLayout(line);
+      used = 0;
+    }
+    line->addWidget(tab);
+    used += width + 8;
+    ++index;
+  }
+  if (line != nullptr) line->addStretch(1);
+  return box;
+}
+
+QWidget* aiButtonRow(QWidget* parent, const panels::PanelRow& row) {
+  auto* button = action(qs(row.label), parent, false);
+  button->setObjectName(QStringLiteral("refine-ai-button"));
+  return button;
+}
+
+QWidget* toolRow(QWidget* parent, const panels::PanelRow& row) {
+  auto* line = new QWidget(parent);
+  auto* layout = new QHBoxLayout(line);
+  layout->setContentsMargins(0, 0, 0, 0);
+  layout->addWidget(decoratedName(line, qs(row.label), &row), 1);
+  for (int i = 0; i < 2; ++i) {
+    auto* icon = pendingIcon(line, 20, qs(row.label));
+    icon->setEnabled(false);
+    layout->addWidget(icon);
+  }
+  return line;
+}
+
+// 子项框（可展开行的子项、“瘦腿”这种带标题的框）。
+QFrame* childBox(QWidget* parent, QVBoxLayout** layout_out) {
+  auto* box = new QFrame(parent);
+  box->setObjectName(QStringLiteral("refine-child-box"));
+  auto* layout = new QVBoxLayout(box);
+  layout->setContentsMargins(10, 8, 10, 8);
+  layout->setSpacing(10);
+  *layout_out = layout;
+  return box;
+}
+
+// 一列可折叠分组（色彩调节、局部调色、后期调色、人像美化共用）。行来自 ui/panels 的表；page 区分各页的展开状态
 // （“<page>/<分组名>”）。rebind 把行里的绑定换成实际要写的参数（局部调色是带蒙版前缀的参数）；actions 为空时
 // 控件全部禁用（例如局部调色还没有选中蒙版）。
 using Rebind = std::function<panels::SliderBinding(const panels::SliderBinding&)>;
@@ -381,7 +635,9 @@ void addSections(QWidget* parent, QVBoxLayout* layout, const std::vector<panels:
                  const std::string& page, const Rebind& rebind = {}) {
   const Refresh refresh = std::make_shared<EnableRefresh>();
   PixCakeFoldSection* section = nullptr;
-  for (const auto& row : rows) {
+  QVBoxLayout* children = nullptr;  // 当前子项框
+  for (std::size_t index = 0; index < rows.size(); ++index) {
+    const auto& row = rows[index];
     if (row.kind == panels::PanelRowKind::Section) {
       const std::string key = page + "/" + row.label;
       section = new PixCakeFoldSection(qs(row.label), QStringLiteral("refine-section"), parent);
@@ -391,27 +647,110 @@ void addSections(QWidget* parent, QVBoxLayout* layout, const std::vector<panels:
       section->onToggled([key](bool open) {
         if (open) uiState().open_sections.insert(key); else uiState().open_sections.erase(key);
       });
+      addNameDecor(section->titleDecor(), section, &row);
+      if (row.reset) section->actions()->addWidget(sectionAction(section, qtext("refine.section.reset")));
       layout->addWidget(section);
+      children = nullptr;
       continue;
     }
     if (section == nullptr) continue;  // 表里每一行都在某个分组下（test_slider_spec 检查）
     QWidget* body = section->bodyWidget();
-    QVBoxLayout* body_layout = section->body();
+    QVBoxLayout* target = row.child && children != nullptr ? children : section->body();
+    if (!row.child) children = nullptr;
+    const bool has_children = index + 1 < rows.size() && rows[index + 1].child;
+    QToolButton* expander = nullptr;
     std::optional<panels::SliderBinding> binding = row.binding;
     if (binding && rebind) binding = rebind(*binding);
-    if (row.kind == panels::PanelRowKind::HeaderAction) {
-      section->actions()->addWidget(sectionAction(section, qs(row.label)));
-    } else if (row.kind == panels::PanelRowKind::Picker) {
-      body_layout->addWidget(whiteBalancePicker(body, qs(row.label)));
-    } else if (row.kind == panels::PanelRowKind::Title) {
-      body_layout->addWidget(disabledLabel(qs(row.label)));
-    } else if (row.kind == panels::PanelRowKind::Choice) {
-      panels::PanelRow bound = row;
-      bound.binding = binding;
-      addChoice(body, body_layout, bound, actions, refresh);
-    } else {
-      addDisabledSlider(body, body_layout, panels::slider_spec(row.label, binding), qs(row.object_name), actions, binding,
-                        refresh);
+    switch (row.kind) {
+      case panels::PanelRowKind::HeaderAction:
+        section->actions()->addWidget(sectionAction(section, qs(row.label)));
+        break;
+      case panels::PanelRowKind::Picker:
+        target->addWidget(whiteBalancePicker(body, qs(row.label)));
+        break;
+      case panels::PanelRowKind::Title:
+        target->addWidget(disabledLabel(qs(row.label)));
+        break;
+      case panels::PanelRowKind::Subheading: {
+        QLabel* name = nullptr;
+        auto* heading = decoratedName(body, qs(row.label), &row, &name, true);
+        name->setObjectName(QStringLiteral("refine-subheading"));
+        target->addWidget(heading);
+        break;
+      }
+      case panels::PanelRowKind::Separator: {
+        auto* line = new QFrame(body);
+        line->setObjectName(QStringLiteral("refine-section-rule"));
+        line->setFixedHeight(1);
+        target->addWidget(line);
+        break;
+      }
+      case panels::PanelRowKind::Choice: {
+        panels::PanelRow bound = row;
+        bound.binding = binding;
+        addChoice(body, target, bound, actions, refresh);
+        break;
+      }
+      case panels::PanelRowKind::Toggle:
+        target->addWidget(toggleRow(body, row));
+        break;
+      case panels::PanelRowKind::Checkbox: {
+        auto* check = new QCheckBox(qs(row.label), body);
+        check->setEnabled(false);
+        target->addWidget(check, 0, Qt::AlignRight);
+        break;
+      }
+      case panels::PanelRowKind::PairSlider:
+        target->addWidget(pairSliderRow(body, row, &expander));
+        break;
+      case panels::PanelRowKind::Cards:
+        target->addWidget(cardsRow(body, row));
+        break;
+      case panels::PanelRowKind::Swatches:
+        target->addWidget(swatchesRow(body, row));
+        break;
+      case panels::PanelRowKind::Tabs:
+        target->addWidget(tabsRow(body, row));
+        break;
+      case panels::PanelRowKind::AiButton:
+        target->addWidget(aiButtonRow(body, row));
+        break;
+      case panels::PanelRowKind::Tool:
+        target->addWidget(toolRow(body, row));
+        break;
+      case panels::PanelRowKind::Group: {
+        QVBoxLayout* group_layout = nullptr;
+        auto* box = childBox(body, &group_layout);
+        auto* head = new QWidget(box);
+        auto* head_row = new QHBoxLayout(head);
+        head_row->setContentsMargins(0, 0, 0, 0);
+        head_row->addWidget(decoratedName(head, qs(row.label), &row), 1);
+        auto* link = pendingIcon(head, 20, qtext("refine.side.link"));
+        link->setEnabled(false);
+        head_row->addWidget(link);
+        group_layout->addWidget(head);
+        target->addWidget(box);
+        children = group_layout;
+        break;
+      }
+      case panels::PanelRowKind::Section:
+        break;
+      case panels::PanelRowKind::Slider:
+        addDisabledSlider(body, target, panels::slider_spec(row.label, binding), qs(row.object_name), actions, binding,
+                          refresh, &row, &expander);
+        break;
+    }
+    if (expander != nullptr) {
+      // 带子项的行：子项放进一个默认收起的框，点 ▸ 展开。子项没核对过的行，▸ 禁用。
+      expander->setEnabled(has_children);
+      if (has_children) {
+        QVBoxLayout* child_layout = nullptr;
+        auto* box = childBox(body, &child_layout);
+        box->setVisible(false);
+        target->addWidget(box);
+        QObject::connect(expander, &QToolButton::toggled, box, [box](bool open) { box->setVisible(open); });
+        children = child_layout;
+      }
     }
   }
 }
@@ -1372,12 +1711,48 @@ void addModuleContent(const std::string& id, QWidget* content, QVBoxLayout* layo
     post->addWidget(partial);
     return;
   }
+  if (id == "portrait") {
+    // 人像美化：顶部人物属性（女、男、儿童……所有人，右边联动），下面是十一个折叠分组（ui/panels 的人像表）。
+    // 人像效果还没有实现：全部禁用。
+    QFrame* frame = nullptr;
+    auto* portrait = labelPanel(content, layout, "refine-portrait-labels", moduleDescription("portrait"), &frame);
+    portrait->setSpacing(0);
+    auto* people = new QWidget(frame);
+    people->setObjectName(QStringLiteral("refine-portrait-people"));
+    // 两行：女 男 儿童 长辈女 / 长辈男 单人 所有人（宽一些） 联动。
+    auto* people_column = new QVBoxLayout(people);
+    people_column->setContentsMargins(12, 12, 12, 12);
+    people_column->setSpacing(8);
+    std::array<QHBoxLayout*, 2> lines{new QHBoxLayout, new QHBoxLayout};
+    int index = 0;
+    for (const auto& person : panels::refine_portrait_people()) {
+      auto* button = new QPushButton(qs(person), people);
+      button->setObjectName(QStringLiteral("refine-person"));
+      button->setCheckable(true);
+      button->setChecked(index == 0);
+      button->setEnabled(false);
+      lines[index < 4 ? 0 : 1]->addWidget(button, index == 6 ? 2 : 1);
+      ++index;
+    }
+    auto* link = pendingIcon(people, 28, qtext("refine.side.link"));
+    link->setEnabled(false);
+    lines[1]->addWidget(link);
+    for (auto* line : lines) {
+      line->setSpacing(8);
+      people_column->addLayout(line);
+    }
+    portrait->addWidget(people);
+    auto* rule = new QFrame(frame);
+    rule->setObjectName(QStringLiteral("refine-section-rule"));
+    rule->setFixedHeight(1);
+    portrait->addWidget(rule);
+    addSections(frame, portrait, panels::refine_portrait_rows(), actions, "portrait");
+    return;
+  }
   layout->setContentsMargins(12, 12, 12, 12);
   layout->setSpacing(8);
   if (id == "clothing") {
     addLabelList(labelPanel(content, layout, "refine-clothing-labels", qtext("refine.clothing.name")), "refine-clothing");
-  } else if (id == "portrait") {
-    addLabelList(labelPanel(content, layout, "refine-portrait-labels", moduleDescription("portrait")), "refine-portrait", true);
   } else if (id == "image") {
     addLabelList(labelPanel(content, layout, "refine-image-labels", moduleDescription("image")), "refine-image", true);
   } else if (id == "crop") {
@@ -1441,6 +1816,11 @@ QWidget* modulePage(const CopyItem& entry, PageActions* actions, std::vector<Pix
     auto* master = action(qtext("refine.master-color"), header, false);
     master->setObjectName(QStringLiteral("refine-master-color"));
     header_row->addWidget(master);
+  } else if (entry.id == "portrait") {
+    auto* scan = pendingIcon(header, 28, qtext("refine.portrait.scan"));
+    scan->setToolTip(qtext("refine.portrait.scan"));
+    scan->setEnabled(false);
+    header_row->addWidget(scan);
   } else if (entry.id == "local") {
     // 显示蒙版叠加（还没有接，图标文件也还没有）。
     auto* overlay = pendingIcon(header, 28, qtext("local.overlay"));

@@ -181,6 +181,28 @@ int smoke(QWidget& window, Page first_page) {
       return history;
     }
     if (const int sliders = check_refine_sliders(window); sliders != 0) return sliders;
+    // Development aid: every module page with all its sections open, full height.
+    if (const char* shot = std::getenv("PIXCAKE_SMOKE_SCREENSHOT"); shot != nullptr && *shot != '\0') {
+      window.resize(1386, 800);
+      for (auto* rail : window.findChildren<QToolButton*>()) {
+        if (!rail->objectName().startsWith(QStringLiteral("refine-rail-"))) continue;
+        rail->click();
+        for (auto* toggle : window.findChildren<QToolButton*>(QStringLiteral("refine-section-toggle"))) {
+          if (toggle->isVisibleTo(&window)) toggle->setChecked(true);
+        }
+        for (auto* expander : window.findChildren<QToolButton*>(QStringLiteral("refine-expander"))) {
+          if (expander->isVisibleTo(&window) && expander->isEnabled()) expander->setChecked(true);
+        }
+        QCoreApplication::processEvents();
+        for (auto* content : window.findChildren<QWidget*>(QStringLiteral("refine-module-content"))) {
+          if (!content->isVisibleTo(&window)) continue;
+          content->adjustSize();
+          QString path = QString::fromLocal8Bit(shot);
+          path.insert(path.lastIndexOf(QLatin1Char('.')), QLatin1Char('-') + rail->objectName());
+          content->grab().save(path);
+        }
+      }
+    }
   }
   if (const int tabs = check_tab_navigation(window, first_page); tabs != 0) return tabs;
   // 页面用到的文案键都在文案表里（Q-11）。

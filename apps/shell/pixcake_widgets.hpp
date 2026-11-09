@@ -277,6 +277,10 @@ class PixCakeFoldSection final : public QFrame {
     toggle_->setIconSize(QSize(8, 8));
     toggle_->setCursor(Qt::PointingHandCursor);
     header_row->addWidget(toggle_);
+    title_decor_ = new QHBoxLayout;
+    title_decor_->setContentsMargins(0, 0, 0, 0);
+    title_decor_->setSpacing(6);
+    header_row->addLayout(title_decor_);
     header_row->addStretch(1);
     actions_ = new QHBoxLayout;
     actions_->setContentsMargins(0, 0, 0, 0);
@@ -299,13 +303,19 @@ class PixCakeFoldSection final : public QFrame {
   QVBoxLayout* body() { return static_cast<QVBoxLayout*>(body_->layout()); }
   QWidget* bodyWidget() { return body_; }
   QHBoxLayout* actions() { return actions_; }
+  // 标题右边紧挨着的修饰（问号、New 角标）。
+  QHBoxLayout* titleDecor() { return title_decor_; }
   QToolButton* toggle() { return toggle_; }
   bool expanded() const { return toggle_->isChecked(); }
   void setExpanded(bool open) { toggle_->setChecked(open); }
   void onToggled(std::function<void(bool)> callback) { on_toggled_ = std::move(callback); }
 
- private:
+ public:
   // 标题左边的实心小三角（收起朝右、展开朝下）。系统箭头在 macOS 上是折线，和官方不一样，这里自己画。
+  // 可展开的滑杆行（▸）也用它。
+  static QIcon triangleIcon(bool down) { return triangle(down); }
+
+ private:
   static QIcon triangle(bool down) {
     const qreal ratio = 2.0;
     QPixmap pixmap(qRound(8 * ratio), qRound(8 * ratio));
@@ -327,6 +337,7 @@ class PixCakeFoldSection final : public QFrame {
   }
 
   QToolButton* toggle_ = nullptr;
+  QHBoxLayout* title_decor_ = nullptr;
   QHBoxLayout* actions_ = nullptr;
   QWidget* body_ = nullptr;
   std::function<void(bool)> on_toggled_;

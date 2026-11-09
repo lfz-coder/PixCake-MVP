@@ -42,12 +42,31 @@ SliderBinding refine_crop_angle_binding();
 
 // 精修色彩面板的行（显示顺序、显示名、绑定都来自同一张表，代码质量清单 Q-11）。Section 开始一个可折叠分组，
 // 其后的行属于它，直到下一个 Section；HeaderAction 画在分组标题栏右侧；Picker 是白平衡的“预设 + 吸管”一行。
-enum class PanelRowKind { Title, Section, HeaderAction, Picker, Slider, Choice };
+//
+// 人像美化等面板还用到这些（PixCake 9.3.0 截图里的控件种类）：Subheading 组内小标题，Separator 组内分隔线，
+// Toggle 开关，Checkbox 复选框，PairSlider 左右两支联动滑杆，Cards 图片卡片单选（options 是各卡片名），
+// Swatches 色块单选（options 是 #rrggbb，第一个空串表示“无”），AiButton AI 大按钮，Tabs 页签（options），
+// Group 一个带标题的框，里面是后面的子项（child），Tool 名字加右侧两个小按钮。
+enum class PanelRowKind {
+  Title, Section, HeaderAction, Picker, Slider, Choice,
+  Subheading, Separator, Toggle, Checkbox, PairSlider, Cards, Swatches, AiButton, Tabs, Group, Tool
+};
 struct PanelRow {
   PanelRowKind kind = PanelRowKind::Title;
   std::string label;
   std::optional<SliderBinding> binding;  // 滑杆和选择有；没有参数模式时为空
   std::string object_name;               // 冒烟检查要找的几支滑杆
+  // 官方画面上的修饰：角标（New、Beta）、名字后的问号、Section 标题栏的“还原本组”。
+  std::string badge;
+  bool help = false;
+  bool reset = false;
+  // 滑杆：数值右边有 ▸（带子项，子项是后面 child 为真的行）；子项；双向（默认滑块在中间）；档位数（> 0 是档位滑杆）。
+  bool expandable = false;
+  bool child = false;
+  bool centered = false;
+  int ticks = 0;
+  std::string track;  // 色带：temperature、tint
+  std::vector<std::string> options;
 };
 std::vector<PanelRow> refine_color_rows();
 // 枚举参数（配置文件、可选颜色调整方式）的可选值：稳定标识、显示名、是否默认。顺序与参数模式一致。

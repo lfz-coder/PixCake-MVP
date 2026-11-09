@@ -70,8 +70,8 @@ constexpr RowDef kColorPanel[] = {
     {Def::TopSlider, "曝光", "exposure"}, {Def::TopSlider, "对比度", "contrast"},
     {Def::TopSlider, "亮度", "brightness"}, {Def::TopSlider, "高光", "highlights"},
     {Def::TopSlider, "阴影", "shadows"}, {Def::TopSlider, "白色", "whites"}, {Def::TopSlider, "黑色", "blacks"},
-    {Def::TopSlider, "纹理", "texture"}, {Def::TopSlider, "清晰度", "clarity"}, {Def::TopSlider, "祛雾", "dehaze"},
-    {Def::TopSlider, "鲜艳度", "vibrance"}, {Def::TopSlider, "饱和度", "saturation"},
+    {Def::TopSlider, "纹理", "texture"}, {Def::TopSlider, ui::shell::kWordClarity, "clarity"}, {Def::TopSlider, "祛雾", "dehaze"},
+    {Def::TopSlider, "鲜艳度", "vibrance"}, {Def::TopSlider, ui::shell::kWordSaturation, "saturation"},
     {Def::Section, "色阶"},
     {Def::SubSlider, "黑场", "levels_rgb_input_black"},
     {Def::SubSlider, "灰场", "levels_rgb_input_gray", "refine-levels-gray"},
@@ -140,9 +140,9 @@ constexpr RowDef kColorPanel[] = {
 };
 
 // 后期调色面板在分组标题前多两项。
-constexpr std::string_view kPostColorLead[] = {"全图调整", "局部调整"};
+constexpr std::string_view kPostColorLead[] = {"全图调整", ui::shell::kWordPartAdjust};
 
-constexpr std::array<LabelBinding, 3> kHslChannels = {{{"色相", "hue"}, {"饱和度", "saturation"}, {"明亮度", "luminance"}}};
+constexpr std::array<LabelBinding, 3> kHslChannels = {{{"色相", "hue"}, {ui::shell::kWordSaturation, "saturation"}, {"明亮度", "luminance"}}};
 constexpr std::array<LabelBinding, 8> kHslColors = {{{"红色", "red"},   {"橙色", "orange"}, {"黄色", "yellow"},
                                                      {"绿色", "green"}, {"浅绿色", "aqua"},  {"蓝色", "blue"},
                                                      {"紫色", "purple"}, {"洋红色", "magenta"}}};
