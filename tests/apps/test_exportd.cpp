@@ -367,6 +367,31 @@ int main() {
                 red_at(after, 5, 5), red_at(before, 315, 195), red_at(after, 315, 195));
   }
 
+  // An inverted gradient brightens the other side of the frame.
+  {
+    ExportService service;
+    auto job = work("invert-1", source, dir.path() + "/unused.jpg", dir.path());
+    pixcake::render::RenderOperation local = operation("color.local", "pixcake.color.local", {value("exposure", 1.0)});
+    local.mask_ids = {"invert:gradient:linear:50:50:0:10:0:100"};
+    job.description.operations.push_back(local);
+    std::string why;
+    assert(service.submit(std::move(job), why) == ResultCode::Ok);
+    const auto result = service.process_next();
+    assert(result.code == ResultCode::Ok);
+    pixcake::PosixFileSystem files;
+    const std::string written = dir.path() + "/invert.jpg";
+    assert(files.write_new(written, result.product).ok);
+    const auto before = decode(source);
+    const auto after = decode(written);
+    const auto red_at = [](const pixcake::platform::MacDecodedImage& image, std::uint32_t x) {
+      return static_cast<int>(image.rgba[(static_cast<std::size_t>(100) * image.width + x) * 4]);
+    };
+    assert(std::abs(red_at(after, 20) - red_at(before, 20)) <= 3);        // the gradient's own side: now untouched
+    assert(red_at(after, 300) > red_at(before, 300) * 3 / 2);             // the other side: brightened
+    std::printf("export invert: left %d -> %d, right %d -> %d\n", red_at(before, 20), red_at(after, 20), red_at(before, 300),
+                red_at(after, 300));
+  }
+
   // Through the queue: the product is published at the destination, the task
   // leaves the pending list and the queue records success.
   {

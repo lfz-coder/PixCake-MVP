@@ -32,14 +32,28 @@ bool parse_combined_mask_id(std::string_view mask_id, std::vector<CombinedPart>&
   return true;
 }
 
+std::string invert_mask_id(std::string_view inner) { return std::string(kInvertMaskPrefix) + std::string(inner); }
+
+bool is_invert_mask_id(std::string_view mask_id) { return mask_id.substr(0, kInvertMaskPrefix.size()) == kInvertMaskPrefix; }
+
+bool parse_invert_mask_id(std::string_view mask_id, std::string& inner) {
+  if (!is_invert_mask_id(mask_id) || mask_id.size() == kInvertMaskPrefix.size()) return false;
+  inner = std::string(mask_id.substr(kInvertMaskPrefix.size()));
+  return true;
+}
+
 std::vector<std::string> leaf_mask_ids(std::string_view mask_id) {
+  const auto unwrap = [](std::string id) {
+    std::string inner;
+    return parse_invert_mask_id(id, inner) ? inner : id;
+  };
   std::vector<CombinedPart> parts;
   if (is_combined_mask_id(mask_id) && parse_combined_mask_id(mask_id, parts)) {
     std::vector<std::string> out;
-    for (const auto& part : parts) out.push_back(part.id);
+    for (const auto& part : parts) out.push_back(unwrap(part.id));
     return out;
   }
-  return {std::string(mask_id)};
+  return {unwrap(std::string(mask_id))};
 }
 
 }  // namespace pixcake::mask

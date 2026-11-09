@@ -235,6 +235,31 @@ void test_local_instances_compile_in_order() {
   result = pixcake::render::compile(crossed);
   EXPECT(result.description.operations.size() == 1 &&
          result.description.operations[0].mask_ids == std::vector<std::string>{"lumrange:80:80:80:90"});
+  // Per-item invert: wraps that item's mask id; item 0 and later items each have their own; not a draw channel.
+  EXPECT(find_parameter_mode("color.local", "m2:s1:invert") == find_parameter_mode("color.local", "invert"));
+  EXPECT(pixcake::validate_parameter_display_value("color.local", "invert", "on"));
+  EXPECT(!pixcake::validate_parameter_display_value("color.local", "invert", "maybe"));
+  auto flipped = *pixcake::EditDocument::create("img-invert");
+  EXPECT(flipped.set_preview("color.local", "m1:exposure", "1") == pixcake::ResultCode::Ok);
+  EXPECT(flipped.set_preview("color.local", "m1:region", "person.skin.all") == pixcake::ResultCode::Ok);
+  EXPECT(flipped.set_preview("color.local", "m1:invert", "on") == pixcake::ResultCode::Ok);
+  EXPECT(flipped.set_preview("color.local", "m1:s1:region", "person.lips") == pixcake::ResultCode::Ok);
+  EXPECT(flipped.set_preview("color.local", "m1:s1:mode", "subtract") == pixcake::ResultCode::Ok);
+  EXPECT(flipped.set_preview("color.local", "m1:s1:invert", "on") == pixcake::ResultCode::Ok);
+  result = pixcake::render::compile(flipped);
+  EXPECT(result.description.operations.size() == 1);
+  if (result.description.operations.size() == 1) {
+    EXPECT(result.description.operations[0].mask_ids ==
+           std::vector<std::string>{"combined:+invert:semantic:person.skin.all|-invert:semantic:person.lips"});
+    for (const auto& value : result.description.operations[0].values) EXPECT(value.channel != "invert");
+  }
+  auto lone = *pixcake::EditDocument::create("img-invert-one");
+  EXPECT(lone.set_preview("color.local", "exposure", "1") == pixcake::ResultCode::Ok);
+  EXPECT(lone.set_preview("color.local", "region", "person.hair") == pixcake::ResultCode::Ok);
+  EXPECT(lone.set_preview("color.local", "invert", "on") == pixcake::ResultCode::Ok);
+  result = pixcake::render::compile(lone);
+  EXPECT(result.description.operations.size() == 1 &&
+         result.description.operations[0].mask_ids == std::vector<std::string>{"invert:semantic:person.hair"});
   // One "add" item alone keeps the plain id; a lone "subtract" item is a combination (it removes from nothing).
   auto one = *pixcake::EditDocument::create("img-one-item");
   EXPECT(one.set_preview("color.local", "exposure", "1") == pixcake::ResultCode::Ok);

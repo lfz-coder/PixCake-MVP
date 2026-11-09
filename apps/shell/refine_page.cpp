@@ -9,6 +9,7 @@
 #include "pixcake/capability/capability_registry.hpp"
 #include "pixcake/ui/panels/slider_spec.hpp"
 
+#include <QCheckBox>
 #include <QComboBox>
 #include <QListWidget>
 #include <QPointer>
@@ -477,10 +478,12 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
     for (const auto& [item, region] : items) {
       const auto how = item == 0 ? std::optional<std::string>("add")
                                  : actions->parameter_value(binding_of(state->mask, item, "mode"));
+      const bool inverted = actions->parameter_value(binding_of(state->mask, item, "invert")) == std::optional<std::string>("on");
       auto* row = new QListWidgetItem(
           qtext("local.item.text").arg(region_label(region),
                                        qtext(how == std::optional<std::string>("subtract") ? "local.item.mode.subtract"
-                                                                                           : "local.item.mode.add")),
+                                                                                           : "local.item.mode.add")) +
+              (inverted ? qtext("local.item.text.invert") : QString()),
           items_list);
       row->setData(Qt::UserRole, item);
       if (item == state->item) items_list->setCurrentItem(row);
@@ -544,6 +547,19 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
       again();
     });
 
+    // 选中的子项：反相（官方“显示蒙版反相”，真的反转这个子项的选区）。
+    if (state->item >= 0 && std::any_of(items.begin(), items.end(), [&](const auto& pair) { return pair.first == state->item; })) {
+      auto* invert = new QCheckBox(qtext("local.item.invert"), body);
+      invert->setObjectName(QStringLiteral("refine-local-item-invert"));
+      invert->setAccessibleName(qtext("local.item.invert"));
+      const auto invert_binding = binding_of(state->mask, state->item, "invert");
+      invert->setChecked(actions->parameter_value(invert_binding) == std::optional<std::string>("on"));
+      body_layout->addWidget(invert);
+      QObject::connect(invert, &QCheckBox::toggled, invert, [=](bool on) {
+        actions->request_parameter(invert_binding, on ? "on" : "off", true);
+        again();
+      });
+    }
     // 选中子项是渐变时的位置滑杆。
     const Refresh refresh = std::make_shared<EnableRefresh>();
     const auto selected_region = std::find_if(items.begin(), items.end(), [&](const auto& pair) { return pair.first == state->item; });

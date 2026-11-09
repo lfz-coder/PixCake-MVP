@@ -1613,6 +1613,31 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
       qCritical("luminance range values %d/%d/%d/%d", number("lum_a"), number("lum_b"), number("lum_c"), number("lum_d"));
       return 8;
     }
+    // Invert: a checkbox on the selected item; one history step, shown in the item's row.
+    {
+      auto* invert = visibleChild<QCheckBox>(window, "refine-local-item-invert");
+      if (invert == nullptr || invert->isChecked()) {
+        qCritical("the invert checkbox is missing or already on");
+        return 8;
+      }
+      const auto steps_before_invert = controller.history().size();
+      invert->setChecked(true);
+      wait_current(window, 30'000);
+      if (text_of("invert") != "on" || controller.history().size() != steps_before_invert + 1) {
+        qCritical("inverting the item did not commit one step");
+        return 8;
+      }
+      items = visibleChild<QListWidget>(window, "refine-local-items");
+      if (items == nullptr || items->count() != 1 || !items->item(0)->text().contains(QStringLiteral("反相"))) {
+        qCritical("the inverted item is not marked in the list");
+        return 8;
+      }
+      invert = visibleChild<QCheckBox>(window, "refine-local-item-invert");
+      if (invert == nullptr || !invert->isChecked()) {
+        qCritical("the invert checkbox lost its state after the rebuild");
+        return 8;
+      }
+    }
     // Clean up: delete the mask.
     auto* remove = visibleChild<QPushButton>(window, "refine-local-delete");
     if (remove == nullptr) {

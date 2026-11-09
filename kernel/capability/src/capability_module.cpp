@@ -212,6 +212,7 @@ ModuleCompile ParameterBackedModule::compile_modes(const ParameterReader& reader
   mask::GradientMask gradient;
   bool gradient_region = false;
   std::string range_region;  // color_range 或 luminance_range
+  bool invert_item0 = false;  // 子项 0 反相
   std::set<std::string> channels;
   for (const auto* mode : modes) {
     if (!only.empty() && mode->parameter_id != only) continue;
@@ -252,6 +253,10 @@ ModuleCompile ParameterBackedModule::compile_modes(const ParameterReader& reader
         (mode->parameter_id.rfind("range_", 0) == 0 || mode->parameter_id.rfind("lum_", 0) == 0)) {
       continue;  // 取样值不是绘制通道
     }
+    if (descriptor_.id == "color.local" && mode->parameter_id == "invert") {
+      invert_item0 = *value == "on";
+      continue;
+    }
     if (descriptor_.id == "color.local" && mode->parameter_id == "mode") continue;  // 子项叠加方式，子项 0 没有“上一步”
     if (descriptor_.id == "color.local" && mode->parameter_id.rfind("gradient_", 0) == 0) {
       const int whole = static_cast<int>(std::lround(numeric));
@@ -280,6 +285,9 @@ ModuleCompile ParameterBackedModule::compile_modes(const ParameterReader& reader
       if (!region_mask.empty()) parts.push_back({false, region_mask});
       if (gradient_region) parts.push_back({false, mask::gradient_mask_id(gradient)});
       if (!range_region.empty()) parts.push_back({false, range_mask_id_of(reader, descriptor_.id, prefix, range_region)});
+      if (invert_item0) {
+        for (auto& part : parts) part.id = mask::invert_mask_id(part.id);  // 此时只有子项 0 的部位
+      }
       if (descriptor_.id == "color.local") {
         for (int item = 1; item <= kMaxLocalItems; ++item) {
           const std::string item_prefix = prefix + local_item_prefix(item);
@@ -310,6 +318,9 @@ ModuleCompile ParameterBackedModule::compile_modes(const ParameterReader& reader
             id = range_mask_id_of(reader, descriptor_.id, item_prefix, *region);
           } else {
             id = mask::semantic_mask_id(*region);
+          }
+          if (reader.value(descriptor_.id, item_prefix + "invert") == std::optional<std::string>("on")) {
+            id = mask::invert_mask_id(id);
           }
           const auto how = reader.value(descriptor_.id, item_prefix + "mode");
           parts.push_back({how == std::optional<std::string>("subtract"), std::move(id)});

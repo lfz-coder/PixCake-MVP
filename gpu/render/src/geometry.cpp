@@ -356,6 +356,35 @@ void add_range_masks(const pixcake::render::RenderDescription& description, cons
   }
 }
 
+void add_invert_masks(const pixcake::render::RenderDescription& description, std::vector<RenderMask>& masks) {
+  for (const auto& operation : description.operations) {
+    if (!operation.enabled) continue;
+    for (const auto& whole : operation.mask_ids) {
+      std::vector<std::string> candidates;
+      std::vector<pixcake::mask::CombinedPart> parts;
+      if (pixcake::mask::parse_combined_mask_id(whole, parts)) {
+        for (const auto& part : parts) candidates.push_back(part.id);
+      } else {
+        candidates.push_back(whole);
+      }
+      for (const auto& id : candidates) {
+        std::string inner;
+        if (!pixcake::mask::parse_invert_mask_id(id, inner)) continue;
+        if (std::any_of(masks.begin(), masks.end(), [&id](const RenderMask& m) { return m.id == id; })) continue;
+        const auto found = std::find_if(masks.begin(), masks.end(), [&inner](const RenderMask& m) { return m.id == inner; });
+        if (found == masks.end()) continue;
+        RenderMask out;
+        out.id = id;
+        out.width = found->width;
+        out.height = found->height;
+        out.alpha.resize(found->alpha.size());
+        for (std::size_t i = 0; i < out.alpha.size(); ++i) out.alpha[i] = static_cast<std::uint8_t>(255 - found->alpha[i]);
+        masks.push_back(std::move(out));
+      }
+    }
+  }
+}
+
 void add_combined_masks(const pixcake::render::RenderDescription& description, std::vector<RenderMask>& masks) {
   for (const auto& operation : description.operations) {
     if (!operation.enabled) continue;

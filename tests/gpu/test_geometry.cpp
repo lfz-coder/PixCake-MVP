@@ -302,7 +302,42 @@ void test_range_masks() {
   }
 }
 
+// 反相：编号往返；leaf_mask_ids 展开成里面的叶子；反相像素是 255 − 子项；可以放进组合编号；子项缺了不生成。
+void test_invert_masks() {
+  std::string inner;
+  EXPECT(mask::parse_invert_mask_id(mask::invert_mask_id("gradient:linear:50:50:0:10:0:100"), inner) &&
+         inner == "gradient:linear:50:50:0:10:0:100");
+  EXPECT(!mask::parse_invert_mask_id("invert:", inner) && !mask::parse_invert_mask_id("semantic:person.hair", inner));
+  const auto leaves = mask::leaf_mask_ids("combined:+invert:semantic:person.hair|-gradient:linear:50:50:0:10:0:100");
+  EXPECT(leaves.size() == 2 && leaves[0] == "semantic:person.hair" && leaves[1] == "gradient:linear:50:50:0:10:0:100");
+  EXPECT(mask::leaf_mask_ids("invert:semantic:person.hair") == std::vector<std::string>{"semantic:person.hair"});
+
+  const std::string gradient = "gradient:linear:50:50:0:10:0:100";
+  render::RenderDescription description;
+  render::RenderOperation operation;
+  operation.capability_id = "color.local";
+  operation.mask_ids = {mask::invert_mask_id(gradient), mask::combined_mask_id({{false, mask::invert_mask_id(gradient)}, {false, "semantic:person.hair"}}),
+                        mask::invert_mask_id("semantic:person.eyes")};  // the last one's source never exists
+  description.operations = {operation};
+  std::vector<gpu::RenderMask> masks;
+  gpu::add_gradient_masks(description, 40, 10, masks);
+  gpu::add_invert_masks(description, masks);
+  gpu::add_invert_masks(description, masks);
+  EXPECT(masks.size() == 2);  // the gradient and its inverse, once; no inverse of a missing mask
+  const gpu::RenderMask* base = nullptr;
+  const gpu::RenderMask* inverted = nullptr;
+  for (const auto& m : masks) (m.id == gradient ? base : inverted) = &m;
+  EXPECT(base && inverted && base->alpha.size() == inverted->alpha.size());
+  if (base && inverted && base->alpha.size() == inverted->alpha.size()) {
+    bool exact = true;
+    for (std::size_t i = 0; i < base->alpha.size(); ++i) exact = exact && base->alpha[i] + inverted->alpha[i] == 255;
+    EXPECT(exact);
+    EXPECT(base->alpha[5] == 255 && inverted->alpha[5] == 0);  // left side: selected -> not selected
+  }
+}
+
 int main() {
+  test_invert_masks();
   test_range_masks();
   test_combined_masks();
   test_gradient_masks();

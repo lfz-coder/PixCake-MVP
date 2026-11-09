@@ -199,6 +199,9 @@ Texts build_texts() {
   t["local.item.mode.add"] = "添加";
   t["local.item.mode.subtract"] = "减去";
   t["local.item.text"] = "%1 · %2";
+  t["local.item.invert"] = "反相";
+  t["local.item.text.invert"] = " · 反相";  // 接在子项行文字后面
+  t["history.local.invert"] = "子项反相";
   t["history.local.remove"] = "删除蒙版";
   t["local.mask.rename"] = "重命名蒙版";
   // 历史（需求 §8.3）。

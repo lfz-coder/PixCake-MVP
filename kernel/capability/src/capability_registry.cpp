@@ -128,6 +128,12 @@ std::vector<ParameterMode> make_parameter_modes() {
     combine.choices = {"add", "subtract"};
     combine.default_choice = "add";
   }
+  // 子项反相（官方“显示蒙版反相”，2026-11-08 实测是真的反转这个子项的选区）：每个子项自己有一个，默认关。
+  {
+    ParameterMode& invert = add("color.local", "invert", 0.0, 0.0, 1.0, 0.0, "color", "pixcake.color.local", "invert", 21);
+    invert.choices = {"off", "on"};
+    invert.default_choice = "off";
+  }
   // 蒙版名称（只有蒙版本身有，子项没有）：1 到 20 个字符的文本，默认没有（界面显示“自定义-N”）。
   {
     ParameterMode& name = add("color.local", "name", 0.0, 0.0, 1.0, 0.0, "color", "pixcake.color.local", "name", 21);
@@ -474,7 +480,7 @@ const ParameterMode* find_parameter_mode(std::string_view capability_id, std::st
     int item = 0;
     std::string_view leaf;
     if (!split_local_item(base, item, leaf)) return nullptr;
-    if (item > 0 && leaf != "region" && leaf != "mode" && leaf.rfind("gradient_", 0) != 0 && leaf.rfind("range_", 0) != 0 &&
+    if (item > 0 && leaf != "region" && leaf != "mode" && leaf != "invert" && leaf.rfind("gradient_", 0) != 0 && leaf.rfind("range_", 0) != 0 &&
         leaf.rfind("lum_", 0) != 0) {
       return nullptr;
     }  // 子项只有自己的参数

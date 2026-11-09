@@ -179,6 +179,7 @@ PreviewResult RenderService::render_operations(std::uint64_t sequence, const std
   gpu::apply_geometry(gpu::geometry_of(description), image, inputs.masks);
   gpu::add_gradient_masks(description, image.width, image.height, inputs.masks);  // 按几何变换后的画幅生成
   gpu::add_range_masks(description, image, inputs.masks);  // 颜色范围、亮度范围用几何后的画面生成
+  gpu::add_invert_masks(description, inputs.masks);
   gpu::add_combined_masks(description, inputs.masks);
 
   gpu::RenderResult rendered;
