@@ -482,6 +482,7 @@ ExportDefaults ExportSession::defaults() const {
       if (parse_export_settings(value, settings) == ResultCode::Ok) out.watermark = settings.watermark;
     }
     if (key == "layout_on") out.layout_on = value == "1";
+    if (key == "layout_unit" && (value == "mm" || value == "cm" || value == "in")) out.layout_unit = value;
     if (key == "layout") {
       ExportSettings settings;
       if (parse_export_settings(value, settings) == ResultCode::Ok) out.layout = settings.layout;
@@ -506,6 +507,9 @@ ResultCode ExportSession::remember_defaults(const ExportDefaults& defaults) {
     ExportSettings settings;
     settings.watermark = defaults.watermark;
     text += "watermark=" + encode_export_settings(settings) + "\n";
+  }
+  if (defaults.layout_unit == "mm" || defaults.layout_unit == "cm" || defaults.layout_unit == "in") {
+    text += "layout_unit=" + defaults.layout_unit + "\n";
   }
   text += std::string("layout_on=") + (defaults.layout_on ? "1" : "0") + "\n";
   if (defaults.layout) {

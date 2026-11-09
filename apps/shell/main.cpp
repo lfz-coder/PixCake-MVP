@@ -412,7 +412,8 @@ int smoke_export(pixcake::shell::ShellWindow& window, const QString& folder) {
       auto* rows = dialog->findChild<QSpinBox*>(QStringLiteral("export-layout-rows"));
       auto* cols = dialog->findChild<QSpinBox*>(QStringLiteral("export-layout-cols"));
       auto* gap = dialog->findChild<QSpinBox*>(QStringLiteral("export-layout-gap"));
-      auto* top = dialog->findChild<QSpinBox*>(QStringLiteral("export-layout-margin-top"));
+      auto* top = dialog->findChild<QDoubleSpinBox*>(QStringLiteral("export-layout-margin-top"));
+      auto* unit = dialog->findChild<QComboBox*>(QStringLiteral("export-layout-unit"));
       auto* plain_layout = dialog->findChild<QRadioButton*>(QStringLiteral("export-layout-plain"));
       auto* portrait_layout = dialog->findChild<QRadioButton*>(QStringLiteral("export-layout-portrait"));
       tabs->setCurrentIndex(2);
@@ -430,6 +431,12 @@ int smoke_export(pixcake::shell::ShellWindow& window, const QString& folder) {
       bool grid_follows_kind = false;
       // The preview shows the paper (89x127 portrait here) while the switch is on, when a thumbnail exists.
       bool paper_in_preview = true;
+      // The layout tab has the layout panel only: the counts, preset and folder block is hidden there.
+      auto* common = dialog->findChild<QWidget*>(QStringLiteral("export-common"));
+      bool common_hidden = common != nullptr && !common->isVisibleTo(dialog);
+      tabs->setCurrentIndex(0);
+      common_hidden = common_hidden && common->isVisibleTo(dialog);
+      tabs->setCurrentIndex(2);
       if (restored) {
         if (auto* preview = dialog->findChild<QLabel*>(QStringLiteral("export-preview"))) {
           const QPixmap shown = preview->pixmap();
@@ -438,6 +445,17 @@ int smoke_export(pixcake::shell::ShellWindow& window, const QString& folder) {
       }
       if (restored) {
         screenshot(*dialog, "export-layout");
+        // The ruler unit only changes the display: 11 mm is 1.1 cm and 0.43 in, and comes back as 11 mm.
+        bool unit_ok = unit != nullptr && unit->count() == 3 && unit->currentData().toString() == QStringLiteral("mm");
+        if (unit_ok) {
+          unit->setCurrentIndex(unit->findData(QStringLiteral("cm")));
+          unit_ok = std::abs(top->value() - 1.1) < 0.001;
+          unit->setCurrentIndex(unit->findData(QStringLiteral("in")));
+          unit_ok = unit_ok && std::abs(top->value() - 0.43) < 0.001;
+          unit->setCurrentIndex(unit->findData(QStringLiteral("mm")));
+          unit_ok = unit_ok && std::abs(top->value() - 11.0) < 0.001;
+        }
+        paper_in_preview = paper_in_preview && unit_ok;
         const bool plain_hidden = !rows->isVisibleTo(dialog);
         dialog->findChild<QRadioButton*>(QStringLiteral("export-layout-id"))->setChecked(true);
         grid_follows_kind = plain_hidden && rows->isVisibleTo(dialog);
@@ -452,7 +470,7 @@ int smoke_export(pixcake::shell::ShellWindow& window, const QString& folder) {
         top->setValue(0);
       }
       tabs->setCurrentIndex(1);
-      if (!restored || !grid_follows_kind || !paper_in_preview) {
+      if (!restored || !grid_follows_kind || !paper_in_preview || !common_hidden) {
         problem = QStringLiteral("the layout tab differs from the observed one (restored %1, grid follows kind %2, %3)")
                       .arg(restored).arg(grid_follows_kind && paper_in_preview).arg(snapshot);
         dialog->reject();

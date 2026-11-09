@@ -118,7 +118,13 @@ class ExportDialog final : public QDialog {
     auto* form = new QWidget(scroll);
     form->setObjectName(QStringLiteral("export-form"));
     auto* column = new QVBoxLayout(form);
-    buildCommon(column);
+    // 数量统计、预设、导出至那一块；排版印刷页签右侧只有排版面板（实测），整块藏起来，导出仍用这里的路径。
+    common_ = new QWidget(form);
+    common_->setObjectName(QStringLiteral("export-common"));
+    auto* common_column = new QVBoxLayout(common_);
+    common_column->setContentsMargins(0, 0, 0, 0);
+    buildCommon(common_column);
+    column->addWidget(common_);
     advanced_ = buildAdvanced();
     column->addWidget(advanced_);
     watermark_ = buildWatermark();
@@ -625,6 +631,7 @@ class ExportDialog final : public QDialog {
     }
     defaults.layout_on = static_cast<QGroupBox*>(layout_)->isChecked();
     defaults.layout = currentLayout();  // 开关关着也记参数
+    defaults.layout_unit = layout_unit_->currentData().toString().toStdString();
     return defaults;
   }
 
@@ -722,10 +729,33 @@ class ExportDialog final : public QDialog {
     layout_rows_ = spin("export-layout-rows", "export.layout.rows", 1, 20, 1);
     layout_cols_ = spin("export-layout-cols", "export.layout.cols", 1, 20, 1);
     layout_gap_ = spin("export-layout-gap", "export.layout.gap", 0, 200, 10);
-    layout_top_ = spin("export-layout-margin-top", "export.layout.margin_top", 0, 400, 0);
-    layout_bottom_ = spin("export-layout-margin-bottom", "export.layout.margin_bottom", 0, 400, 0);
-    layout_left_ = spin("export-layout-margin-left", "export.layout.margin_left", 0, 400, 0);
-    layout_right_ = spin("export-layout-margin-right", "export.layout.margin_right", 0, 400, 0);
+    // 边距：标尺单位毫米（默认）、厘米、英寸；内部一律存整毫米。
+    layout_unit_ = new QComboBox(group);
+    layout_unit_->setObjectName(QStringLiteral("export-layout-unit"));
+    layout_unit_->setAccessibleName(qtext("export.layout.unit"));
+    for (const char* unit : {"mm", "cm", "in"}) {
+      layout_unit_->addItem(qtext((std::string("export.layout.unit.") + unit).c_str()), QString::fromLatin1(unit));
+    }
+    const int remembered_unit = layout_unit_->findData(qs(target_.defaults.layout_unit));
+    layout_unit_->setCurrentIndex(std::max(0, remembered_unit));
+    form->addRow(qtext("export.layout.unit"), layout_unit_);
+    const auto margin = [&](const char* name, const char* label) {
+      auto* box = new QDoubleSpinBox(group);
+      box->setObjectName(QString::fromLatin1(name));
+      box->setAccessibleName(qtext(label));
+      form->addRow(qtext(label), box);
+      return box;
+    };
+    layout_top_ = margin("export-layout-margin-top", "export.layout.margin_top");
+    layout_bottom_ = margin("export-layout-margin-bottom", "export.layout.margin_bottom");
+    layout_left_ = margin("export-layout-margin-left", "export.layout.margin_left");
+    layout_right_ = margin("export-layout-margin-right", "export.layout.margin_right");
+    configureMarginUnit({0, 0, 0, 0});
+    connect(layout_unit_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] {
+      const ExportLayout before = marginsInMm();  // 单位换了，毫米值不变，只换显示
+      configureMarginUnit({before.margin_top_mm, before.margin_bottom_mm, before.margin_left_mm, before.margin_right_mm});
+      updatePreview();
+    });
     // 行数、列数、间隔只在证件照排版里出现（需求 §19）。
     const auto grid_visible = [this, form] {
       const bool id = layout_id_->isChecked();
@@ -743,9 +773,11 @@ class ExportDialog final : public QDialog {
       connect(radio, &QRadioButton::toggled, this, [this] { updatePreview(); });
     }
     connect(layout_paper_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] { updatePreview(); });
-    for (QSpinBox* box : {layout_dpi_, layout_rows_, layout_cols_, layout_gap_, layout_top_, layout_bottom_,
-                          layout_left_, layout_right_}) {
+    for (QSpinBox* box : {layout_dpi_, layout_rows_, layout_cols_, layout_gap_}) {
       connect(box, qOverload<int>(&QSpinBox::valueChanged), this, [this] { updatePreview(); });
+    }
+    for (QDoubleSpinBox* box : {layout_top_, layout_bottom_, layout_left_, layout_right_}) {
+      connect(box, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this] { updatePreview(); });
     }
     return group;
   }
@@ -766,10 +798,41 @@ class ExportDialog final : public QDialog {
     layout_rows_->setValue(layout.rows);
     layout_cols_->setValue(layout.cols);
     layout_gap_->setValue(layout.gap_px);
-    layout_top_->setValue(layout.margin_top_mm);
-    layout_bottom_->setValue(layout.margin_bottom_mm);
-    layout_left_->setValue(layout.margin_left_mm);
-    layout_right_->setValue(layout.margin_right_mm);
+    configureMarginUnit({layout.margin_top_mm, layout.margin_bottom_mm, layout.margin_left_mm, layout.margin_right_mm});
+  }
+
+  // 一个毫米等于多少当前单位的显示值；当前单位的小数位数和步长。
+  double unitPerMm() const {
+    const QString unit = layout_unit_->currentData().toString();
+    return unit == QLatin1String("cm") ? 0.1 : unit == QLatin1String("in") ? 1.0 / 25.4 : 1.0;
+  }
+
+  // 按当前单位重设四个边距框的范围、小数位、步长，并放入这四个毫米值（不触发预览重画）。
+  void configureMarginUnit(const std::array<int, 4>& mm) {
+    const QString unit = layout_unit_->currentData().toString();
+    const int decimals = unit == QLatin1String("cm") ? 1 : unit == QLatin1String("in") ? 2 : 0;
+    const double step = unit == QLatin1String("cm") ? 0.1 : unit == QLatin1String("in") ? 0.01 : 1.0;
+    const double factor = unitPerMm();
+    shown_per_mm_ = factor;
+    QDoubleSpinBox* boxes[4] = {layout_top_, layout_bottom_, layout_left_, layout_right_};
+    for (int i = 0; i < 4; ++i) {
+      const QSignalBlocker blocker(boxes[i]);
+      boxes[i]->setDecimals(decimals);
+      boxes[i]->setRange(0, 400 * factor);
+      boxes[i]->setSingleStep(step);
+      boxes[i]->setValue(mm[static_cast<std::size_t>(i)] * factor);
+    }
+  }
+
+  // 四个边距框里的值换成整毫米。
+  ExportLayout marginsInMm() const {
+    ExportLayout layout;
+    const double to_mm = 1.0 / shown_per_mm_;  // 框里现在显示的单位（不是下拉框刚选的）
+    layout.margin_top_mm = static_cast<int>(std::lround(layout_top_->value() * to_mm));
+    layout.margin_bottom_mm = static_cast<int>(std::lround(layout_bottom_->value() * to_mm));
+    layout.margin_left_mm = static_cast<int>(std::lround(layout_left_->value() * to_mm));
+    layout.margin_right_mm = static_cast<int>(std::lround(layout_right_->value() * to_mm));
+    return layout;
   }
 
   ExportLayout currentLayout() const {
@@ -785,10 +848,11 @@ class ExportDialog final : public QDialog {
     layout.rows = layout_rows_->value();
     layout.cols = layout_cols_->value();
     layout.gap_px = layout_gap_->value();
-    layout.margin_top_mm = layout_top_->value();
-    layout.margin_bottom_mm = layout_bottom_->value();
-    layout.margin_left_mm = layout_left_->value();
-    layout.margin_right_mm = layout_right_->value();
+    const ExportLayout margins = marginsInMm();
+    layout.margin_top_mm = margins.margin_top_mm;
+    layout.margin_bottom_mm = margins.margin_bottom_mm;
+    layout.margin_left_mm = margins.margin_left_mm;
+    layout.margin_right_mm = margins.margin_right_mm;
     return layout;
   }
 
@@ -797,6 +861,7 @@ class ExportDialog final : public QDialog {
     const bool custom = tab == 1;
     const bool print = tab == 2;
     preview_->setVisible(custom || print);
+    common_->setVisible(!print);
     advanced_->setVisible(custom);
     watermark_->setVisible(custom);  // 快速导出页没有水印（实测）
     layout_->setVisible(print);
@@ -862,6 +927,7 @@ class ExportDialog final : public QDialog {
   QWidget* advanced_ = nullptr;
   QWidget* watermark_ = nullptr;
   QWidget* layout_ = nullptr;
+  QWidget* common_ = nullptr;
   QRadioButton* layout_id_ = nullptr;
   QRadioButton* layout_plain_ = nullptr;
   QRadioButton* layout_landscape_ = nullptr;
@@ -871,10 +937,12 @@ class ExportDialog final : public QDialog {
   QSpinBox* layout_rows_ = nullptr;
   QSpinBox* layout_cols_ = nullptr;
   QSpinBox* layout_gap_ = nullptr;
-  QSpinBox* layout_top_ = nullptr;
-  QSpinBox* layout_bottom_ = nullptr;
-  QSpinBox* layout_left_ = nullptr;
-  QSpinBox* layout_right_ = nullptr;
+  QComboBox* layout_unit_ = nullptr;
+  double shown_per_mm_ = 1.0;  // 边距框当前显示的单位：一毫米等于几个单位
+  QDoubleSpinBox* layout_top_ = nullptr;
+  QDoubleSpinBox* layout_bottom_ = nullptr;
+  QDoubleSpinBox* layout_left_ = nullptr;
+  QDoubleSpinBox* layout_right_ = nullptr;
   QComboBox* preset_ = nullptr;
   QComboBox* destination_ = nullptr;
   PixCakeField* folder_ = nullptr;

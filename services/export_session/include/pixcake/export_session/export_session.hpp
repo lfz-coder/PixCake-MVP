@@ -92,6 +92,7 @@ struct ExportDefaults {
   // 排版印刷：开关和全部参数都记住（实测导出后重开，开关、行列数等都是上次的）。
   bool layout_on = false;
   std::optional<ExportLayout> layout;
+  std::string layout_unit;  // 边距的标尺单位：mm、cm、in；空是毫米（实测默认）
 };
 
 // File extension for a format; Original takes the original's (JPEG, PNG, TIFF

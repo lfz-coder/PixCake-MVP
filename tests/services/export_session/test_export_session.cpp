@@ -254,11 +254,12 @@ int main() {
     ExportDefaults printed = back;
     printed.layout_on = true;
     printed.layout = sheet;
+    printed.layout_unit = "in";
     assert(exports->remember_defaults(printed) == ResultCode::Ok);
     exports.reset();
     assert(ExportSession::open(*projects, session, options, exports, diagnostic) == ResultCode::Ok);
     const auto reread = exports->defaults();
-    assert(reread.layout_on && reread.layout && *reread.layout == sheet);
+    assert(reread.layout_on && reread.layout && *reread.layout == sheet && reread.layout_unit == "in");
     assert(reread.watermark_on && reread.folder == out);  // the other remembered items are untouched
   }
 
