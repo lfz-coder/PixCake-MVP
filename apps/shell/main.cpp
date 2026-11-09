@@ -18,6 +18,7 @@
 #include <QApplication>
 #include <QDialog>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QShortcut>
 #include <set>
 #include <QSpinBox>
@@ -181,6 +182,21 @@ int smoke(QWidget& window, Page first_page) {
       return history;
     }
     if (const int sliders = check_refine_sliders(window); sliders != 0) return sliders;
+    // 色彩调节、局部调色的直方图卡片和 AI 校准固定在滚动区外（官方 9.3.0）：两块，都不在任何 QScrollArea 里。
+    {
+      const auto tops = window.findChildren<QWidget*>(QStringLiteral("refine-color-top"));
+      bool pinned = tops.size() == 2;
+      for (const auto* top : tops) {
+        for (const QWidget* up = top->parentWidget(); up != nullptr; up = up->parentWidget()) {
+          if (qobject_cast<const QScrollArea*>(up) != nullptr) pinned = false;
+        }
+      }
+      if (!pinned) {
+        qCritical("the colour page tops must be two and outside the scroll areas (%lld found)",
+                  static_cast<long long>(tops.size()));
+        return 4;
+      }
+    }
     // Development aid: every module page with all its sections open, full height.
     if (const char* shot = std::getenv("PIXCAKE_SMOKE_SCREENSHOT"); shot != nullptr && *shot != '\0') {
       window.resize(1386, 800);
@@ -200,6 +216,15 @@ int smoke(QWidget& window, Page first_page) {
           QString path = QString::fromLocal8Bit(shot);
           path.insert(path.lastIndexOf(QLatin1Char('.')), QLatin1Char('-') + rail->objectName());
           content->grab().save(path);
+        }
+        // The page as shown, scrolled to the bottom: the pinned top must still be there.
+        for (auto* scroll : window.findChildren<QScrollArea*>(QStringLiteral("refine-module-scroll"))) {
+          if (!scroll->isVisibleTo(&window)) continue;
+          scroll->verticalScrollBar()->setValue(scroll->verticalScrollBar()->maximum());
+          QCoreApplication::processEvents();
+          QString path = QString::fromLocal8Bit(shot);
+          path.insert(path.lastIndexOf(QLatin1Char('.')), QLatin1Char('-') + rail->objectName() + QStringLiteral("-scrolled"));
+          scroll->parentWidget()->grab().save(path);
         }
       }
     }

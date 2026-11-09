@@ -421,6 +421,7 @@ QWidget* whiteBalancePicker(QWidget* parent, const QString& picker_label) {
 }
 
 // 色彩类页面（色彩调节、局部调色）的顶部：直方图卡片和“AI 校准”“多图色彩统一”两个按钮，下面一条分隔线。
+// 放在模块页的滚动区外面，固定不动。
 void addColorPageTop(QWidget* parent, QVBoxLayout* layout, PageActions* actions, PixCakeImageView* canvas,
                      std::vector<PixCakeHistogram*>* histograms) {
   auto* top = new QWidget(parent);
@@ -831,13 +832,11 @@ void addSections(QWidget* parent, QVBoxLayout* layout, const std::vector<panels:
   }
 }
 
-// 色彩调节页（右侧图标栏“调色”）：公共的顶部，然后是色彩面板的全部分组。
-void addColorPanel(QWidget* parent, QVBoxLayout* parent_layout, PageActions* actions, PixCakeImageView* canvas,
-                   std::vector<PixCakeHistogram*>* histograms) {
+// 色彩调节页（右侧图标栏“调色”）的滚动内容：色彩面板的全部分组（顶部固定，见 modulePage）。
+void addColorPanel(QWidget* parent, QVBoxLayout* parent_layout, PageActions* actions) {
   QFrame* frame = nullptr;
   auto* layout = labelPanel(parent, parent_layout, "refine-color-labels", moduleDescription("color"), &frame);
   layout->setSpacing(0);
-  addColorPageTop(frame, layout, actions, canvas, histograms);
   addSections(frame, layout, panels::refine_color_rows(), actions, "color");
 }
 
@@ -1750,17 +1749,16 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
 
 // 一个模块的内容（图标栏点开后面板里显示的东西）。
 void addModuleContent(const std::string& id, QWidget* content, QVBoxLayout* layout, PageActions* actions,
-                      std::vector<PixCakeHistogram*>* histograms, PixCakeImageView* canvas) {
+                      PixCakeImageView* canvas) {
   if (id == "color") {
-    addColorPanel(content, layout, actions, canvas, histograms);
+    addColorPanel(content, layout, actions);
     return;
   }
   if (id == "local") {
-    // 局部调色：和色彩调节同一个顶部（直方图卡片、AI 校准），下面是蒙版区和同一套调整分组。
+    // 局部调色：顶部和色彩调节同一个（固定在滚动区外，见 modulePage），下面是蒙版区和同一套调整分组。
     QFrame* frame = nullptr;
     auto* local = labelPanel(content, layout, "refine-local-labels", moduleDescription("local"), &frame);
     local->setSpacing(0);
-    addColorPageTop(frame, local, actions, canvas, histograms);
     addLocalPanel(frame, local, actions, canvas);
     return;
   }
@@ -1908,6 +1906,8 @@ QWidget* modulePage(const CopyItem& entry, PageActions* actions, std::vector<Pix
     header_row->addWidget(overlay);
   }
   column->addWidget(header);
+  // 色彩调节、局部调色：直方图卡片和“AI 校准”“多图色彩统一”固定在标题下面，只有下面的内容滚动（官方 9.3.0）。
+  if (entry.id == "color" || entry.id == "local") addColorPageTop(page, column, actions, canvas, histograms);
   auto* scroll = new QScrollArea(page);
   scroll->setObjectName(QStringLiteral("refine-module-scroll"));
   scroll->setWidgetResizable(true);
@@ -1917,7 +1917,7 @@ QWidget* modulePage(const CopyItem& entry, PageActions* actions, std::vector<Pix
   auto* layout = new QVBoxLayout(content);
   layout->setContentsMargins(0, 0, 0, 0);
   layout->setSpacing(0);
-  addModuleContent(entry.id, content, layout, actions, histograms, canvas);
+  addModuleContent(entry.id, content, layout, actions, canvas);
   layout->addStretch(1);
   scroll->setWidget(content);
   column->addWidget(scroll, 1);

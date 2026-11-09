@@ -153,6 +153,7 @@ struct PixCakeTheme final {
       QFrame#refine-module-panel { border-left: 1px solid #2a2c31; }
       QFrame#refine-module-header { background: #1f2126; border-bottom: 1px solid #2a2c31; }
       QLabel#refine-module-title { color: #f4f4f4; font-size: 15px; font-weight: 600; }
+      QWidget#refine-color-top { background: #1f2126; }
       QWidget#refine-module-page QScrollArea, QWidget#refine-module-page QScrollArea > QWidget > QWidget { background: #1f2126; }
       QFrame#refine-preset-column { background: #1f2126; border-left: 1px solid #2a2c31; }
       QFrame#refine-side-bottom { background: #1f2126; border-top: 1px solid #2a2c31; border-left: 1px solid #2a2c31; }
