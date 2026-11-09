@@ -311,6 +311,17 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window);
 int smoke_icon_drop(pixcake::shell::ShellWindow& window, const std::vector<std::string>& imported);
 
 // 导出（需求第 19 节）：精修里顶栏“导出”打开弹窗；未接入的项置灰并带原因；选 JPG、指定文件夹后导出，
+// The visible child widget of a type and object name (pending deletions are flushed first).
+template <typename T>
+T* visibleChild(QWidget& window, const char* name) {
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  T* found = nullptr;
+  for (auto* candidate : window.findChildren<T*>(QString::fromLatin1(name))) {
+    if (candidate->isVisibleTo(&window)) found = candidate;
+  }
+  return found;
+}
+
 // 导出进程写出成品，导出列表显示成功；成品带着精修的曝光（和画面一样偏红亮）。
 int smoke_export(pixcake::shell::ShellWindow& window, const QString& folder) {
   auto& controller = window.controller();
@@ -1316,68 +1327,92 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
       return 8;
     }
   }
-  // Local colour: with the whole picture as the region its exposure slider draws like the global one; choosing a part
-  // writes the region (the mask itself comes from segmentation, which the default build does not carry).
+  // Local colour (mask list): create a mask, brighten it, give it a linear gradient item (only part of the picture keeps the
+  // brightening), cut a radial item out of it, then remove the items and the mask.  Gradients need no segmentation.
   {
     auto& controller = window.controller();
-    QSlider* local_exposure = nullptr;
-    for (auto* candidate : window.findChildren<QSlider*>(QStringLiteral("refine-local-exposure"))) {
-      if (candidate->isVisibleTo(&window)) local_exposure = candidate;
-    }
-    QComboBox* region = nullptr;
-    for (auto* candidate : window.findChildren<QComboBox*>(QStringLiteral("refine-choice-region"))) {
-      if (candidate->isVisibleTo(&window)) region = candidate;
-    }
-    if (local_exposure == nullptr || region == nullptr || !local_exposure->isEnabled() || !region->isEnabled() ||
-        region->count() < 2) {
-      qCritical("local colour controls missing or disabled with a photo open");
-      return 8;
-    }
-    const auto steps_before = controller.history().size();
-    const auto shown_before = controller.frames_shown();
+    const auto frames_after = [&](auto&& act) {
+      const auto shown = controller.frames_shown();
+      act();
+      return wait_frames(window, shown + 1, 30'000) && wait_current(window, 30'000);
+    };
     const double red_before = mean_red(view->image());
-    local_exposure->setValue(std::min(local_exposure->maximum(), local_exposure->value() + 20));
-    if (!wait_frames(window, shown_before + 1, 30'000) || !wait_current(window, 30'000) ||
-        controller.history().size() != steps_before + 1 || !(mean_red(view->image()) > red_before + 1)) {
-      qCritical("local colour exposure: %zu -> %zu steps, red %.1f -> %.1f", steps_before, controller.history().size(),
-                red_before, mean_red(view->image()));
+    const auto steps_before = controller.history().size();
+    auto* create = visibleChild<QPushButton>(window, "refine-local-new");
+    if (create == nullptr || !create->isEnabled() || !controller.local_masks().empty()) {
+      qCritical("local mask panel missing or not empty");
       return 8;
     }
-    // A linear gradient needs no segmentation: only part of the picture keeps the brightening.
-    {
-      const double whole_red = mean_red(view->image());
-      const auto frames = controller.frames_shown();
-      const int linear = region->findData(QStringLiteral("linear"));
-      region->setCurrentIndex(linear);
-      emit region->activated(linear);
-      if (linear < 0 || !wait_frames(window, frames + 1, 30'000) || !wait_current(window, 30'000)) {
-        qCritical("no frame after choosing the linear gradient");
-        return 8;
-      }
-      const double part_red = mean_red(view->image());
-      if (!(part_red < whole_red - 1) || !(part_red > red_before + 1)) {
-        qCritical("linear gradient red %.1f: whole %.1f, before %.1f", part_red, whole_red, red_before);
-        return 8;
-      }
-    }
-    const int hair = region->findData(QStringLiteral("person.hair"));
-    region->setCurrentIndex(hair);
-    emit region->activated(hair);
-    const auto written = controller.parameter_value({"color.local", "region"});
-    if (hair < 0 || !written || *written != "person.hair") {
-      qCritical("local colour region was not written");
+    create->click();
+    if (controller.local_masks() != std::vector<int>{1}) {
+      qCritical("creating a mask did not add instance 1");
       return 8;
     }
-    const int everything = region->findData(QStringLiteral("all"));
-    region->setCurrentIndex(everything);
-    emit region->activated(everything);
-    wait_current(window, 30'000);
-    // Local colour is a charged feature: put the exposure back so the later export estimate sees a free picture.
-    local_exposure->setValue(local_exposure->value() - 20);
-    wait_current(window, 30'000);
-    const auto restored = controller.parameter_value({"color.local", "region"});
-    if (!restored || *restored != "all") {
-      qCritical("local colour region not restored: %s", restored ? restored->c_str() : "(none)");
+    auto* exposure = visibleChild<QSlider>(window, "refine-local-exposure");
+    if (exposure == nullptr || !exposure->isEnabled()) {
+      qCritical("the new mask has no exposure slider");
+      return 8;
+    }
+    if (!frames_after([&] { exposure->setValue(std::min(exposure->maximum(), exposure->value() + 20)); })) {
+      qCritical("no frame after the local exposure");
+      return 8;
+    }
+    const double whole_red = mean_red(view->image());
+    if (!(whole_red > red_before + 1) || !controller.parameter_value({"color.local", "m1:exposure"})) {
+      qCritical("local exposure on mask 1: red %.1f -> %.1f", red_before, whole_red);
+      return 8;
+    }
+    const auto add_item = [&](const char* region, const char* how) {
+      auto* region_box = visibleChild<QComboBox>(window, "refine-local-item-region");
+      auto* mode_box = visibleChild<QComboBox>(window, "refine-local-item-mode");
+      auto* add = visibleChild<QPushButton>(window, "refine-local-item-add");
+      if (region_box == nullptr || mode_box == nullptr || add == nullptr || region_box->findData(QString::fromLatin1(region)) < 0) {
+        return false;
+      }
+      region_box->setCurrentIndex(region_box->findData(QString::fromLatin1(region)));
+      mode_box->setCurrentIndex(mode_box->findData(QString::fromLatin1(how)));
+      return frames_after([&] { add->click(); });
+    };
+    if (!add_item("linear", "add")) {
+      qCritical("adding the linear item failed");
+      return 8;
+    }
+    const double linear_red = mean_red(view->image());
+    if (!(linear_red < whole_red - 1) || !(linear_red > red_before + 1) ||
+        visibleChild<QSlider>(window, "refine-local-item-gradient_x") == nullptr) {
+      qCritical("linear item: red whole %.1f, linear %.1f, before %.1f", whole_red, linear_red, red_before);
+      return 8;
+    }
+    if (!add_item("radial", "subtract")) {
+      qCritical("adding the radial subtract item failed");
+      return 8;
+    }
+    const double cut_red = mean_red(view->image());
+    if (!(cut_red < linear_red - 0.2)) {
+      qCritical("subtracting a radial item changed nothing: %.2f -> %.2f", linear_red, cut_red);
+      return 8;
+    }
+    auto* items = visibleChild<QListWidget>(window, "refine-local-items");
+    auto* drop = visibleChild<QPushButton>(window, "refine-local-item-remove");
+    if (items == nullptr || items->count() != 2 || drop == nullptr || !drop->isEnabled()) {
+      qCritical("the item list should show two items");
+      return 8;
+    }
+    if (!frames_after([&] { drop->click(); }) || !(mean_red(view->image()) > cut_red + 0.2)) {
+      qCritical("removing the subtract item did not bring the brightening back");
+      return 8;
+    }
+    // A segmentation part is only recorded here (the default build carries no model).
+    const auto steps_mid = controller.history().size();
+    auto* remove = visibleChild<QPushButton>(window, "refine-local-delete");
+    if (remove == nullptr || !remove->isEnabled() || steps_mid <= steps_before) {
+      qCritical("the mask cannot be deleted");
+      return 8;
+    }
+    if (!frames_after([&] { remove->click(); }) || !controller.local_masks().empty() ||
+        controller.history().size() != steps_mid + 1 || !(std::abs(mean_red(view->image()) - red_before) < 1.0)) {
+      qCritical("deleting the mask: %zu masks, %zu -> %zu steps, red %.1f (was %.1f)", controller.local_masks().size(),
+                steps_mid, controller.history().size(), mean_red(view->image()), red_before);
       return 8;
     }
   }

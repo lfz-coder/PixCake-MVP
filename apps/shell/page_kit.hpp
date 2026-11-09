@@ -128,6 +128,9 @@ class PageActions {
   // 粘贴到选中的全部。同步以当前照片为来源，目标是选中的其他照片。
   virtual void request_copy_effect() {}
   virtual void request_paste_effect() {}
+  // 局部调色现有的蒙版（实例编号，升序）和删除一个蒙版（新建靠写它的第一个参数）。
+  virtual std::vector<int> local_masks() const { return {}; }
+  virtual void request_remove_local_mask(int) {}
   virtual bool can_paste_effect() const { return false; }
   virtual std::vector<SyncItem> sync_items() const { return {}; }
   virtual std::size_t sync_target_count() const { return 0; }

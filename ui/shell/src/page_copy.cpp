@@ -188,6 +188,17 @@ Texts build_texts() {
   t["effect.copy"] = "复制效果";
   t["effect.paste"] = "粘贴效果";
   t["history.paste"] = "粘贴效果";
+  // 局部调色的蒙版列表（官方的“蒙版列表”：每个蒙版有自己的子项和一组滑杆）。
+  t["local.mask.name"] = "自定义-%1";
+  t["local.mask.new"] = "新建蒙版";
+  t["local.mask.remove"] = "删除蒙版";
+  t["local.mask.none"] = "还没有蒙版，先新建一个";
+  t["local.item.add"] = "添加子项";
+  t["local.item.remove"] = "删除子项";
+  t["local.item.mode.add"] = "添加";
+  t["local.item.mode.subtract"] = "减去";
+  t["local.item.text"] = "%1 · %2";
+  t["history.local.remove"] = "删除蒙版";
   // 历史（需求 §8.3）。
   t["history.step"] = "%1 %2";
   t["history.post"] = "后期调色·%1";

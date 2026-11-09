@@ -65,6 +65,8 @@ class CommandGate {
   // 写锁与修订号；成功产生新修订时通知 CommitListener。实际修改交给所属模块。
   CommandResult apply_preset(PresetLibrary& library, const Preset& preset, std::uint64_t revision);
   CommandResult paste(const EffectClipboard& clipboard, std::uint64_t revision);
+  // 局部调色删除第 instance 个蒙版（去掉它带 "m<N>:" 前缀的全部参数；实例 0 是没有前缀的那一组）。
+  CommandResult remove_local_mask(int instance, std::uint64_t revision);
   // 回到历史里的某一步（撤销、重做、点历史）：文档换成那一步的内容并写盘，修订号不倒退。
   // 写盘失败时文档还原成原来的内容。
   CommandResult select_history(HistoryLog& history, std::size_t index, std::uint64_t revision);

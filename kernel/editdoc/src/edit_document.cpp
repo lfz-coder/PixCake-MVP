@@ -947,6 +947,59 @@ ResultCode EditDocument::commit_preview(std::uint64_t expected_revision, const s
   return code;
 }
 
+namespace {
+// 参数编号是否属于这个实例前缀；空前缀是没有 "m<数字>:" 前缀的那一组（局部调色实例 0）。
+bool in_instance(const std::string& id, const std::string& prefix) {
+  if (!prefix.empty()) return id.rfind(prefix, 0) == 0;
+  return !(id.size() > 2 && id[0] == 'm' && id[1] >= '0' && id[1] <= '9');
+}
+}  // namespace
+
+void EditDocument::clear_preview_prefix(const std::string& capability_id, const std::string& prefix) {
+  for (auto it = preview_.begin(); it != preview_.end();) {
+    if (it->first.first == capability_id && in_instance(it->first.second, prefix)) {
+      it = preview_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
+ResultCode EditDocument::commit_parameter_prefix_removal(std::uint64_t expected_revision,
+                                                         const std::string& capability_id, const std::string& prefix,
+                                                         FileSystem& files, const std::string& path) {
+  WriteScope scope(files, path);
+  if (!scope) return scope.code();
+  if (expected_revision != revision() || capability_id.empty()) return ResultCode::StateConflict;
+  const auto existing = fragment(capability_id);
+  if (!existing || existing->version > max_known_version(capability_id)) return ResultCode::StateConflict;
+  std::vector<InnerRecord> inner_records;
+  if (!parse_tlv(existing->inner, inner_records)) return ResultCode::StateConflict;
+  std::vector<InnerRecord> kept;
+  bool removed = false;
+  for (auto& record : inner_records) {
+    std::string id;
+    std::string value;
+    if (record.type == kInnerParameter && parse_parameter(record.payload, id, value) && in_instance(id, prefix)) {
+      removed = true;
+      continue;
+    }
+    kept.push_back(std::move(record));
+  }
+  if (!removed) return ResultCode::StateConflict;
+  const ResultCode durable = check_durable_revision(files, path, expected_revision, durable_document_revision);
+  if (durable != ResultCode::Ok) return durable;
+  EditDocument next = *this;
+  next.clear_recovered_flag();
+  next.store_fragment(capability_id, std::max(existing->version, max_known_version(capability_id)), serialize_tlv(kept));
+  next.clear_preview_prefix(capability_id, prefix);
+  next.set_revision(revision() + 1);
+  const ResultCode saved = atomic_replace(files, path, next.encode(), log_);
+  if (saved != ResultCode::Ok) return saved;
+  *this = std::move(next);
+  return ResultCode::Ok;
+}
+
 ResultCode EditDocument::commit_fragment_replacement(std::uint64_t expected_revision,
                                                      const std::vector<std::string>& remove_capability_ids,
                                                      const std::vector<FragmentView>& replacements,

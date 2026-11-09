@@ -1,5 +1,7 @@
 #include "shell_controller.hpp"
 
+#include "pixcake/capability/capability_registry.hpp"
+
 #include <QDebug>
 
 #include <algorithm>
@@ -344,10 +346,27 @@ namespace {
 QString history_text(const preview_channel::PreviewSession::HistoryEntry& entry) {
   if (!entry.label.empty()) return QString::fromStdString(entry.label);
   if (entry.capability_id == preview_channel::PreviewSession::kPasteStep) return qtext("history.paste");
+  if (entry.capability_id == preview_channel::PreviewSession::kRemoveMaskStep) return qtext("history.local.remove");
   if (entry.capability_id == preview_channel::PreviewSession::kPresetStep) {
     return qtext("history.preset").arg(QString::fromStdString(entry.display_value));
   }
   QString name = QString::fromStdString(entry.capability_id + "/" + entry.parameter_id);
+  if (entry.capability_id == "color.local") {
+    // 局部调色：带 m<N>: 前缀的是第 N 个蒙版的参数，名字取基础参数的滑杆名，前面加蒙版名。
+    int instance = 0;
+    std::string_view base;
+    if (split_local_parameter(entry.parameter_id, instance, base)) {
+      std::string_view leaf = base;
+      int item = 0;
+      split_local_item(base, item, leaf);
+      for (const auto& row : ui::panels::refine_local_rows()) {
+        if (row.binding && row.binding->parameter_id == leaf) {
+          name = qtext("local.mask.name").arg(instance) + QLatin1Char(' ') + QString::fromStdString(row.label);
+          break;
+        }
+      }
+    }
+  }
   auto rows = ui::panels::refine_color_rows();
   for (auto& row : ui::panels::refine_post_color_rows()) rows.push_back(std::move(row));
   for (const auto& row : rows) {
@@ -434,6 +453,18 @@ void ShellController::request_copy_effect() {
     return;
   }
   clipboard_ = std::move(clipboard);
+}
+
+std::vector<int> ShellController::local_masks() const {
+  return session_ ? session_->local_mask_instances() : std::vector<int>{};
+}
+
+void ShellController::request_remove_local_mask(int instance) {
+  if (!session_) return;
+  std::string diagnostic;
+  const ResultCode code = session_->remove_local_mask(instance, diagnostic);  // a step of its own in the history
+  if (code != ResultCode::Ok) show_notices({}, NoticeScene::OpenDocument, code);
+  view_.status = qtext("refine.preview.loading");
 }
 
 void ShellController::request_paste_effect() {

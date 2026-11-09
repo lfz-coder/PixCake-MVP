@@ -6,6 +6,7 @@
 #include "shell_icons.hpp"
 #include "sync_dialog.hpp"
 
+#include "pixcake/capability/capability_registry.hpp"
 #include "pixcake/ui/panels/slider_spec.hpp"
 
 #include <QComboBox>
@@ -293,6 +294,223 @@ void addCropPanel(QWidget* modules, QVBoxLayout* layout, PageActions* actions) {
   }
 }
 
+// 局部调色（官方的“蒙版列表”）：每个蒙版有自己的子项（语义部位或渐变，添加或减去）和一组调整滑杆。蒙版是 color.local
+// 里带 "m<N>:" 前缀的参数，子项再带 "s<K>:"；新建只是写第一个参数，删除走命令入口。结构变了（新建、删除、
+// 加减子项、撤销重做）就按当前文档重建这一块，滑杆提交不重建。
+struct LocalState {
+  int mask = -1;  // 选中的蒙版（实例编号），-1 没有
+  int item = -1;  // 选中的子项，-1 没有
+  QString signature;
+};
+
+void addLocalPanel(QWidget* modules, QVBoxLayout* layout, PageActions* actions) {
+  auto* body = new QWidget(modules);
+  body->setObjectName(QStringLiteral("refine-local-body"));
+  auto* body_layout = new QVBoxLayout(body);
+  body_layout->setContentsMargins(0, 0, 0, 0);
+  layout->addWidget(body);
+  if (actions == nullptr || !actions->has_photo()) return;
+  const auto state = std::make_shared<LocalState>();
+  const auto rebuild = std::make_shared<std::function<void()>>();
+  const auto binding_of = [](int mask, int item, const std::string& parameter) {
+    return panels::SliderBinding{"color.local", local_instance_prefix(mask) + local_item_prefix(item) + parameter};
+  };
+  const auto items_of = [actions, binding_of](int mask) {
+    std::vector<std::pair<int, std::string>> items;  // 子项编号和它的部位
+    for (int item = 0; item <= kMaxLocalItems; ++item) {
+      const auto region = actions->parameter_value(binding_of(mask, item, "region"));
+      if (region && *region != "all") items.emplace_back(item, *region);
+    }
+    return items;
+  };
+  const auto signature = [actions, state, items_of] {
+    QString text = QString::number(state->mask) + QLatin1Char('/') + QString::number(state->item);
+    for (const int mask : actions->local_masks()) {
+      text += QStringLiteral("|m%1").arg(mask);
+      for (const auto& [item, region] : items_of(mask)) text += QStringLiteral(",%1:%2").arg(item).arg(qs(region));
+    }
+    return text;
+  };
+  *rebuild = [=, weak = std::weak_ptr<std::function<void()>>(rebuild)] {
+    while (auto* entry = body_layout->takeAt(0)) {
+      if (auto* widget = entry->widget()) {
+        widget->hide();
+        widget->deleteLater();
+      }
+      delete entry;
+    }
+    const auto masks = actions->local_masks();
+    if (std::find(masks.begin(), masks.end(), state->mask) == masks.end()) {
+      state->mask = masks.empty() ? -1 : masks.front();
+      state->item = -1;
+    }
+    const auto region_label = [](const std::string& id) {
+      for (const auto& option : panels::choice_options({"color.local", "region"})) {
+        if (option.id == id) return qs(option.label);
+      }
+      return qs(id);
+    };
+
+    // 蒙版列表。
+    auto* masks_list = new QListWidget(body);
+    masks_list->setObjectName(QStringLiteral("refine-local-masks"));
+    masks_list->setAccessibleName(qtext("local.mask.new"));
+    masks_list->setMaximumHeight(110);
+    for (const int mask : masks) {
+      auto* row = new QListWidgetItem(qtext("local.mask.name").arg(mask), masks_list);
+      row->setData(Qt::UserRole, mask);
+      if (mask == state->mask) masks_list->setCurrentItem(row);
+    }
+    body_layout->addWidget(masks_list);
+    auto* buttons = new QWidget(body);
+    auto* buttons_layout = new QHBoxLayout(buttons);
+    buttons_layout->setContentsMargins(0, 0, 0, 0);
+    auto* create = action(qtext("local.mask.new"), buttons, true);
+    create->setObjectName(QStringLiteral("refine-local-new"));
+    auto* remove = action(qtext("local.mask.remove"), buttons, state->mask >= 0);
+    remove->setObjectName(QStringLiteral("refine-local-delete"));
+    buttons_layout->addWidget(create);
+    buttons_layout->addWidget(remove);
+    body_layout->addWidget(buttons);
+    const auto again = [state, weak, signature] {
+      state->signature = signature();
+      if (const auto run = weak.lock()) (*run)();
+    };
+    QObject::connect(masks_list, &QListWidget::itemClicked, masks_list, [state, again](QListWidgetItem* row) {
+      state->mask = row->data(Qt::UserRole).toInt();
+      state->item = -1;
+      again();
+    });
+    QObject::connect(create, &QPushButton::clicked, create, [=] {
+      const auto existing = actions->local_masks();
+      int fresh = 1;
+      while (fresh <= kMaxLocalInstances && std::find(existing.begin(), existing.end(), fresh) != existing.end()) ++fresh;
+      if (fresh > kMaxLocalInstances) return;
+      actions->request_parameter(binding_of(fresh, 0, "region"), "all", true);
+      state->mask = fresh;
+      state->item = -1;
+      again();
+    });
+    QObject::connect(remove, &QPushButton::clicked, remove, [=] {
+      if (state->mask < 0) return;
+      actions->request_remove_local_mask(state->mask);
+      state->mask = -1;
+      state->item = -1;
+      again();
+    });
+    if (state->mask < 0) {
+      body_layout->addWidget(disabledLabel(qtext("local.mask.none")));
+      state->signature = signature();
+      return;
+    }
+
+    // 选中蒙版的子项。
+    const auto items = items_of(state->mask);
+    if (std::none_of(items.begin(), items.end(), [&](const auto& pair) { return pair.first == state->item; })) {
+      state->item = items.empty() ? -1 : items.front().first;
+    }
+    auto* items_list = new QListWidget(body);
+    items_list->setObjectName(QStringLiteral("refine-local-items"));
+    items_list->setAccessibleName(qtext("local.item.add"));
+    items_list->setMaximumHeight(110);
+    for (const auto& [item, region] : items) {
+      const auto how = item == 0 ? std::optional<std::string>("add")
+                                 : actions->parameter_value(binding_of(state->mask, item, "mode"));
+      auto* row = new QListWidgetItem(
+          qtext("local.item.text").arg(region_label(region),
+                                       qtext(how == std::optional<std::string>("subtract") ? "local.item.mode.subtract"
+                                                                                           : "local.item.mode.add")),
+          items_list);
+      row->setData(Qt::UserRole, item);
+      if (item == state->item) items_list->setCurrentItem(row);
+    }
+    body_layout->addWidget(items_list);
+    QObject::connect(items_list, &QListWidget::itemClicked, items_list, [state, again](QListWidgetItem* row) {
+      state->item = row->data(Qt::UserRole).toInt();
+      again();
+    });
+    auto* add_row = new QWidget(body);
+    auto* add_layout = new QHBoxLayout(add_row);
+    add_layout->setContentsMargins(0, 0, 0, 0);
+    auto* region_box = new QComboBox(add_row);
+    region_box->setObjectName(QStringLiteral("refine-local-item-region"));
+    region_box->setAccessibleName(qtext("local.item.add"));
+    for (const auto& option : panels::choice_options({"color.local", "region"})) {
+      if (option.id != "all") region_box->addItem(qs(option.label), qs(option.id));
+    }
+    auto* mode_box = new QComboBox(add_row);
+    mode_box->setObjectName(QStringLiteral("refine-local-item-mode"));
+    mode_box->addItem(qtext("local.item.mode.add"), QStringLiteral("add"));
+    mode_box->addItem(qtext("local.item.mode.subtract"), QStringLiteral("subtract"));
+    add_layout->addWidget(region_box, 1);
+    add_layout->addWidget(mode_box);
+    body_layout->addWidget(add_row);
+    auto* item_buttons = new QWidget(body);
+    auto* item_buttons_layout = new QHBoxLayout(item_buttons);
+    item_buttons_layout->setContentsMargins(0, 0, 0, 0);
+    auto* add_item = action(qtext("local.item.add"), item_buttons, true);
+    add_item->setObjectName(QStringLiteral("refine-local-item-add"));
+    auto* remove_item = action(qtext("local.item.remove"), item_buttons, state->item >= 0);
+    remove_item->setObjectName(QStringLiteral("refine-local-item-remove"));
+    item_buttons_layout->addWidget(add_item);
+    item_buttons_layout->addWidget(remove_item);
+    body_layout->addWidget(item_buttons);
+    QObject::connect(add_item, &QPushButton::clicked, add_item, [=] {
+      int free_item = -1;
+      for (int item = 0; item <= kMaxLocalItems && free_item < 0; ++item) {
+        if (std::none_of(items.begin(), items.end(), [&](const auto& pair) { return pair.first == item; })) free_item = item;
+      }
+      if (free_item < 0 || region_box->currentIndex() < 0) return;
+      if (free_item > 0) {
+        actions->request_parameter(binding_of(state->mask, free_item, "mode"), mode_box->currentData().toString().toStdString(),
+                                   true);
+      }
+      actions->request_parameter(binding_of(state->mask, free_item, "region"),
+                                 region_box->currentData().toString().toStdString(), true);
+      state->item = free_item;
+      again();
+    });
+    QObject::connect(remove_item, &QPushButton::clicked, remove_item, [=] {
+      if (state->item < 0) return;
+      actions->request_parameter(binding_of(state->mask, state->item, "region"), "all", true);  // 整个画面 = 不参与
+      state->item = -1;
+      again();
+    });
+
+    // 选中子项是渐变时的位置滑杆。
+    const Refresh refresh = std::make_shared<EnableRefresh>();
+    const auto selected_region = std::find_if(items.begin(), items.end(), [&](const auto& pair) { return pair.first == state->item; });
+    const bool gradient = selected_region != items.end() && (selected_region->second == "linear" || selected_region->second == "radial");
+    const auto rows = panels::refine_local_rows();
+    if (gradient) {
+      for (const auto& row : rows) {
+        if (row.kind != panels::PanelRowKind::Slider || row.binding->parameter_id.rfind("gradient_", 0) != 0) continue;
+        if (selected_region->second == "linear" && row.binding->parameter_id == "gradient_ratio") continue;  // 椭圆比例只对径向
+        const auto bound = binding_of(state->mask, state->item, row.binding->parameter_id);
+        addDisabledSlider(modules, body_layout, panels::slider_spec(row.label, bound),
+                          qs("refine-local-item-" + row.binding->parameter_id), actions, bound, refresh);
+      }
+    }
+    // 整个蒙版的十四支调整滑杆。
+    for (const auto& row : rows) {
+      if (row.kind == panels::PanelRowKind::Choice || (row.binding && row.binding->parameter_id.rfind("gradient_", 0) == 0)) continue;
+      if (row.kind == panels::PanelRowKind::Title) {
+        body_layout->addWidget(disabledLabel(qs(row.label)));
+      } else {
+        const auto bound = binding_of(state->mask, 0, row.binding->parameter_id);
+        addDisabledSlider(modules, body_layout, panels::slider_spec(row.label, bound), qs(row.object_name), actions, bound,
+                          refresh);
+      }
+    }
+    state->signature = signature();
+  };
+  (*rebuild)();
+  // 撤销、重做、粘贴、预设让结构变了才重建；滑杆提交不重建。
+  actions->watch_history(body, [=] {
+    if (signature() != state->signature) (*rebuild)();
+  });
+}
+
 void addModules(QWidget* modules, QVBoxLayout* modules_layout, PageActions* actions,
                 PixCakeHistogram** histogram) {
   for (const auto& entry : ui::shell::page_list("refine-modules")) {
@@ -306,20 +524,7 @@ void addModules(QWidget* modules, QVBoxLayout* modules_layout, PageActions* acti
 
   auto* local = labelPanel(modules, modules_layout, "refine-local-labels", moduleDescription("local"));
   addLabelList(local, "refine-local");
-  // 局部调色：作用部位加十四支滑杆（照片打开时可调）；部位由语义分割给出蒙版，其余选区方式还没有。
-  {
-    const Refresh refresh = std::make_shared<EnableRefresh>();
-    for (const auto& row : panels::refine_local_rows()) {
-      if (row.kind == panels::PanelRowKind::Choice) {
-        addChoice(modules, local, row, actions, refresh);
-      } else if (row.kind == panels::PanelRowKind::Title) {
-        local->addWidget(disabledLabel(qs(row.label)));
-      } else {
-        addDisabledSlider(modules, local, panels::slider_spec(row.label, row.binding), qs(row.object_name), actions,
-                          row.binding, refresh);
-      }
-    }
-  }
+  addLocalPanel(modules, local, actions);
   const char* feather = panels::refine_local_feather_label();
   addDisabledSlider(modules, local, panels::slider_spec(feather, panels::refine_local_binding(feather)), QString());
 

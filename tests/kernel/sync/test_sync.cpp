@@ -345,7 +345,39 @@ void test_local_instances_persist_and_paste() {
   EXPECT(target.committed_parameter("color.local", "m3:region") == std::optional<std::string>("person.hair"));
 }
 
+void test_remove_local_mask() {
+  const auto limits = pixcake::phase_one_version_limits();
+  auto document = *pixcake::EditDocument::create("remove");
+  pixcake::test::FakeFileSystem files;
+  EXPECT(document.write_snapshot(files, "docs/r.pxedit") == pixcake::ResultCode::Ok);
+  for (const char* id : {"exposure", "m1:exposure", "m1:region", "m2:contrast"}) {
+    const std::string value = std::string(id) == "m1:region" ? "person.hair" : (std::string(id).find("exposure") != std::string::npos ? "1" : "10");
+    EXPECT(document.set_preview("color.local", id, value) == pixcake::ResultCode::Ok);
+    EXPECT(document.commit_preview(document.revision(), "color.local", id, limits, files, "docs/r.pxedit") ==
+           pixcake::ResultCode::Ok);
+  }
+  const auto before = document.revision();
+  EXPECT(document.commit_parameter_prefix_removal(before, "color.local", "m1:", files, "docs/r.pxedit") ==
+         pixcake::ResultCode::Ok);
+  EXPECT(document.revision() == before + 1);
+  EXPECT(!document.committed_parameter("color.local", "m1:exposure") && !document.committed_parameter("color.local", "m1:region"));
+  EXPECT(document.committed_parameter("color.local", "exposure") && document.committed_parameter("color.local", "m2:contrast"));
+  // A mask with nothing in the document, or a stale revision, is refused and changes nothing.
+  EXPECT(document.commit_parameter_prefix_removal(document.revision(), "color.local", "m1:", files, "docs/r.pxedit") ==
+         pixcake::ResultCode::StateConflict);
+  EXPECT(document.commit_parameter_prefix_removal(before, "color.local", "m2:", files, "docs/r.pxedit") ==
+         pixcake::ResultCode::StateConflict);
+  // The unprefixed group (instance 0) goes without touching the others.
+  EXPECT(document.commit_parameter_prefix_removal(document.revision(), "color.local", "", files, "docs/r.pxedit") ==
+         pixcake::ResultCode::Ok);
+  EXPECT(!document.committed_parameter("color.local", "exposure") && document.committed_parameter("color.local", "m2:contrast"));
+  pixcake::EditDocument reloaded = *pixcake::EditDocument::create("remove");
+  EXPECT(pixcake::EditDocument::load(reloaded, files, "docs/r.pxedit", limits).code == pixcake::ResultCode::Ok);
+  EXPECT(!reloaded.committed_parameter("color.local", "exposure") && reloaded.committed_parameter("color.local", "m2:contrast"));
+}
+
 int main() {
+  test_remove_local_mask();
   test_local_instances_persist_and_paste();
   test_c31_sync_and_paste_validate_through_capability_modules();
   test_tree_reads_attributes_from_owners();

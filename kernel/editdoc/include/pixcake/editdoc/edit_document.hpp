@@ -124,6 +124,13 @@ class EditDocument {
                             const std::string& parameter_id, const std::vector<VersionLimit>& limits,
                             FileSystem& files, const std::string& path);
 
+  // 删掉能力片段里属于 prefix 的全部参数（局部调色删除一个蒙版）：prefix 是 "m<N>:"，空串是没有前缀的那一组；
+  // 没有这样的参数返回状态冲突。修订号加一。
+  ResultCode commit_parameter_prefix_removal(std::uint64_t expected_revision, const std::string& capability_id,
+                                             const std::string& prefix, FileSystem& files, const std::string& path);
+  // 删掉能力的预览值里编号以 prefix 开头的（不写盘）。
+  void clear_preview_prefix(const std::string& capability_id, const std::string& prefix);
+
   bool effects_baked() const;
   // 清掉能力片段和预览，留下烘焙标记，修订号加一。已经烘焙且没有片段时不写第二次。
   ResultCode commit_baked_reset(std::uint64_t expected_revision, FileSystem& files, const std::string& path);

@@ -181,6 +181,14 @@ CommandResult CommandGate::paste(const EffectClipboard& clipboard, std::uint64_t
   });
 }
 
+CommandResult CommandGate::remove_local_mask(int instance, std::uint64_t revision) {
+  return run_document_command("local.remove_mask", revision, [&] {
+    if (instance < 0 || instance > kMaxLocalInstances) return ResultCode::StateConflict;
+    return document_.commit_parameter_prefix_removal(revision, "color.local", local_instance_prefix(instance), files_,
+                                                     path_);
+  });
+}
+
 CommandResult CommandGate::sync_from(const EditDocument& source, const std::string& source_path,
                                      const std::vector<std::string>& checked_ids, std::uint64_t revision) {
   return run_document_command("sync", revision, [&] {

@@ -1,4 +1,5 @@
 #include "pixcake/preview_channel/preview_session.hpp"
+#include "pixcake/capability/fragment_codec.hpp"
 
 #include "pixcake/capability/capability_registry.hpp"
 
@@ -10,6 +11,8 @@
 
 #include <atomic>
 #include <chrono>
+#include <string_view>
+#include <set>
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
@@ -320,6 +323,38 @@ ResultCode PreviewSession::paste(const EffectClipboard& clipboard, std::string& 
   history_.record_committed(document_.image_id(), document_, kPasteStep, "", "", false);
   if (committed_) committed_();
   return redraw({{last_capability_, last_parameter_}}, diagnostic);
+}
+
+ResultCode PreviewSession::remove_local_mask(int instance, std::string& diagnostic) {
+  const CommandResult result = gate_->remove_local_mask(instance, document_.revision());
+  if (result.code != ResultCode::Ok) {
+    diagnostic = std::string("remove mask refused: ") + result_code_label(result.code);
+    return result.code;
+  }
+  history_.record_committed(document_.image_id(), document_, kRemoveMaskStep, "", "", false);
+  if (committed_) committed_();
+  return redraw({{last_capability_, last_parameter_}}, diagnostic);
+}
+
+std::vector<int> PreviewSession::local_mask_instances() const {
+  std::set<int> found;
+  const auto note = [&found](const std::string& id) {
+    int instance = 0;
+    std::string_view base;
+    if (split_local_parameter(id, instance, base)) found.insert(instance);
+  };
+  if (const auto fragment = document_.fragment("color.local")) {
+    std::vector<FragmentRecord> records;
+    if (decode_fragment_records(fragment->inner, records)) {
+      for (const auto& record : records) {
+        std::string id;
+        std::string value;
+        if (record.type == kFragmentParameterRecord && decode_parameter_record(record.payload, id, value)) note(id);
+      }
+    }
+  }
+  for (const auto& id : document_.preview_parameter_ids("color.local")) note(id);
+  return std::vector<int>(found.begin(), found.end());
 }
 
 ResultCode PreviewSession::undo(std::string& diagnostic) {
