@@ -304,6 +304,9 @@ struct LocalState {
   int drag_item = -1;    // 正在拖动的子项
   bool drag_radial = false;
   QPointF drag_start;    // 拖动起点（图像百分比）
+  bool drag_sample = false;  // 这次拖动是取样（颜色范围、亮度范围），不是渐变
+  std::string drag_region;   // 取样的是 color_range 还是 luminance_range
+  double sample_min = 100.0, sample_max = 0.0;  // 亮度范围：拖动经过的亮度（0..100）的最小、最大
   bool drag_new = false;  // 这次拖动要新建子项（区域和叠加方式到第一次有效移动时才写预览）
   std::string drag_mode;  // 新建子项的叠加方式
   std::vector<std::pair<panels::SliderBinding, std::string>> drag_values;  // 松开时一次提交的全部参数
@@ -544,12 +547,20 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
     // 选中子项是渐变时的位置滑杆。
     const Refresh refresh = std::make_shared<EnableRefresh>();
     const auto selected_region = std::find_if(items.begin(), items.end(), [&](const auto& pair) { return pair.first == state->item; });
-    const bool gradient = selected_region != items.end() && (selected_region->second == "linear" || selected_region->second == "radial");
+    const std::string item_region = selected_region != items.end() ? selected_region->second : std::string();
+    // 选中子项自己的参数前缀：渐变是 gradient_，颜色范围是 range_，亮度范围是 lum_。
+    const std::string item_prefix = item_region == "linear" || item_region == "radial" ? "gradient_"
+                                    : item_region == "color_range"                      ? "range_"
+                                    : item_region == "luminance_range"                  ? "lum_"
+                                                                                        : "";
+    const auto own_parameter = [](const std::string& id) {
+      return id.rfind("gradient_", 0) == 0 || id.rfind("range_", 0) == 0 || id.rfind("lum_", 0) == 0;
+    };
     const auto rows = panels::refine_local_rows();
-    if (gradient) {
+    if (!item_prefix.empty()) {
       for (const auto& row : rows) {
-        if (row.kind != panels::PanelRowKind::Slider || row.binding->parameter_id.rfind("gradient_", 0) != 0) continue;
-        if (selected_region->second == "linear" && row.binding->parameter_id == "gradient_ratio") continue;  // 椭圆比例只对径向
+        if (row.kind != panels::PanelRowKind::Slider || row.binding->parameter_id.rfind(item_prefix, 0) != 0) continue;
+        if (item_region == "linear" && row.binding->parameter_id == "gradient_ratio") continue;  // 椭圆比例只对径向
         const auto bound = binding_of(state->mask, state->item, row.binding->parameter_id);
         addDisabledSlider(modules, body_layout, panels::slider_spec(row.label, bound),
                           qs("refine-local-item-" + row.binding->parameter_id), actions, bound, refresh);
@@ -557,7 +568,7 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
     }
     // 整个蒙版的十四支调整滑杆。
     for (const auto& row : rows) {
-      if (row.kind == panels::PanelRowKind::Choice || (row.binding && row.binding->parameter_id.rfind("gradient_", 0) == 0)) continue;
+      if (row.kind == panels::PanelRowKind::Choice || (row.binding && own_parameter(row.binding->parameter_id))) continue;
       if (row.kind == panels::PanelRowKind::Title) {
         body_layout->addWidget(disabledLabel(qs(row.label)));
       } else {
@@ -585,7 +596,15 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
     if (phase == 0) {
       const auto items = items_of(state->mask);
       const auto found = std::find_if(items.begin(), items.end(), [&](const auto& pair) { return pair.first == state->item; });
-      if (found != items.end() && (found->second == "linear" || found->second == "radial")) {
+      state->drag_sample = false;
+      state->sample_min = 100.0;
+      state->sample_max = 0.0;
+      if (found != items.end() && (found->second == "color_range" || found->second == "luminance_range")) {
+        state->drag_item = found->first;  // 取样：改选中的范围子项
+        state->drag_sample = true;
+        state->drag_region = found->second;
+        state->drag_new = false;
+      } else if (found != items.end() && (found->second == "linear" || found->second == "radial")) {
         state->drag_item = found->first;
         state->drag_radial = found->second == "radial";
         state->drag_new = false;
@@ -593,8 +612,10 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
         // 新建：部位下拉选了径向就是径向，否则线性；叠加方式取下拉。
         bool radial = false;
         QString how = QStringLiteral("add");
+        QString picked;
         for (auto* box : body->findChildren<QComboBox*>(QStringLiteral("refine-local-item-region"))) {
-          radial = box->currentData().toString() == QStringLiteral("radial");
+          picked = box->currentData().toString();
+          radial = picked == QStringLiteral("radial");
         }
         for (auto* box : body->findChildren<QComboBox*>(QStringLiteral("refine-local-item-mode"))) how = box->currentData().toString();
         int free_item = -1;
@@ -609,13 +630,82 @@ std::shared_ptr<CanvasHooks> addLocalPanel(QWidget* modules, QVBoxLayout* layout
         state->drag_radial = radial;
         state->drag_new = true;
         state->drag_mode = how.toStdString();
+        if (picked == QStringLiteral("color_range") || picked == QStringLiteral("luminance_range")) {
+          state->drag_sample = true;  // 部位下拉选了颜色范围、亮度范围：点画布取样来新建
+          state->drag_region = picked.toStdString();
+        }
       }
       state->item = state->drag_item;
       state->drag_start = at;
       state->drag_values.clear();
-      return;
+      if (!state->drag_sample) return;
     }
     if (state->drag_item < 0) return;
+    if (state->drag_sample) {
+      // 取样：点图片取 7×7 的平均色（颜色范围），或拖动经过的亮度范围（亮度范围）。取的是画布上现在显示的画面。
+      const QImage& shown = view->image();
+      if (shown.isNull()) return;
+      const int cx = std::clamp(static_cast<int>(std::lround(at.x() / 100.0 * shown.width())), 0, shown.width() - 1);
+      const int cy = std::clamp(static_cast<int>(std::lround(at.y() / 100.0 * shown.height())), 0, shown.height() - 1);
+      double sum[3] = {0, 0, 0};
+      int count = 0;
+      for (int y = std::max(0, cy - 3); y <= std::min(shown.height() - 1, cy + 3); ++y) {
+        for (int x = std::max(0, cx - 3); x <= std::min(shown.width() - 1, cx + 3); ++x) {
+          const QColor c = shown.pixelColor(x, y);
+          sum[0] += c.red();
+          sum[1] += c.green();
+          sum[2] += c.blue();
+          ++count;
+        }
+      }
+      if (count == 0) return;
+      const double r = sum[0] / count, g = sum[1] / count, b = sum[2] / count;
+      const double luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0 * 100.0;
+      state->sample_min = std::min(state->sample_min, luminance);
+      state->sample_max = std::max(state->sample_max, luminance);
+      state->drag_values.clear();
+      const auto put = [&](const char* name, int value) {
+        const auto binding = binding_of(state->mask, state->drag_item, name);
+        state->drag_values.emplace_back(binding, std::to_string(value));
+        actions->request_parameter(binding, std::to_string(value), false);
+      };
+      if (state->drag_new) {
+        if (state->drag_item > 0) {
+          const auto binding = binding_of(state->mask, state->drag_item, "mode");
+          state->drag_values.emplace_back(binding, state->drag_mode);
+          actions->request_parameter(binding, state->drag_mode, false);
+        }
+        const auto binding = binding_of(state->mask, state->drag_item, "region");
+        state->drag_values.emplace_back(binding, state->drag_region);
+        actions->request_parameter(binding, state->drag_region, false);
+      }
+      if (state->drag_region == "color_range") {
+        put("range_r", static_cast<int>(std::lround(r)));
+        put("range_g", static_cast<int>(std::lround(g)));
+        put("range_b", static_cast<int>(std::lround(b)));
+      } else {
+        // 单击亮度 L：全选 L±10，渐变到 L±35（官方实测）；拖动时全选覆盖经过的 [最小−10, 最大+10]，外沿再各加 25。
+        const int b0 = std::clamp(static_cast<int>(std::lround(state->sample_min - 10.0)), 0, 100);
+        const int c0 = std::clamp(static_cast<int>(std::lround(state->sample_max + 10.0)), b0, 100);
+        const int a0 = std::clamp(b0 - 25, 0, b0);
+        const int d0 = std::clamp(c0 + 25, c0, 100);
+        put("lum_a", a0);
+        put("lum_b", b0);
+        put("lum_c", c0);
+        put("lum_d", d0);
+      }
+      if (phase == 2) {
+        actions->request_parameters(state->drag_values);
+        state->drag_item = -1;
+        state->drag_new = false;
+        state->drag_sample = false;
+        if (const auto run = std::weak_ptr<std::function<void()>>(rebuild).lock()) {
+          state->signature = signature();
+          (*run)();
+        }
+      }
+      return;
+    }
     const auto params = gradient_from_drag(state->drag_radial, state->drag_start, at, view->image().size());
     if (!params.valid) return;
     // 拖动中只写预览；新建的子项到第一次有效移动才写区域和叠加方式的预览。松开时一次提交全部（一步历史）。

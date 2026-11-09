@@ -99,6 +99,8 @@ std::vector<ParameterMode> make_parameter_modes() {
   region.choices.push_back("all");
   region.choices.push_back("linear");  // 线性渐变、径向渐变：蒙版由下面的位置参数在画幅上算出，不需要分割模型
   region.choices.push_back("radial");
+  region.choices.push_back("color_range");      // 颜色范围、亮度范围：蒙版由画面本身和下面的取样值算出
+  region.choices.push_back("luminance_range");
   for (const auto& part : mask::semantic_parts()) region.choices.push_back(part.id);
   region.default_choice = "all";  // 必须在后面的 add() 之前：add 可能让 modes 重新分配，region 引用会失效
   // 渐变的位置和形状（百分比，和分辨率无关）。官方没有逐项实测，范围按画面百分比取，默认值未确认。
@@ -110,6 +112,15 @@ std::vector<ParameterMode> make_parameter_modes() {
     ParameterMode& gradient = add("color.local", std::get<0>(spec), std::get<1>(spec), std::get<2>(spec), 1.0,
                                   std::get<3>(spec), "color", "pixcake.color.local", std::get<0>(spec), 21);
     gradient.default_confirmed = false;
+  }
+  // 颜色范围的取样色（RGB）和调整、亮度范围的梯形四个值（官方 2026-11-08 实测，见 evidence/2026-11-08-range-mask-observation.md）。
+  for (const auto& spec : {std::make_tuple("range_r", 0.0, 255.0, 128.0), std::make_tuple("range_g", 0.0, 255.0, 128.0),
+                           std::make_tuple("range_b", 0.0, 255.0, 128.0), std::make_tuple("range_adjust", 1.0, 100.0, 50.0),
+                           std::make_tuple("lum_a", 0.0, 100.0, 20.0), std::make_tuple("lum_b", 0.0, 100.0, 45.0),
+                           std::make_tuple("lum_c", 0.0, 100.0, 65.0), std::make_tuple("lum_d", 0.0, 100.0, 90.0)}) {
+    ParameterMode& range = add("color.local", std::get<0>(spec), std::get<1>(spec), std::get<2>(spec), 1.0,
+                               std::get<3>(spec), "color", "pixcake.color.local", std::get<0>(spec), 21);
+    range.default_confirmed = false;
   }
   // 子项和上一步的叠加方式：添加（并集）或减去。只有同一蒙版里有多个子项时才起作用；官方的合成像素没有核对。
   {
@@ -463,7 +474,10 @@ const ParameterMode* find_parameter_mode(std::string_view capability_id, std::st
     int item = 0;
     std::string_view leaf;
     if (!split_local_item(base, item, leaf)) return nullptr;
-    if (item > 0 && leaf != "region" && leaf != "mode" && leaf.rfind("gradient_", 0) != 0) return nullptr;  // 子项只有自己的参数
+    if (item > 0 && leaf != "region" && leaf != "mode" && leaf.rfind("gradient_", 0) != 0 && leaf.rfind("range_", 0) != 0 &&
+        leaf.rfind("lum_", 0) != 0) {
+      return nullptr;
+    }  // 子项只有自己的参数
     parameter_id = leaf;
   }
   const auto& modes = phase_one_parameter_modes();

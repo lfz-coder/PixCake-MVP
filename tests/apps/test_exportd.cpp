@@ -340,6 +340,33 @@ int main() {
                 red_at(before, 80, 100), red_at(after, 80, 100));
   }
 
+  // Colour range and luminance range masks come from the picture itself: +1 EV only where the pixel matches.
+  // The original runs from (40, 50, 70) at the top left (luminance about 19%) to (120, 110, 70) at the bottom right (about 43%).
+  for (const std::string& id : {std::string("colorrange:40:50:70:30"), std::string("lumrange:0:0:25:35")}) {
+    ExportService service;
+    auto job = work("range-1", source, dir.path() + "/unused.jpg", dir.path());
+    pixcake::render::RenderOperation local = operation("color.local", "pixcake.color.local", {value("exposure", 1.0)});
+    local.mask_ids = {id};
+    job.description.operations.push_back(local);
+    std::string why;
+    assert(service.submit(std::move(job), why) == ResultCode::Ok);
+    const auto result = service.process_next();
+    assert(result.code == ResultCode::Ok);
+    pixcake::PosixFileSystem files;
+    const std::string written = dir.path() + "/range.jpg";
+    ::unlink(written.c_str());
+    assert(files.write_new(written, result.product).ok);
+    const auto before = decode(source);
+    const auto after = decode(written);
+    const auto red_at = [](const pixcake::platform::MacDecodedImage& image, std::uint32_t x, std::uint32_t y) {
+      return static_cast<int>(image.rgba[(static_cast<std::size_t>(y) * image.width + x) * 4]);
+    };
+    assert(red_at(after, 5, 5) > red_at(before, 5, 5) * 3 / 2);                 // matches: brightened
+    assert(std::abs(red_at(after, 315, 195) - red_at(before, 315, 195)) <= 3);  // far from the sample / brighter: untouched
+    std::printf("export %s: top left %d -> %d, bottom right %d -> %d\n", id.c_str(), red_at(before, 5, 5),
+                red_at(after, 5, 5), red_at(before, 315, 195), red_at(after, 315, 195));
+  }
+
   // Through the queue: the product is published at the destination, the task
   // leaves the pending list and the queue records success.
   {

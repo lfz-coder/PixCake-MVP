@@ -286,7 +286,15 @@ std::vector<PanelRow> refine_local_rows() {
                                          {"gradient_angle", "渐变角度"},
                                          {"gradient_size", "渐变范围"},
                                          {"gradient_feather", "渐变柔和"},
-                                         {"gradient_ratio", "椭圆高宽比"}}) {
+                                         {"gradient_ratio", "椭圆高宽比"},
+                                         {"range_r", "取样色 红"},
+                                         {"range_g", "取样色 绿"},
+                                         {"range_b", "取样色 蓝"},
+                                         {"range_adjust", "调整"},
+                                         {"lum_a", "亮度 下限（渐变起点）"},
+                                         {"lum_b", "亮度 下限（全选起点）"},
+                                         {"lum_c", "亮度 上限（全选终点）"},
+                                         {"lum_d", "亮度 上限（渐变终点）"}}) {
     PanelRow row;
     row.kind = PanelRowKind::Slider;
     row.label = label;
@@ -325,6 +333,8 @@ std::vector<ChoiceOption> choice_options(const SliderBinding& binding) {
       if (id == "all") label = kRegionAll;
       if (id == "linear") label = ui::shell::kWordLinearGradient;
       if (id == "radial") label = ui::shell::kWordRadialGradient;
+      if (id == "color_range") label = ui::shell::kWordColorRange;
+      if (id == "luminance_range") label = ui::shell::kWordLuminanceRange;
       for (const auto& part : mask::semantic_parts()) {
         if (id == part.id) label = part.label;
       }

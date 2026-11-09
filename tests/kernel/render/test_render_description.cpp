@@ -201,6 +201,40 @@ void test_local_instances_compile_in_order() {
            std::vector<std::string>{"combined:+semantic:person.skin.all|-semantic:person.lips|+gradient:linear:30:50:0:50:50:100"});
     for (const auto& value : result.description.operations[0].values) EXPECT(value.channel != "mode");
   }
+  // Colour range and luminance range: sample values travel in the mask id; they are not draw channels.
+  EXPECT(find_parameter_mode("color.local", "s1:range_r") == find_parameter_mode("color.local", "range_r"));
+  EXPECT(find_parameter_mode("color.local", "m3:s2:lum_c") == find_parameter_mode("color.local", "lum_c"));
+  EXPECT(pixcake::validate_parameter_display_value("color.local", "range_adjust", "1"));
+  EXPECT(!pixcake::validate_parameter_display_value("color.local", "range_adjust", "0"));
+  EXPECT(!pixcake::validate_parameter_display_value("color.local", "range_r", "256"));
+  auto ranges = *pixcake::EditDocument::create("img-ranges");
+  EXPECT(ranges.set_preview("color.local", "m1:exposure", "1") == pixcake::ResultCode::Ok);
+  EXPECT(ranges.set_preview("color.local", "m1:region", "color_range") == pixcake::ResultCode::Ok);
+  EXPECT(ranges.set_preview("color.local", "m1:range_r", "10") == pixcake::ResultCode::Ok);
+  EXPECT(ranges.set_preview("color.local", "m1:range_g", "20") == pixcake::ResultCode::Ok);
+  EXPECT(ranges.set_preview("color.local", "m1:range_b", "30") == pixcake::ResultCode::Ok);
+  EXPECT(ranges.set_preview("color.local", "m1:range_adjust", "70") == pixcake::ResultCode::Ok);
+  EXPECT(ranges.set_preview("color.local", "m1:s1:region", "luminance_range") == pixcake::ResultCode::Ok);
+  EXPECT(ranges.set_preview("color.local", "m1:s1:mode", "subtract") == pixcake::ResultCode::Ok);
+  EXPECT(ranges.set_preview("color.local", "m1:s1:lum_a", "10") == pixcake::ResultCode::Ok);
+  EXPECT(ranges.set_preview("color.local", "m1:s1:lum_b", "30") == pixcake::ResultCode::Ok);
+  result = pixcake::render::compile(ranges);
+  EXPECT(result.description.operations.size() == 1);
+  if (result.description.operations.size() == 1) {
+    EXPECT(result.description.operations[0].mask_ids ==
+           std::vector<std::string>{"combined:+colorrange:10:20:30:70|-lumrange:10:30:65:90"});
+    for (const auto& value : result.description.operations[0].values) {
+      EXPECT(value.channel.find("range") == std::string::npos && value.channel.find("lum") == std::string::npos);
+    }
+  }
+  // A mask with only a colour range (no luminance edge) and a crossed trapezoid still compile to legal ids.
+  auto crossed = *pixcake::EditDocument::create("img-crossed");
+  EXPECT(crossed.set_preview("color.local", "exposure", "1") == pixcake::ResultCode::Ok);
+  EXPECT(crossed.set_preview("color.local", "region", "luminance_range") == pixcake::ResultCode::Ok);
+  EXPECT(crossed.set_preview("color.local", "lum_a", "80") == pixcake::ResultCode::Ok);  // above the default b, c, d
+  result = pixcake::render::compile(crossed);
+  EXPECT(result.description.operations.size() == 1 &&
+         result.description.operations[0].mask_ids == std::vector<std::string>{"lumrange:80:80:80:90"});
   // One "add" item alone keeps the plain id; a lone "subtract" item is a combination (it removes from nothing).
   auto one = *pixcake::EditDocument::create("img-one-item");
   EXPECT(one.set_preview("color.local", "exposure", "1") == pixcake::ResultCode::Ok);

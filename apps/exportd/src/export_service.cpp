@@ -124,6 +124,7 @@ ExportResult ExportService::produce(const ExportWork& work) {
   }
   gpu::apply_geometry(gpu::geometry_of(work.description), image, inputs.masks);
   gpu::add_gradient_masks(work.description, image.width, image.height, inputs.masks);
+  gpu::add_range_masks(work.description, image, inputs.masks);
   gpu::add_combined_masks(work.description, inputs.masks);
   gpu::RenderResult rendered;
   bool ok = false;

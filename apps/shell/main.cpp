@@ -1556,6 +1556,63 @@ int smoke_open_photo(pixcake::shell::ShellWindow& window) {
                 number("gradient_ratio"));
       return 8;
     }
+    // Colour range: a click samples the picture (7x7 mean) and commits region + RGB as one step.
+    drop = visibleChild<QPushButton>(window, "refine-local-item-remove");
+    drop->click();
+    wait_current(window, 30'000);
+    region_box = visibleChild<QComboBox>(window, "refine-local-item-region");
+    region_box->setCurrentIndex(region_box->findData(QStringLiteral("color_range")));
+    draw = visibleChild<QPushButton>(window, "refine-local-draw");
+    draw->setChecked(true);
+    const auto text_of = [&](const char* name) {
+      const auto value = controller.parameter_value({"color.local", std::string("m") + std::to_string(controller.local_masks().back()) + ":" + name});
+      return value ? *value : std::string();
+    };
+    const auto steps_before_sample = controller.history().size();
+    if (!drag(50, 50, 50, 50)) {
+      qCritical("no frame after the colour range click");
+      return 8;
+    }
+    if (controller.history().size() != steps_before_sample + 1 || text_of("region") != "color_range" ||
+        text_of("range_r").empty() || text_of("range_g").empty() || text_of("range_b").empty()) {
+      qCritical("the colour range click did not commit region + sample as one step (%zu steps, region '%s')",
+                controller.history().size() - steps_before_sample, text_of("region").c_str());
+      return 8;
+    }
+    {
+      // The sample is the shown colour at the middle of the frame.
+      const QImage& shown = view->image();
+      const QColor middle = shown.pixelColor(shown.width() / 2, shown.height() / 2);
+      if (std::abs(number("range_r") - middle.red()) > 12 || std::abs(number("range_g") - middle.green()) > 12 ||
+          std::abs(number("range_b") - middle.blue()) > 12) {
+        qCritical("colour range sample %d/%d/%d is far from the picture's %d/%d/%d", number("range_r"), number("range_g"),
+                  number("range_b"), middle.red(), middle.green(), middle.blue());
+        return 8;
+      }
+    }
+    items = visibleChild<QListWidget>(window, "refine-local-items");
+    if (items == nullptr || items->count() != 1 || visibleChild<QSlider>(window, "refine-local-item-range_adjust") == nullptr) {
+      qCritical("the colour range item or its adjust slider is missing");
+      return 8;
+    }
+    // Luminance range: click = full strength around the clicked luminance, a wider ramp outside it.
+    drop = visibleChild<QPushButton>(window, "refine-local-item-remove");
+    drop->click();
+    wait_current(window, 30'000);
+    region_box = visibleChild<QComboBox>(window, "refine-local-item-region");
+    region_box->setCurrentIndex(region_box->findData(QStringLiteral("luminance_range")));
+    draw = visibleChild<QPushButton>(window, "refine-local-draw");
+    draw->setChecked(true);
+    if (!drag(50, 50, 50, 50)) {
+      qCritical("no frame after the luminance range click");
+      return 8;
+    }
+    if (text_of("region") != "luminance_range" || !(number("lum_a") <= number("lum_b") && number("lum_b") <= number("lum_c") &&
+                                                   number("lum_c") <= number("lum_d")) ||
+        number("lum_c") - number("lum_b") > 20 || number("lum_d") - number("lum_c") > 25) {
+      qCritical("luminance range values %d/%d/%d/%d", number("lum_a"), number("lum_b"), number("lum_c"), number("lum_d"));
+      return 8;
+    }
     // Clean up: delete the mask.
     auto* remove = visibleChild<QPushButton>(window, "refine-local-delete");
     if (remove == nullptr) {

@@ -1,8 +1,10 @@
 #include <pixcake/gpu/geometry.hpp>
 #include <pixcake/mask/combined_mask.hpp>
 #include <pixcake/mask/gradient_mask.hpp>
+#include <pixcake/mask/range_mask.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -247,6 +249,108 @@ void add_gradient_masks(const pixcake::render::RenderDescription& description, s
         if (!pixcake::mask::parse_gradient_mask_id(id, gradient)) continue;
         const bool present = std::any_of(masks.begin(), masks.end(), [&id](const RenderMask& m) { return m.id == id; });
         if (!present) masks.push_back(gradient_mask(id, gradient, width, height));
+      }
+    }
+  }
+}
+
+namespace {
+
+// sRGB 编码值到线性（Lab 用）：256 项表。
+const std::array<float, 256>& linear_table() {
+  static const std::array<float, 256> table = [] {
+    std::array<float, 256> t{};
+    for (int i = 0; i < 256; ++i) {
+      const double c = i / 255.0;
+      t[static_cast<std::size_t>(i)] = static_cast<float>(c > 0.04045 ? std::pow((c + 0.055) / 1.055, 2.4) : c / 12.92);
+    }
+    return t;
+  }();
+  return table;
+}
+
+struct Lab { double l, a, b; };
+
+Lab to_lab(int r, int g, int b) {
+  const auto& table = linear_table();
+  const double lr = table[static_cast<std::size_t>(r)];
+  const double lg = table[static_cast<std::size_t>(g)];
+  const double lb = table[static_cast<std::size_t>(b)];
+  const double x = (0.4124 * lr + 0.3576 * lg + 0.1805 * lb) / 0.9505;
+  const double y = 0.2126 * lr + 0.7152 * lg + 0.0722 * lb;
+  const double z = (0.0193 * lr + 0.1192 * lg + 0.9505 * lb) / 1.089;
+  const auto f = [](double t) { return t > 0.008856 ? std::cbrt(t) : 7.787 * t + 16.0 / 116.0; };
+  const double fx = f(x), fy = f(y), fz = f(z);
+  return {116.0 * fy - 16.0, 500.0 * (fx - fy), 200.0 * (fy - fz)};
+}
+
+RenderMask color_range_mask(const std::string& id, const pixcake::mask::ColorRangeMask& range, const RgbaImage& image) {
+  RenderMask mask;
+  mask.id = id;
+  mask.width = image.width;
+  mask.height = image.height;
+  mask.alpha.assign(static_cast<std::size_t>(image.width) * image.height, 0);
+  const Lab sample = to_lab(range.r, range.g, range.b);
+  const double reach = pixcake::mask::color_range_reach(range.adjust);
+  for (std::uint32_t y = 0; y < image.height; ++y) {
+    const std::uint8_t* row = image.pixels.data() + static_cast<std::size_t>(y) * image.row_stride;
+    for (std::uint32_t x = 0; x < image.width; ++x) {
+      const Lab lab = to_lab(row[x * 4], row[x * 4 + 1], row[x * 4 + 2]);
+      const double distance = std::sqrt((lab.l - sample.l) * (lab.l - sample.l) + (lab.a - sample.a) * (lab.a - sample.a) +
+                                        (lab.b - sample.b) * (lab.b - sample.b));
+      const double alpha = std::clamp(1.0 - distance / reach, 0.0, 1.0);
+      mask.alpha[static_cast<std::size_t>(y) * image.width + x] = static_cast<std::uint8_t>(std::lround(alpha * 255.0));
+    }
+  }
+  return mask;
+}
+
+RenderMask luminance_range_mask(const std::string& id, const pixcake::mask::LuminanceRangeMask& range,
+                                const RgbaImage& image) {
+  RenderMask mask;
+  mask.id = id;
+  mask.width = image.width;
+  mask.height = image.height;
+  mask.alpha.assign(static_cast<std::size_t>(image.width) * image.height, 0);
+  for (std::uint32_t y = 0; y < image.height; ++y) {
+    const std::uint8_t* row = image.pixels.data() + static_cast<std::size_t>(y) * image.row_stride;
+    for (std::uint32_t x = 0; x < image.width; ++x) {
+      const double luminance = (0.2126 * row[x * 4] + 0.7152 * row[x * 4 + 1] + 0.0722 * row[x * 4 + 2]) / 255.0 * 100.0;
+      double alpha = 0.0;
+      if (luminance >= range.b && luminance <= range.c) {
+        alpha = 1.0;
+      } else if (luminance > range.a && luminance < range.b) {
+        alpha = (luminance - range.a) / (range.b - range.a);
+      } else if (luminance > range.c && luminance < range.d) {
+        alpha = (range.d - luminance) / (range.d - range.c);
+      }
+      mask.alpha[static_cast<std::size_t>(y) * image.width + x] = static_cast<std::uint8_t>(std::lround(alpha * 255.0));
+    }
+  }
+  return mask;
+}
+
+}  // namespace
+
+void add_range_masks(const pixcake::render::RenderDescription& description, const RgbaImage& image,
+                     std::vector<RenderMask>& masks) {
+  if (image.width == 0 || image.height == 0 ||
+      image.pixels.size() < static_cast<std::size_t>(image.height - 1) * image.row_stride + image.width * 4ull) {
+    return;
+  }
+  for (const auto& operation : description.operations) {
+    if (!operation.enabled) continue;
+    for (const auto& whole : operation.mask_ids) {
+      for (const auto& id : pixcake::mask::leaf_mask_ids(whole)) {
+        const bool present = std::any_of(masks.begin(), masks.end(), [&id](const RenderMask& m) { return m.id == id; });
+        if (present) continue;
+        pixcake::mask::ColorRangeMask color;
+        pixcake::mask::LuminanceRangeMask luminance;
+        if (pixcake::mask::parse_color_range_mask_id(id, color)) {
+          masks.push_back(color_range_mask(id, color, image));
+        } else if (pixcake::mask::parse_luminance_range_mask_id(id, luminance)) {
+          masks.push_back(luminance_range_mask(id, luminance, image));
+        }
       }
     }
   }

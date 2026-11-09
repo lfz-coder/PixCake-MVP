@@ -1,6 +1,7 @@
 #include "pixcake/capability/capability_module.hpp"
 #include "pixcake/mask/combined_mask.hpp"
 #include "pixcake/mask/gradient_mask.hpp"
+#include "pixcake/mask/range_mask.hpp"
 #include "pixcake/mask/semantic_parts.hpp"
 
 #include "pixcake/capability/fragment_codec.hpp"
@@ -153,6 +154,41 @@ bool ParameterBackedModule::draws_parameter(const ParameterReader& reader, const
   return parameter_disabled_reason(reader, mode.parameter_id).empty();
 }
 
+namespace {
+
+// 颜色范围、亮度范围子项的蒙版编号：取样值读不到或不合格就用默认值。region 不是这两种时返回空。
+std::string range_mask_id_of(const ParameterReader& reader, const std::string& capability, const std::string& prefix,
+                             const std::string& region) {
+  if (region != "color_range" && region != "luminance_range") return {};
+  const auto number = [&](const char* name, int fallback) {
+    const auto text = reader.value(capability, prefix + name);
+    double parsed = 0.0;
+    return text && parse_number(*text, parsed) && validate_parameter_display_value(capability, prefix + name, *text)
+               ? static_cast<int>(std::lround(parsed))
+               : fallback;
+  };
+  if (region == "color_range") {
+    mask::ColorRangeMask range;
+    range.r = number("range_r", range.r);
+    range.g = number("range_g", range.g);
+    range.b = number("range_b", range.b);
+    range.adjust = number("range_adjust", range.adjust);
+    return mask::color_range_mask_id(range);
+  }
+  mask::LuminanceRangeMask range;
+  range.a = number("lum_a", range.a);
+  range.b = number("lum_b", range.b);
+  range.c = number("lum_c", range.c);
+  range.d = number("lum_d", range.d);
+  // 手柄次序不对（a≤b≤c≤d）时按次序夹住，保证编号合法。
+  range.b = std::max(range.b, range.a);
+  range.c = std::max(range.c, range.b);
+  range.d = std::max(range.d, range.c);
+  return mask::luminance_range_mask_id(range);
+}
+
+}  // namespace
+
 ModuleCompile ParameterBackedModule::compile_modes(const ParameterReader& reader,
                                                    const std::vector<const ParameterMode*>& modes,
                                                    const std::string& only, int instance) const {
@@ -175,6 +211,7 @@ ModuleCompile ParameterBackedModule::compile_modes(const ParameterReader& reader
   std::string region_mask;  // 局部调色的作用部位
   mask::GradientMask gradient;
   bool gradient_region = false;
+  std::string range_region;  // color_range 或 luminance_range
   std::set<std::string> channels;
   for (const auto* mode : modes) {
     if (!only.empty() && mode->parameter_id != only) continue;
@@ -204,10 +241,16 @@ ModuleCompile ParameterBackedModule::compile_modes(const ParameterReader& reader
       if (*value == "linear" || *value == "radial") {
         gradient.radial = *value == "radial";
         gradient_region = true;
+      } else if (*value == "color_range" || *value == "luminance_range") {
+        range_region = *value;
       } else if (*value != "all") {
         region_mask = mask::semantic_mask_id(*value);
       }
       continue;
+    }
+    if (descriptor_.id == "color.local" &&
+        (mode->parameter_id.rfind("range_", 0) == 0 || mode->parameter_id.rfind("lum_", 0) == 0)) {
+      continue;  // 取样值不是绘制通道
     }
     if (descriptor_.id == "color.local" && mode->parameter_id == "mode") continue;  // 子项叠加方式，子项 0 没有“上一步”
     if (descriptor_.id == "color.local" && mode->parameter_id.rfind("gradient_", 0) == 0) {
@@ -236,6 +279,7 @@ ModuleCompile ParameterBackedModule::compile_modes(const ParameterReader& reader
       std::vector<mask::CombinedPart> parts;
       if (!region_mask.empty()) parts.push_back({false, region_mask});
       if (gradient_region) parts.push_back({false, mask::gradient_mask_id(gradient)});
+      if (!range_region.empty()) parts.push_back({false, range_mask_id_of(reader, descriptor_.id, prefix, range_region)});
       if (descriptor_.id == "color.local") {
         for (int item = 1; item <= kMaxLocalItems; ++item) {
           const std::string item_prefix = prefix + local_item_prefix(item);
@@ -262,6 +306,8 @@ ModuleCompile ParameterBackedModule::compile_modes(const ParameterReader& reader
             g.feather = number("gradient_feather", g.feather);
             g.ratio = number("gradient_ratio", g.ratio);
             id = mask::gradient_mask_id(g);
+          } else if (*region == "color_range" || *region == "luminance_range") {
+            id = range_mask_id_of(reader, descriptor_.id, item_prefix, *region);
           } else {
             id = mask::semantic_mask_id(*region);
           }

@@ -2,6 +2,7 @@
 #include <pixcake/gpu/geometry.hpp>
 #include <pixcake/mask/combined_mask.hpp>
 #include <pixcake/mask/gradient_mask.hpp>
+#include <pixcake/mask/range_mask.hpp>
 
 #include <cmath>
 #include <cstdio>
@@ -233,7 +234,76 @@ void test_combined_masks() {
 
 }  // namespace
 
+// 颜色范围、亮度范围蒙版：编号往返和非法编号；颜色范围离取样色越远越弱、调整越大越宽；亮度范围是梯形；
+// 组合编号里的范围子项也生成，并且能和别的子项组合。
+void test_range_masks() {
+  mask::ColorRangeMask color;
+  mask::LuminanceRangeMask luminance;
+  EXPECT(mask::parse_color_range_mask_id(mask::color_range_mask_id({10, 20, 30, 70}), color) && color.r == 10 &&
+         color.g == 20 && color.b == 30 && color.adjust == 70);
+  EXPECT(!mask::parse_color_range_mask_id("colorrange:256:0:0:50", color));
+  EXPECT(!mask::parse_color_range_mask_id("colorrange:1:2:3:0", color));  // 调整最小是 1
+  EXPECT(!mask::parse_color_range_mask_id("colorrange:1:2:3", color));
+  EXPECT(mask::parse_luminance_range_mask_id(mask::luminance_range_mask_id({20, 45, 65, 90}), luminance) && luminance.c == 65);
+  EXPECT(!mask::parse_luminance_range_mask_id("lumrange:50:40:60:90", luminance));  // 次序不对
+  EXPECT(!mask::parse_luminance_range_mask_id("lumrange:0:10:20:101", luminance));
+
+  // 一行 6 个像素：取样色本身、稍偏、较远、很远（白）、黑、40% 灰。
+  gpu::RgbaImage image;
+  image.width = 6;
+  image.height = 1;
+  image.row_stride = 6 * 4;
+  const std::uint8_t pixels[6][3] = {{123, 141, 163}, {133, 141, 163}, {160, 150, 150}, {250, 250, 250}, {0, 0, 0}, {102, 102, 102}};
+  for (const auto& p : pixels) image.pixels.insert(image.pixels.end(), {p[0], p[1], p[2], 255});
+  render::RenderDescription description;
+  render::RenderOperation operation;
+  operation.capability_id = "color.local";
+  const std::string narrow = mask::color_range_mask_id({123, 141, 163, 1});
+  const std::string wide = mask::color_range_mask_id({123, 141, 163, 100});
+  const std::string lum = mask::luminance_range_mask_id({20, 45, 65, 90});
+  operation.mask_ids = {narrow, wide, lum, "colorrange:bad"};
+  description.operations = {operation};
+  std::vector<gpu::RenderMask> masks;
+  gpu::add_range_masks(description, image, masks);
+  gpu::add_range_masks(description, image, masks);
+  EXPECT(masks.size() == 3);  // generated once, bad id ignored
+  const auto find = [&](const std::string& id) -> const gpu::RenderMask* {
+    for (const auto& m : masks) if (m.id == id) return &m;
+    return nullptr;
+  };
+  const auto* n = find(narrow);
+  const auto* w = find(wide);
+  const auto* l = find(lum);
+  EXPECT(n && w && l && n->alpha.size() == 6);
+  if (n && w && l && n->alpha.size() == 6) {
+    EXPECT(n->alpha[0] == 255 && w->alpha[0] == 255);            // the sample itself
+    EXPECT(n->alpha[0] > n->alpha[1] && n->alpha[1] >= n->alpha[2] && n->alpha[2] >= n->alpha[3]);  // farther is weaker
+    EXPECT(n->alpha[3] == 0 && n->alpha[4] == 0);                // white and black are far from the sample
+    for (int i = 0; i < 6; ++i) EXPECT(w->alpha[static_cast<std::size_t>(i)] >= n->alpha[static_cast<std::size_t>(i)]);  // wider adjust never selects less
+    EXPECT(w->alpha[2] > n->alpha[2]);
+    // Luminance: the sample is about 55 (inside 45..65: full); white 98 and black 0 are outside.
+    EXPECT(l->alpha[0] == 255 && l->alpha[3] == 0 && l->alpha[4] == 0);
+    EXPECT(l->alpha[2] == 255);                                  // 59.7 is inside 45..65
+    EXPECT(l->alpha[5] > 190 && l->alpha[5] < 215);              // 40: (40-20)/(45-20) = 0.8 on the rising edge
+  }
+  // Combined ids carry range leaves: they are generated, then subtracted from each other.
+  render::RenderOperation combined_operation;
+  combined_operation.capability_id = "color.local";
+  combined_operation.mask_ids = {mask::combined_mask_id({{false, wide}, {true, narrow}})};
+  render::RenderDescription combined;
+  combined.operations = {combined_operation};
+  std::vector<gpu::RenderMask> pieces;
+  gpu::add_range_masks(combined, image, pieces);
+  gpu::add_combined_masks(combined, pieces);
+  EXPECT(pieces.size() == 3);
+  if (pieces.size() == 3) {
+    EXPECT(pieces[2].alpha[0] == 0);         // sample: wide 255 × (1 − narrow 255) = 0
+    EXPECT(pieces[2].alpha[2] > 0);          // a farther pixel stays: wide minus a weak narrow
+  }
+}
+
 int main() {
+  test_range_masks();
   test_combined_masks();
   test_gradient_masks();
   test_flips_and_turns_move_image_and_mask_together();
