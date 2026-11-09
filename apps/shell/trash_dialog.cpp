@@ -76,6 +76,10 @@ class TrashDialog final : public QDialog {
     layout->addWidget(table_, 1);
     auto* buttons = new QHBoxLayout;
     buttons->addStretch();
+    clear_ = action(qtext("trash.clear"), this);
+    clear_->setObjectName(QStringLiteral("trash-clear"));
+    buttons->addWidget(clear_);
+    connect(clear_, &QPushButton::clicked, this, [this] { clearAll(); });
     restore_ = action(qtext("trash.restore"), this, true);
     restore_->setObjectName(QStringLiteral("trash-restore"));
     erase_ = action(qtext("trash.erase"), this);
@@ -98,7 +102,22 @@ class TrashDialog final : public QDialog {
   void updateButtons() {
     const int row = selectedRow();
     restore_->setEnabled(row >= 0);
+    bool any_project = false;
+    for (const auto& item : items_) any_project = any_project || item.kind == TrashKind::Project;
+    clear_->setEnabled(any_project);
     erase_->setEnabled(row >= 0 && items_[static_cast<std::size_t>(row)].kind == TrashKind::Project);
+  }
+
+  // 清空回收站：只彻底删除回收站里的项目（需求 §7）；单独进回收站的图片和副本不动，到期自动清。
+  void clearAll() {
+    std::vector<std::int64_t> projects;
+    for (const auto& item : items_) {
+      if (item.kind == TrashKind::Project) projects.push_back(item.id);
+    }
+    if (projects.empty()) return;
+    if (!ask(this, qtext("trash.clear.confirm").arg(projects.size()), qtext("trash.erase"))) return;
+    for (const auto id : projects) actions_->request_erase_project(id);
+    reload();
   }
 
   void reload() {
@@ -144,6 +163,7 @@ class TrashDialog final : public QDialog {
   QTableWidget* table_ = nullptr;
   QPushButton* restore_ = nullptr;
   QPushButton* erase_ = nullptr;
+  QPushButton* clear_ = nullptr;
 };
 
 }  // namespace

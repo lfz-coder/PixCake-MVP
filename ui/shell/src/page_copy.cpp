@@ -255,6 +255,8 @@ Texts build_texts() {
   t["trash.restore"] = "还原";
   t["trash.erase"] = "彻底删除";
   t["trash.cancel"] = "取消";
+  t["trash.clear"] = "清空回收站";
+  t["trash.clear.confirm"] = "清空回收站将彻底删除其中的 %1 个项目，不能恢复（磁盘上的原图不会被删除）。图片和虚拟副本随所在项目一起保留到期。确认清空？";
   t["trash.col.name"] = "名称";
   t["trash.col.kind"] = "类型";
   t["trash.col.project"] = "所在项目";

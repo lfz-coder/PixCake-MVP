@@ -862,6 +862,20 @@ int smoke_virtual_copy(pixcake::shell::ShellWindow& window) {
       qCritical("restoring the copy: %zu photos, %zu in trash", controller.photos().size(), controller.trash().size());
       return 12;
     }
+    // The trash dialog has a clear button; with no project in the trash it stays off.
+    {
+      pixcake::shell::openTrashDialog(&window, &controller);
+      auto* open = window.findChild<QDialog*>(QStringLiteral("trash-dialog"));
+      auto* clear = open != nullptr ? open->findChild<QPushButton*>(QStringLiteral("trash-clear")) : nullptr;
+      bool has_project = false;
+      for (const auto& entry : controller.trash()) has_project = has_project || entry.kind == pixcake::shell::TrashKind::Project;
+      if (clear == nullptr || clear->isEnabled() != has_project) {
+        qCritical("the clear-trash button is missing or its enabled state is wrong");
+        return 12;
+      }
+      open->close();
+      QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    }
     // Deleting the original takes its copy too; restoring the original brings it back.
     controller.request_delete_photos({source});
     trash = controller.trash();
