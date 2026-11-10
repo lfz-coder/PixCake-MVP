@@ -106,25 +106,24 @@ levels_rgb_output_black
 levels_rgb_output_white
 ~~~
 
-没有 levels_red_*、levels_green_* 或 levels_blue_* 参数。因此“红、绿、蓝各自的黑场/灰场/白场”目前没有实现，也没有可登记的公式；当前代码把同一公式分别应用到 R、G、B 三个通道：
+没有 levels_red_*、levels_green_* 或 levels_blue_* 参数，因此“红、绿、蓝各自的黑场/灰场/白场”目前没有实现；这一套参数就是 Photoshop 色阶的 RGB 复合（master）通道，三个单色通道为恒等。
+
+`photocraft-ported`（8 位 sRGB 输入），PhotoCraft `third_party/photocraft/crates/compose/src/adjust/tone.rs:299-353`：
 
 ~~~text
-ib = input_black / 255
-iw = input_white / 255
-ob = output_black / 255
-ow = output_white / 255
-gamma = 10^(input_gray)
-span = max(iw - ib, 1/255)
-x = clamp01((c - ib) / span)
-y = x^(1/gamma)
-c' = ob + y * (ow - ob)
+master = (input_black/255, input_white/255, gamma = 10^input_gray, output_black/255, output_white/255)
+levels_q(ch, v, 255):            # Photoshop 在整级上分三步、每步四舍五入
+  u = floor(clamp((round(v·255)/255 - in_black) / max(in_white - in_black, 1e-6), 0, 1)·255 + 0.5 + 1e-3) / 255
+  t = whole(levels_gamma(u, max(gamma, 0.01)))
+  out = whole(out_black + t·(out_white - out_black))          # whole(x) = floor(x·255 + 0.5)/255
+levels_gamma(u, g) = u^(1/g)；g > 1 时暗部用 a·u − b·u^2.2（a = 2^g）的 toe 与幂曲线等值等斜率衔接
+table[k] = levels_q(master, levels_q(identity, k/4095, 255), 255)，4096 项
+c' = lut(table, c)                # 输入裁到 0..1，表内线性插值；三个通道各自查表
 ~~~
 
-这里的 c 依次是原始 R、G、B，但参数只有一套 ib/iw/gamma/ob/ow，不是独立通道色阶。输入/输出黑白点的范围和 UI 名称来自架构附录及 test 版数值框观察；gamma=10^gray、最小跨度 1/255 和逐通道复用是旧 PixCake `legacy-provisional`。PhotoCraft 的 `levels`、`levels_gamma`、`levels_float` 和 per-channel/master 组合在 `third_party/photocraft/crates/compose/src/adjust/tone.rs:299-367`，移植时必须覆盖这些边界；红/绿/蓝独立参数仍属于 PixCake 参数模式缺口。
+`gamma = 10^input_gray` 是 PixCake 参数映射。GPU 不上传表，在着色器里算出采样点两侧的两项再插值，与 CPU 相同。
 
-实现：color_groups()、apply_levels()，render_executor.cpp；GPU：shader_sources.hpp `levels()`。
-
-已有验证只覆盖复合 RGB：tests/gpu/test_reference_color_groups.cpp:test_levels()，没有独立 R/G/B 色阶测试。
+实现：`adjust::levelsQ/levelsGamma/levelsLut/sampleLut`、apply_levels()；GPU：shader_sources.hpp `levels()`；测试：test_adjust_port、test_reference_adjustments `test_levels_uses_photocraft`。
 
 ## 3. HSL 八色带
 
@@ -161,19 +160,20 @@ RGB' = (grey', grey', grey')
 
 ## 5. 可选颜色
 
-九个目标为 red, yellow, green, cyan, blue, magenta, white, neutral, black，每个目标有 CMYK 四个量。代码先计算目标权重，再在每个 RGB 通道上把颜色换算成墨量 ink=1-channel：
+`photocraft-ported`（8 位 sRGB 输入），PhotoCraft `third_party/photocraft/crates/compose/src/adjust/color.rs:271-323`。九个目标 red, yellow, green, cyan, blue, magenta, white, neutral, black 与 PixCake 参数一一对应：
 
 ~~~text
-relative: next = clamp01(ink * (1 + selective_target_ink/100))
-absolute: next = clamp01(ink + selective_target_ink/100)
-next = next + black * (black>0 ? 1-next : next)
-change += target_weight * (next - ink)
-channel' = clamp01(channel - change)
+max, min, mid = 三通道的最大、最小、中间值
+weights = [R 为最大 ? max−mid, B 为最小 ? mid−min, G 为最大 ? max−mid, R 为最小 ? mid−min,
+           B 为最大 ? max−mid, G 为最小 ? mid−min, max((min−0.5)·2, 0),
+           clamp(1 − |max−0.5| − |min−0.5|, 0, 1), max((0.5−max)·2, 0)]
+对每个目标 r（权重 > 0）和每个通道 i：ink = 1 − c_i，d = (墨量_i + 黑_r)/100
+  relative: d·ink        absolute: d > 0 ? d·min(2(1−ink), 1) : d·min(2·ink, 1)
+  delta_i += d · weight_r
+c'_i = clamp(c_i − delta_i, 0, 1)
 ~~~
 
-目标权重是当前 PixCake 的九项经验权重，旧路径的 CMYK 形状、相对/绝对映射、黑色混合和目标权重均为 `legacy-provisional`。来源是 `photocraft-target`（B）：PhotoCraft 的 `selective_color_weights` 与 `selective_color` 在 `third_party/photocraft/crates/compose/src/adjust/color.rs:271-323`，九个目标和相对/绝对模式与 PixCake 参数一一对应，应替换为移植目标并补齐相对/绝对 parity。
-
-实现：apply_selective()，render_executor.cpp；GPU：shader_sources.hpp `selective()`；测试：test_selective_color()。
+实现：`adjust::selectiveWeights/selectiveColor`、apply_selective()；GPU：shader_sources.hpp `selective()`；测试：test_adjust_port、test_selective_color()、test_reference_adjustments。
 
 ## 6. 颜色分级
 
@@ -195,30 +195,29 @@ midtones = max(1 - shadows - highlights, 0);  global = 1
 
 ## 7. 颗粒
 
-颗粒是确定性的项目噪声算法，不是已登记的胶片或官方传感器模型：
+amount/size/roughness 是 PhotoCraft Camera Raw 阶段 9（`third_party/photocraft/crates/algo/src/camera_raw.rs`、`camera_raw/per_pixel.rs` `Grain::new`、`photo_util.rs` `hash01`），`photocraft-ported`（8 位 sRGB 输入）：
 
 ~~~text
-amount, shadows, midtones, highlights, size, roughness, colour = slider / 100
-cell = max(1, min(width,height) * (0.0008 + 0.006*size))
-inv_cell = 1 / cell
-
-smooth = value_noise(x*inv_cell, y*inv_cell, channel)
-noise = smooth + (hash01(x,y,channel+8) - smooth)*roughness - 0.5
-
-zone = max(0,1-l/0.5)*shadows
-     + max(0,1-|l-0.5|/0.5)*midtones
-     + max(0,1-(1-l)/0.5)*highlights
-strength = amount * zone * 0.5
-
-mono = noise(channel=0)
-R += strength * (mono + (noise(1)-mono)*colour)
-G += strength * (mono + (noise(2)-mono)*colour)
-B += strength * (mono + (noise(3)-mono)*colour)
+cell = 1 + grain_size/25（全分辨率像素）；rough = grain_roughness/100；amount = grain_amount/100·0.12；seed = 0
+scale = 1 / pixel_scale（pixel_scale = 帧长边 / 原图长边，renderd 由解码器给出的原图长边计算，导出为 1）
+fx = x·scale/cell, fy = y·scale/cell
+n = value_noise(fx, fy, seed)·(1−rough) + value_noise(2.3fx, 2.3fy, seed+7)·rough
+    # value_noise：格点 hash01（splitmix 风格 64 位哈希）加 smoothstep 双线性
+weight = 0.4 + 2.4·l·(1−l)，l = clamp(luma, 0, 1)
+c += (n − 0.5)·2·amount·weight
 ~~~
 
-hash01 的整数常量、三次平滑插值和尺寸映射都是项目选择，当前为 `legacy-provisional`。amount/size/roughness 有 PhotoCraft Camera Raw 阶段 9 grain 目标（A，按位置哈希、确定性、按全分辨率坐标——见 `crates/gpu/tests/it/camera_raw.rs` 的 `grain_in_full_resolution_coordinates`）；shadows/midtones/highlights/colour 四个子参数是 `PixCake-specific` 扩展，Camera Raw 没有。amount=0 时整步跳过；colour=0 为单色颗粒，colour=1 为独立通道颗粒。
+shadows/midtones/highlights/colour 四个子参数是 `PixCake-specific` 扩展，叠加在上面：
 
-实现：grain_of()、hash01()、value_noise()、apply_grain()，render_executor.cpp；GPU：shader_sources.hpp `kGrain`；测试：test_grain()。
+~~~text
+zone(l) = max(0,1−l/0.5)·shadows + max(0,1−|l−0.5|/0.5)·midtones + max(0,1−(1−l)/0.5)·highlights
+weight ×= zone(l; 滑杆) / zone(l; 0.30, 0.50, 0.15)        # 默认值时恰为 1
+colour > 0：通道 k 的 n_k = n + (n'_k − n)·colour，n'_k 用 seed k+1（k = 0..2）
+~~~
+
+默认 30/50/15 且 colour = 0 时与 PhotoCraft 逐位一致；colour 默认值为 10，所以默认参数下有 10% 的逐通道噪声。amount = 0 时整步跳过。GPU 的 `hash01` 照 `crates/gpu/src/camera_raw.wgsl` 用 uvec2 模拟 64 位整数。
+
+实现：`camera_raw::hash01/valueNoise/grainOf/grainNoise/grainWeight/applyGrain`、grain_of()/apply_grain()；GPU：shader_sources.hpp `kGrain`；测试：test_camera_raw_port `test_grain_matches_photocraft`、test_reference_adjustments、test_renderd（半分辨率预览与全分辨率同位置颗粒相同）。
 
 ## 8. 局部、后期和 AI 色彩路径
 
@@ -232,17 +231,18 @@ hash01 的整数常量、三次平滑插值和尺寸映射都是项目选择，�
 | 运算 | 当前公式 | 来源/限制 |
 | --- | --- | --- |
 | 蒙版权重 | 多个蒙版 alpha 归一化后相乘；GPU 一张纹理最多四个通道 | 项目合成规则；超过四个蒙版回退 reference |
-| normal 合成 | base + (top-base) * clamp(opacity*top.a) | 项目合成规则 |
-| multiply | top = base * top，再按 opacity 合成 | 通用混合语义；官方产品一致性未验证 |
-| screen | top = 1-(1-base)*(1-top)，再按 opacity 合成 | 通用混合语义；官方产品一致性未验证 |
-| 3D LUT | 资源坐标乘 size-1，8 个邻点三线性插值，再按 amount 与输入混合 | 只有 reference 资源路径；资源版本、色彩空间和许可证尚未登记；GPU 没有 3D LUT |
+| 操作回混 | 覆盖率 k = 不透明度 × 蒙版；`c = b·(1−k) + B(b, s)·k`，alpha 保持 | PhotoCraft `compose/src/composite.rs` `blend_back`，`photocraft-ported`；像素自身 alpha 不乘进 k |
+| 图层 normal | W3C 一般公式：as = top.a·opacity，ao = as + ab(1−as)，c = (ab(1−as)·cb + as·cs)/ao | PhotoCraft `psblend.rs` `composite`/`normal_rgb`，`photocraft-ported` |
+| multiply | B = cb·cs；图层 c = ((1−as)·ab·cb + (1−ab)·as·cs + as·ab·B)/ao | PhotoCraft，`photocraft-ported`；官方产品一致性未验证 |
+| screen | B = cb + cs − cb·cs；图层同上 | PhotoCraft，`photocraft-ported`；官方产品一致性未验证 |
+| 3D LUT | PhotoCraft `lut3d_sample` 三线性（`adjust::lut3dSample`），再按 amount 与输入混合 | 采样 `photocraft-ported`；amount 混合是 PixCake-specific；资源版本、色彩空间和许可证尚未登记；GPU 没有 3D LUT |
 
 ## 10. 这次审查确认的缺口
 
-1. **已完成来源迁移的只有 Camera Raw 逐像素阶段和现代亮度。** 白平衡、曝光、对比度、亮度、鲜艳度/饱和度、HSL 和色彩分级是 `photocraft-ported`（8 位 sRGB 输入），见[逐像素移植证据](2026-11-09-camera-raw-per-pixel-port.md)。仍执行旧公式的 PhotoCraft 目标：高光/阴影/白色/黑色、纹理/清晰度/去雾（A，依赖图像统计或空间阶段）、颗粒基础三项（A）、色阶、可选颜色、3D LUT 和混合（B）；曲线未实现。八色带黑白、颗粒扩展子参数和 AI 业务是 PixCake-specific；色彩编辑器是 no-equivalent。
+1. **已完成来源迁移：** Camera Raw 逐像素阶段与现代亮度（[逐像素移植证据](2026-11-09-camera-raw-per-pixel-port.md)），以及色阶、可选颜色、混合、3D LUT 采样和颗粒基础三项（[调整图层与颗粒移植证据](2026-11-09-photocraft-adjustments-and-grain-port.md)），均为 `photocraft-ported`（8 位 sRGB 输入）。仍执行旧公式的 PhotoCraft 目标：高光/阴影/白色/黑色、纹理/清晰度/去雾（A，依赖图像统计或空间阶段）；曲线未实现。八色带黑白、颗粒扩展子参数和 AI 业务是 PixCake-specific；色彩编辑器是 no-equivalent。
 2. **色阶不是红绿蓝独立色阶。** 当前只有一套 RGB 复合黑/灰/白参数，代码对 R/G/B 复用同一映射；用户所说的红、绿、蓝独立黑场/灰场/白场目前没有实现。
 3. **黑白混合的 Rec.709 来源链接没有在登记中固定。** 代码和测试都写了权重，但来源登记仍不完整。
-4. **GPU readback 证明的是与 CPU reference 对齐。** 已移植的七项靠 CPU reference 与 PhotoCraft 对照向量（`test_camera_raw_port`、`test_brightness_port`）加 GPU 与 reference 差 ≤1 两段证明 PhotoCraft parity；仍为旧公式的项，GPU 证据不能证明 PhotoCraft parity。任何一项都没有官方 PixCake 逐像素证明。
+4. **GPU readback 证明的是与 CPU reference 对齐。** 已移植的各项靠 CPU reference 与 PhotoCraft 对照向量（`test_camera_raw_port`、`test_brightness_port`、`test_adjust_port`）加 GPU 与 reference 差 ≤1 两段证明 PhotoCraft parity；仍为旧公式的项，GPU 证据不能证明 PhotoCraft parity。任何一项都没有官方 PixCake 逐像素证明。
 5. **颜色编辑器仍无目标颜色公式，输入色彩管理仍未闭环。** 这两项不能写成“已实现”。
 
 因此，这份文档把当前旧实现的公式逐项摊开，同时明确 PhotoCraft 目标、PixCake-specific 能力和没有实现的部分。旧公式的详细记录是迁移基线，不是继续保留两套行为标准的理由。
@@ -275,4 +275,15 @@ L' = clamp01(L + light * 0.5 * S0 * (light>0 ? 1-L : L))
 radius = 0.5 + 0.5 * grading_blending/100
 w_z = max(0, 1 - |luma - center_z| / radius)
 p += w_z*sat_z/100*0.25 * (HSL(hue_z,1,0.5) - luma(HSL(hue_z,1,0.5))) + w_z*lum_z/100*0.25
+~~~
+
+### 色阶、可选颜色、颗粒、合成（2026-11-09 第二批之前）
+
+~~~text
+# 色阶：span = max(iw − ib, 1/255)；c' = ob + clamp01((c − ib)/span)^(1/gamma) · (ow − ob)（无整级量化、无 toe）
+# 可选颜色：next = clamp01(absolute ? ink + s : ink·(1 + s))；next += k·(k > 0 ? 1 − next : next)；
+#           change += weight·(next − ink)；c' = clamp01(c − change)
+# 颗粒：cell = max(1, min(w,h)·(0.0008 + 0.006·size))；32 位哈希值噪声，roughness 混入逐像素哈希；
+#       strength = amount·zone·0.5（zone 为 shadows/midtones/highlights 三角分区）
+# 合成：opacity·top.a 作为混合量，base + (B − base)·量（像素自身 alpha 乘进了调整强度）
 ~~~

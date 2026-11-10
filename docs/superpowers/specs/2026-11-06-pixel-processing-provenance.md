@@ -97,7 +97,7 @@ Highlights/Shadows、Texture/Clarity 见 `crates/algo/src/camera_raw/local_tone.
 
 ### LUT 与图层混合
 
-状态：PhotoCraft 对应的 LUT/混合/图层实现是 `photocraft-target`；PixCake 当前 LUT 三线性采样和 `normal`/`multiply`/`screen` 合成属于 `legacy-provisional` reference，具体资源必须来自已解析资源，不能在代码里编造官方滤镜内容。输入资源的来源、版本、色彩空间和许可证仍需登记；当前 GPU 3D LUT 路径仍未闭环。
+状态：PhotoCraft 对应的 LUT/混合/图层实现是 `photocraft-target`；2026-11-09 起 LUT 三线性采样（`lut3d_sample`）、操作回混（`blend_back`）和 `normal`/`multiply`/`screen` 图层合成（`psblend::composite`）为 `photocraft-ported`（8 位 sRGB 输入，见[调整图层与颗粒移植证据](../evidence/2026-11-09-photocraft-adjustments-and-grain-port.md)），具体资源必须来自已解析资源，不能在代码里编造官方滤镜内容。输入资源的来源、版本、色彩空间和许可证仍需登记；当前 GPU 3D LUT 路径仍未闭环。
 
 ## 实现状态与门禁
 
@@ -118,3 +118,4 @@ Highlights/Shadows、Texture/Clarity 见 `crates/algo/src/camera_raw/local_tone.
 2026-11-05：在本机桌面会话中，native CGL（`test_gpu_backend_C57_C60`）与 Qt 桌面 QPA（`test_gpu_shader_path`）都能创建 OpenGL context，两者的 readback 对比均通过。上一条记录里的 context 创建失败来自执行环境没有 CoreGraphics 连接，不是代码问题。变异检查：让 shader 分别忽略色温、色调、曝光、对比度，两个测试都失败；恢复后通过。据此把 Temperature/Tint/Contrast 提升为 GPU `Implemented`，`PassRegistry::gpuSupported` 的证据门槛与公式门槛合并。macOS 上 `test_gpu_shader_path` 继续使用桌面 QPA（offscreen 在 macOS 上建不出 context，只会 skip）。
 2026-11-06：全局色彩其余参数（亮度、高光、阴影、白色、黑色、纹理、清晰度、祛雾、鲜艳度、饱和度、AI 风格程度，以及色阶、HSL、黑白配置文件与黑白混合、可选颜色、颜色分级）和细节颗粒接入着色器，逐组在原生 CGL 上做读回对比（`test_gpu_backend_C57_C60`，最大差 1），变异检查逐组失败。`pixcake.color.global` 与 `pixcake.detail` 据此登记为 GPU `Implemented`；色彩编辑器偏移两条路径都不画。renderd 改为优先 GPU、失败回退参考。同日，局部调色、后期调色、AI 追色与风格、每个操作最多四个蒙版、正片叠底与滤色混合、图层合成也接入着色器并逐项读回对比（最大差 1），`pixcake.color.local/post/match/style` 一并登记为 GPU `Implemented`；3D LUT 仍只有参考实现。这里的“Implemented”只表示当时 PixCake CPU/GPU 对齐；那些旧公式现在按 `legacy-provisional` 处理，PhotoCraft-backed 能力必须重新做移植和 parity（`docs/superpowers/evidence/2026-11-06-color-groups-reference-pixels.md`）。
 2026-11-09：白平衡、曝光、对比度、亮度、鲜艳度/饱和度、HSL 八色带和色彩分级接入 PhotoCraft 移植公式（`camera_raw.cpp`、`brightness.cpp`、`kColor`），替换 `PP-WB-001` Bradford、`PP-EXP-001` 线性 EV 和 `PP-CONTRAST-001` affine 以及旧 HSL/分级/亮度/鲜艳度公式；CPU 与 PhotoCraft 对照向量一致，GPU readback 与 reference 差 ≤1；状态 `photocraft-ported`（8 位 sRGB 输入）。见[逐像素移植证据](../evidence/2026-11-09-camera-raw-per-pixel-port.md)。
+2026-11-09（第二批）：色阶（Photoshop master，8 位整级量化与暗部 toe）、可选颜色、3D LUT 采样、操作回混与图层合成、Camera Raw 颗粒（全分辨率坐标）接入 PhotoCraft 移植（`gpu/render/src/adjust.cpp`、`camera_raw.cpp`、`kColor`/`kGrain`/`kPrelude`），CPU 与 PhotoCraft 对照向量一致，GPU readback 差 ≤1；状态 `photocraft-ported`（8 位 sRGB 输入）。渲染库以 `-ffp-contract=off` 编译，与 Rust 一样不融合乘加。见[调整图层与颗粒移植证据](../evidence/2026-11-09-photocraft-adjustments-and-grain-port.md)。
