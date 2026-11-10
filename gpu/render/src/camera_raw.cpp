@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 
 namespace pixcake::gpu::camera_raw {
 namespace {
@@ -80,6 +81,142 @@ Rgb applyContrast(const Rgb& in, float contrast) {
 }
 
 // Vibrance weighted towards less saturated, non-skin colours.
+bool isLinearCurve(const CurvePoints& points) {
+  if (points.size() < 2) return true;
+  for (const auto& p : points) {
+    if (!(std::abs(p[0] - p[1]) < 1e-3F)) return false;
+  }
+  return true;
+}
+
+bool curvesNeutral(const CurveSettings& s) {
+  if (s.highlights != 0.0F || s.lights != 0.0F || s.darks != 0.0F || s.shadows != 0.0F) return false;
+  for (const auto& c : s.points) {
+    if (!isLinearCurve(c)) return false;
+  }
+  return true;
+}
+
+// curve_lut: monotone cubic (Fritsch-Carlson) through the points (0..255), sorted and with
+// inputs closer than 1e-6 (after / 255) merged into the first.
+std::vector<float> curveLut(const CurvePoints& points, std::size_t n) {
+  std::vector<std::array<float, 2>> p;
+  for (const auto& q : points) p.push_back({q[0] / 255.0F, q[1] / 255.0F});
+  std::stable_sort(p.begin(), p.end(), [](const auto& a, const auto& b) { return a[0] < b[0]; });
+  std::vector<std::array<float, 2>> kept;
+  for (const auto& q : p) {
+    if (kept.empty() || !(std::abs(q[0] - kept.back()[0]) < 1e-6F)) kept.push_back(q);
+  }
+  p = std::move(kept);
+  std::vector<float> out(n);
+  if (p.size() < 2) {
+    for (std::size_t k = 0; k < n; ++k) out[k] = static_cast<float>(k) / static_cast<float>(n - 1);
+    return out;
+  }
+  const std::size_t m = p.size();
+  std::vector<float> d(m - 1), t(m, 0.0F);
+  for (std::size_t k = 0; k + 1 < m; ++k) d[k] = (p[k + 1][1] - p[k][1]) / std::fmax(p[k + 1][0] - p[k][0], 1e-6F);
+  t[0] = d[0];
+  t[m - 1] = d[m - 2];
+  for (std::size_t k = 1; k + 1 < m; ++k) t[k] = d[k - 1] * d[k] <= 0.0F ? 0.0F : (d[k - 1] + d[k]) / 2.0F;
+  for (std::size_t k = 0; k + 1 < m; ++k) {
+    if (d[k] == 0.0F) {
+      t[k] = 0.0F;
+      t[k + 1] = 0.0F;
+      continue;
+    }
+    const float a = t[k] / d[k], b = t[k + 1] / d[k];
+    const float s = a * a + b * b;
+    if (s > 9.0F) {
+      const float tau = 3.0F / std::sqrt(s);
+      t[k] = tau * a * d[k];
+      t[k + 1] = tau * b * d[k];
+    }
+  }
+  for (std::size_t i = 0; i < n; ++i) {
+    const float x = static_cast<float>(i) / static_cast<float>(n - 1);
+    if (x <= p[0][0]) {
+      out[i] = p[0][1];
+      continue;
+    }
+    if (x >= p[m - 1][0]) {
+      out[i] = p[m - 1][1];
+      continue;
+    }
+    std::size_t k = m - 2;
+    for (std::size_t j = 0; j + 1 < m; ++j) {
+      if (x <= p[j + 1][0]) {
+        k = j;
+        break;
+      }
+    }
+    const float hh = p[k + 1][0] - p[k][0];
+    const float s = (x - p[k][0]) / hh;
+    const float h00 = 2.0F * s * s * s - 3.0F * s * s + 1.0F, h10 = s * s * s - 2.0F * s * s + s;
+    const float h01 = -2.0F * s * s * s + 3.0F * s * s, h11 = s * s * s - s * s;
+    out[i] = std::clamp(h00 * p[k][1] + h10 * hh * t[k] + h01 * p[k + 1][1] + h11 * hh * t[k + 1], 0.0F, 1.0F);
+  }
+  return out;
+}
+
+// parametric_lut: each slider (+-100) moves its region by up to a quarter of the range, as a
+// Gaussian bump times x (1 - x); kept monotone.
+std::vector<float> parametricLut(float highlights, float lights, float darks, float shadows,
+                                 const std::array<float, 3>& splits, std::size_t n) {
+  std::array<float, 3> s{};
+  for (int k = 0; k < 3; ++k) s[k] = std::clamp(splits[k], 5.0F, 95.0F) / 100.0F;
+  const std::array<float, 4> centres{s[0] / 2.0F, (s[0] + s[1]) / 2.0F, (s[1] + s[2]) / 2.0F, (s[2] + 1.0F) / 2.0F};
+  const std::array<float, 4> amounts{shadows, darks, lights, highlights};
+  const std::array<float, 4> widths{std::fmax(s[0], 0.1F), std::fmax(s[1] - s[0], 0.1F), std::fmax(s[2] - s[1], 0.1F),
+                                    std::fmax(1.0F - s[2], 0.1F)};
+  std::vector<float> lut(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    const float x = static_cast<float>(i) / static_cast<float>(n - 1);
+    float y = x;
+    for (int k = 0; k < 4; ++k) {
+      const float d = (x - centres[k]) / (widths[k] * 1.2F);
+      const float bump = std::exp(-d * d * 2.0F) * x * (1.0F - x) * 4.0F;
+      y += amounts[k] / 100.0F * 0.25F * bump;
+    }
+    lut[i] = std::clamp(y, 0.0F, 1.0F);
+  }
+  for (std::size_t i = 1; i < n; ++i) lut[i] = std::fmax(lut[i], lut[i - 1]);
+  return lut;
+}
+
+float lutEval(const std::vector<float>& lut, float v) {
+  if (!(v >= 0.0F && v <= 1.0F)) return v < 0.0F ? v + lut.front() : lut.back() + (v - 1.0F);
+  const float x = v * static_cast<float>(lut.size() - 1);
+  const std::size_t i = std::min(static_cast<std::size_t>(x), lut.size() - 2);
+  const float t = x - static_cast<float>(i);
+  return lut[i] + (lut[i + 1] - lut[i]) * t;
+}
+
+Curves resolveCurves(const CurveSettings& s) {
+  Curves c;
+  if (s.highlights != 0.0F || s.lights != 0.0F || s.darks != 0.0F || s.shadows != 0.0F) {
+    c.parametric = parametricLut(s.highlights, s.lights, s.darks, s.shadows, s.splits, kCurveLut);
+  }
+  for (int k = 0; k < 4; ++k) {
+    if (!isLinearCurve(s.points[k])) c.point[k] = curveLut(s.points[k], kCurveLut);
+  }
+  return c;
+}
+
+Rgb applyCurves(const Rgb& in, const Curves& curves) {
+  Rgb c = in;
+  if (!curves.parametric.empty()) {
+    for (float& v : c) v = lutEval(curves.parametric, v);
+  }
+  if (!curves.point[0].empty()) {
+    for (float& v : c) v = lutEval(curves.point[0], v);
+  }
+  for (int ch = 0; ch < 3; ++ch) {
+    if (!curves.point[ch + 1].empty()) c[ch] = lutEval(curves.point[ch + 1], c[ch]);
+  }
+  return c;
+}
+
 Rgb applyPresence(const Rgb& in, float vibrance, float saturation) {
   Rgb c = in;
   const float l = luma(c);

@@ -8,11 +8,13 @@
 //
 // Values are display-encoded (sRGB) RGB, as PhotoCraft's develop() takes them.  Slider units
 // are Camera Raw's, which PixCake's parameter mode shares.  Spatial stages (Dehaze,
-// Shadows/Highlights, Texture, Clarity, Detail), Whites/Blacks, curves, vignette and grain
-// are not here yet; see docs/superpowers/plans/2026-11-09-camera-raw-per-pixel-port.md.
+// Shadows/Highlights, Texture, Clarity, Detail) and Whites/Blacks are in camera_raw_spatial.hpp;
+// vignette is not ported.
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <vector>
 
 namespace pixcake::gpu::camera_raw {
 
@@ -55,6 +57,31 @@ Rgb applyBalance(const Rgb& encoded, const Rgb& gains);
 Rgb applyContrast(const Rgb& c, float contrast);
 // Stage 4, Presence (sliders -100..100; skip when both are 0).
 Rgb applyPresence(const Rgb& c, float vibrance, float saturation);
+// Stage 5, the tone curves: the parametric curve (Highlights, Lights, Darks, Shadows, -100..100,
+// regions split at three points 5..95), then the master, red, green and blue point curves
+// ([input, output] in 0..255; PhotoCraft's monotone cubic, Fritsch-Carlson).  Each is a table of
+// kCurveLut entries over 0..1, read by lutEval (linear inside, extended linearly outside).
+constexpr std::size_t kCurveLut = 1024;
+using CurvePoints = std::vector<std::array<float, 2>>;
+struct CurveSettings {
+  float highlights = 0.0F, lights = 0.0F, darks = 0.0F, shadows = 0.0F;
+  std::array<float, 3> splits{25.0F, 50.0F, 75.0F};
+  std::array<CurvePoints, 4> points{};  // master, red, green, blue; empty = linear
+};
+// PhotoCraft is_linear: fewer than two points, or every point on the diagonal (within 1e-3).
+bool isLinearCurve(const CurvePoints& points);
+bool curvesNeutral(const CurveSettings& s);
+std::vector<float> curveLut(const CurvePoints& points, std::size_t n);
+std::vector<float> parametricLut(float highlights, float lights, float darks, float shadows,
+                                 const std::array<float, 3>& splits, std::size_t n);
+float lutEval(const std::vector<float>& lut, float v);
+// The tables develop builds; an empty table is a curve that is off.
+struct Curves {
+  std::vector<float> parametric;
+  std::array<std::vector<float>, 4> point{};  // master, red, green, blue
+};
+Curves resolveCurves(const CurveSettings& s);
+Rgb applyCurves(const Rgb& c, const Curves& curves);
 // Stage 6, Color Mixer (sliders per band); greys come back unchanged.
 bool colorMixerNeutral(const std::array<float, 8>& hue, const std::array<float, 8>& sat,
                        const std::array<float, 8>& lum);
