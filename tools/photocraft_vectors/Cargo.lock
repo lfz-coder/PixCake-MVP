@@ -244,7 +244,9 @@ name = "photocraft-vectors"
 version = "0.1.0"
 dependencies = [
  "photocraft-algo",
+ "photocraft-color",
  "photocraft-compose",
+ "photocraft-doc",
 ]
 
 [[package]]

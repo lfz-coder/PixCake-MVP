@@ -2,6 +2,7 @@
 // @ 885a6ddf27cc58c07faf1722e5c327cd38953657, MIT (elected from MIT OR Apache-2.0).
 // Copyright (c) 2026 ArtCraft Team and the PhotoCraft contributors.
 // Licence text: third_party/photocraft-LICENSES/LICENSE-MIT.
+// Grain from crates/algo/src/photo_util.rs (hash01) as well.
 // Modified: rewritten in C++17 for one pixel at a time; stage numbers follow develop().
 #include <pixcake/gpu/camera_raw.hpp>
 
@@ -214,6 +215,54 @@ Rgb developPixel(const Rgb& encoded, const Settings& s) {
   if (!gradeNeutral(s.grade)) c = applyColorGrading(c, resolveGrade(s.grade, s.grade_blending, s.grade_balance));
   for (float& v : c) v = std::clamp(v, 0.0F, 1.0F);
   return c;
+}
+
+float hash01(std::int64_t x, std::int64_t y, std::uint64_t seed) {
+  std::uint64_t z = static_cast<std::uint64_t>(x) * 0x9E3779B97F4A7C15ULL ^
+                    static_cast<std::uint64_t>(y) * 0xC2B2AE3D27D4EB4FULL ^ seed * 0x165667B19E3779F9ULL;
+  z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+  z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+  z ^= z >> 31;
+  return static_cast<float>(z >> 40) / static_cast<float>(1ULL << 24);
+}
+
+float valueNoise(float x, float y, std::uint64_t seed) {
+  const float xi = std::floor(x), yi = std::floor(y);
+  const float tx = x - xi, ty = y - yi;
+  const float sx = tx * tx * (3.0F - 2.0F * tx), sy = ty * ty * (3.0F - 2.0F * ty);
+  const auto ix = static_cast<std::int64_t>(xi), iy = static_cast<std::int64_t>(yi);
+  const auto h = [&](std::int64_t dx, std::int64_t dy) { return hash01(ix + dx, iy + dy, seed); };
+  const float top = h(0, 0) + (h(1, 0) - h(0, 0)) * sx;
+  const float bot = h(0, 1) + (h(1, 1) - h(0, 1)) * sx;
+  return top + (bot - top) * sy;
+}
+
+Grain grainOf(float amount, float size, float roughness, std::uint64_t seed, float pixel_scale) {
+  Grain g;
+  g.cell = 1.0F + size / 25.0F;
+  g.roughness = roughness / 100.0F;
+  g.amount = amount / 100.0F * 0.12F;
+  g.seed = seed;
+  g.scale = 1.0F / std::clamp(pixel_scale, 0.01F, 1.0F);
+  return g;
+}
+
+float grainNoise(const Grain& g, float x, float y) {
+  // Sample in full-resolution coordinates so previews match the result.
+  const float fx = x * g.scale / g.cell, fy = y * g.scale / g.cell;
+  return valueNoise(fx, fy, g.seed) * (1.0F - g.roughness) +
+         (valueNoise(fx * 2.3F, fy * 2.3F, g.seed + 7) - 0.0F) * g.roughness;
+}
+
+float grainWeight(const Rgb& c) {
+  const float l = std::clamp(luma(c), 0.0F, 1.0F);
+  return 0.4F + 2.4F * l * (1.0F - l);
+}
+
+Rgb applyGrain(const Rgb& c, const Grain& g, float x, float y) {
+  const float n = grainNoise(g, x, y);
+  const float v = (n - 0.5F) * 2.0F * g.amount * grainWeight(c);
+  return {c[0] + v, c[1] + v, c[2] + v};
 }
 
 }  // namespace pixcake::gpu::camera_raw

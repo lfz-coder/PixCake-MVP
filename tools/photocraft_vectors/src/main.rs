@@ -3,9 +3,11 @@
 //! `develop` runs white balance/exposure, Contrast, Presence, Color Mixer and Color Grading.
 //! With `brightness`: samples of `compose::adjust::modern_lut(b, 0)`
 //! (`tests/gpu/data/modern_brightness_vectors.inc`).
+//! With `grain`: Camera Raw grain (`tests/gpu/data/grain_vectors.inc`).
 //! With `adjust`: Levels, Selective Color, 3D LUT and composite (`tests/gpu/data/adjust_vectors.inc`).
 
 mod adjust;
+mod grain;
 
 use photocraft_algo::camera_raw::{CameraRaw, Wheel, develop};
 
@@ -136,6 +138,10 @@ fn brightness() {
 }
 
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("grain") {
+        grain::run();
+        return;
+    }
     if std::env::args().nth(1).as_deref() == Some("adjust") {
         adjust::run();
         return;

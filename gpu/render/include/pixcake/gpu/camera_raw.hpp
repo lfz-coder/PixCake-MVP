@@ -12,6 +12,7 @@
 // are not here yet; see docs/superpowers/plans/2026-11-09-camera-raw-per-pixel-port.md.
 
 #include <array>
+#include <cstdint>
 
 namespace pixcake::gpu::camera_raw {
 
@@ -68,6 +69,26 @@ struct Grade {
 bool gradeNeutral(const std::array<Wheel, 4>& wheels);
 Grade resolveGrade(const std::array<Wheel, 4>& wheels, float blending, float balance);
 Rgb applyColorGrading(const Rgb& c, const Grade& g);
+
+// Stage 9, grain: value noise keyed on full-resolution position (photo_util.rs hash01,
+// camera_raw.rs value_noise, per_pixel.rs Grain::new).
+float hash01(std::int64_t x, std::int64_t y, std::uint64_t seed);
+float valueNoise(float x, float y, std::uint64_t seed);
+struct Grain {
+  float cell = 1.0F;       // noise cell, full-resolution pixels
+  float roughness = 0.0F;  // weight of the finer octave
+  float amount = 0.0F;
+  std::uint64_t seed = 0;
+  float scale = 1.0F;      // full-resolution pixels per frame pixel (1 / pixel_scale)
+};
+// Camera Raw sliders: amount, size, roughness 0..100; pixel_scale = frame / full resolution.
+Grain grainOf(float amount, float size, float roughness, std::uint64_t seed, float pixel_scale);
+// The two-octave noise n (0..1) at frame pixel (x, y).
+float grainNoise(const Grain& g, float x, float y);
+// The tone weight 0.4 + 2.4 l (1 - l) at the pixel's clipped luminance.
+float grainWeight(const Rgb& c);
+// c + (n - 0.5) * 2 * amount * weight on every channel.
+Rgb applyGrain(const Rgb& c, const Grain& g, float x, float y);
 
 // One display-encoded pixel through stages 1, 3, 4, 6, 7, then clipped to 0..1 unless
 // the settings are an identity (PhotoCraft's develop with float = false).

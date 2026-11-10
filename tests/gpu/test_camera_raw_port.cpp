@@ -145,7 +145,35 @@ void test_matches_photocraft_vectors() {
 
 }  // namespace
 
+#include "data/grain_vectors.inc"
+
+// Camera Raw stage 9: grain in full-resolution coordinates, against PhotoCraft's develop.
+void test_grain_matches_photocraft() {
+  namespace cr = pixcake::gpu::camera_raw;
+  float worst = 0.0F;
+  for (const auto& g : kGrain) {
+    const cr::Grain grain = cr::grainOf(g.amount, g.size, g.roughness, g.seed, g.pixel_scale);
+    for (int y = 0; y < 12; ++y) {
+      for (int x = 0; x < 12; ++x) {
+        const Rgb in{0.2F + 0.6F * static_cast<float>(x) / 11.0F, 0.15F + 0.7F * static_cast<float>(y) / 11.0F, 0.5F};
+        const Rgb out = cr::applyGrain(in, grain, static_cast<float>(x), static_cast<float>(y));
+        for (int c = 0; c < 3; ++c) {
+          const float got = std::clamp(out[c], 0.0F, 1.0F), want = g.out[(y * 12 + x) * 3 + c];
+          worst = std::max(worst, std::fabs(got - want));
+          if (!near(got, want, 2e-6F)) {
+            std::printf("grain %g/%g/%g scale %g seed %u at (%d,%d) c%d: got %.9g want %.9g\n", g.amount, g.size,
+                        g.roughness, g.pixel_scale, g.seed, x, y, c, got, want);
+            assert(false);
+          }
+        }
+      }
+    }
+  }
+  std::printf("grain: worst %.3g\n", worst);
+}
+
 int main() {
+  test_grain_matches_photocraft();
   test_identity();
   test_white_balance_gains();
   test_exposure_one_stop();
