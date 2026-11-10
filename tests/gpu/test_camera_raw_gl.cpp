@@ -1,0 +1,159 @@
+// The OpenGL Camera Raw whole-frame stages (camera_raw_gl.cpp) against the C++ reference
+// (camera_raw_spatial.cpp), which matches PhotoCraft bit for bit.  Tolerance 1/4096 (porting
+// policy section 8, after PhotoCraft's Camera Raw GPU tests).  Skips without a native context.
+#include <pixcake/gl/native_backend.hpp>
+#include <pixcake/gpu/camera_raw_gl.hpp>
+#include <pixcake/gpu/camera_raw_spatial.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <string>
+#include <vector>
+
+#define CHECK(x)                                                         \
+  do {                                                                   \
+    if (!(x)) {                                                          \
+      std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #x);  \
+      std::exit(1);                                                      \
+    }                                                                    \
+  } while (0)
+
+namespace {
+
+namespace cr = pixcake::gpu::camera_raw;
+namespace crgl = pixcake::gpu::camera_raw_gl;
+constexpr float kTolerance = 1.0F / 4096.0F;
+
+std::vector<float> noise(std::uint32_t w, std::uint32_t h, std::uint32_t seed) {
+  std::uint32_t s = seed * 2654435761U | 1U;
+  std::vector<float> v(std::size_t{w} * h);
+  for (float& x : v) {
+    s ^= s << 13;
+    s ^= s >> 17;
+    s ^= s << 5;
+    x = static_cast<float>(s % 40000U) / 10000.0F - 1.0F;  // -1 .. 3
+  }
+  return v;
+}
+
+float worst_of(const std::vector<float>& a, const std::vector<float>& b) {
+  CHECK(a.size() == b.size());
+  float worst = 0.0F;
+  for (std::size_t i = 0; i < a.size(); ++i) {
+    const float d = std::fabs(a[i] - b[i]);
+    worst = std::isnan(d) ? 1e30F : std::max(worst, d);
+  }
+  return worst;
+}
+void expect_close(const char* name, const std::vector<float>& want, const std::vector<float>& got, float tolerance = kTolerance) {
+  const float worst = worst_of(want, got);
+  std::printf("%-40s worst %.3g\n", name, worst);
+  CHECK(worst <= tolerance);
+}
+
+crgl::Plane up(crgl::Gl& g, const std::vector<float>& v, std::uint32_t w, std::uint32_t h) {
+  crgl::Plane p;
+  CHECK(crgl::upload(g, v, w, h, p));
+  return p;
+}
+std::vector<float> down(crgl::Gl& g, const crgl::Plane& p) {
+  std::vector<float> v;
+  CHECK(crgl::download(g, p, v));
+  return v;
+}
+
+struct Size {
+  std::uint32_t w, h;
+};
+const Size kSizes[] = {{37, 23}, {1, 9}, {9, 1}};
+
+void test_box_mean_gl(crgl::Gl& g) {
+  for (const auto s : kSizes) {
+    const auto v = noise(s.w, s.h, s.w * 7 + s.h);
+    const auto in = up(g, v, s.w, s.h);
+    for (const std::size_t r : {1, 3, 12}) {
+      crgl::Plane out;
+      CHECK(crgl::boxMean(g, in, r, out));
+      char name[64];
+      std::snprintf(name, sizeof name, "boxMean %ux%u r=%zu", s.w, s.h, r);
+      expect_close(name, cr::boxMean(v, s.w, s.h, r), down(g, out));
+    }
+  }
+}
+
+void test_gauss_gl(crgl::Gl& g) {
+  const auto v = noise(37, 23, 3);
+  const auto in = up(g, v, 37, 23);
+  for (const float sigma : {0.2F, 1.5F, 4.8F}) {
+    crgl::Plane out;
+    CHECK(crgl::gauss(g, in, sigma, out));
+    char name[64];
+    std::snprintf(name, sizeof name, "gauss sigma=%.1f", sigma);
+    expect_close(name, cr::gauss(v, 37, 23, sigma), down(g, out));
+  }
+}
+
+void test_guided_gl(crgl::Gl& g, bool fast) {
+  const std::uint32_t w = 37, h = 23;
+  const auto i = noise(w, h, 11), p = noise(w, h, 12), grey = std::vector<float>(std::size_t{w} * h, 0.5F);
+  const auto gi = up(g, i, w, h), gp = up(g, p, w, h), gg = up(g, grey, w, h);
+  for (const std::size_t r : {3, 24, 81}) {
+    for (const float eps : {0.005F, 1e-3F}) {
+      crgl::Plane out, flat;
+      CHECK(fast ? crgl::guidedFast(g, gi, gp, r, eps, out) : crgl::guided(g, gi, gp, r, eps, out));
+      CHECK(fast ? crgl::guidedFast(g, gg, gg, r, eps, flat) : crgl::guided(g, gg, gg, r, eps, flat));
+      char name[64];
+      std::snprintf(name, sizeof name, "%s r=%zu eps=%g", fast ? "guidedFast" : "guided", r, eps);
+      expect_close(name, fast ? cr::guidedFast(i, p, w, h, r, eps) : cr::guided(i, p, w, h, r, eps), down(g, out));
+      std::snprintf(name, sizeof name, "%s grey r=%zu eps=%g", fast ? "guidedFast" : "guided", r, eps);
+      expect_close(name, fast ? cr::guidedFast(grey, grey, w, h, r, eps) : cr::guided(grey, grey, w, h, r, eps), down(g, flat));
+    }
+  }
+}
+
+void test_rank_filter_gl(crgl::Gl& g) {
+  for (const auto s : kSizes) {
+    const auto v = noise(s.w, s.h, 5);
+    const auto in = up(g, v, s.w, s.h);
+    for (const std::size_t r : {2, 12}) {
+      for (const bool take_max : {false, true}) {
+        crgl::Plane out;
+        CHECK(crgl::rankFilter(g, in, r, take_max, out));
+        char name[64];
+        std::snprintf(name, sizeof name, "rankFilter %ux%u r=%zu %s", s.w, s.h, r, take_max ? "max" : "min");
+        expect_close(name, cr::rankFilter(v, s.w, s.h, r, take_max), down(g, out), 0.0F);
+      }
+    }
+  }
+}
+
+}  // namespace
+
+int main() {
+  if (!pixcake::gl::native::available()) {
+    std::printf("test_camera_raw_gl: skipped (no native GL)\n");
+    return 0;
+  }
+  auto context = pixcake::gl::native::create_context();
+  if (!context.valid() || !context.makeCurrent()) {
+    std::printf("test_camera_raw_gl: skipped (no context)\n");
+    return 0;
+  }
+  {
+    crgl::Gl g(context);
+    CHECK(g.ok());
+    test_box_mean_gl(g);
+    test_gauss_gl(g);
+    test_guided_gl(g, false);
+    test_guided_gl(g, true);
+    test_rank_filter_gl(g);
+    if (!g.ok()) std::fprintf(stderr, "GL error: %s\n", g.error().c_str());
+    CHECK(g.ok());
+  }
+  context.doneCurrent();
+  std::printf("test_camera_raw_gl: ok\n");
+  return 0;
+}

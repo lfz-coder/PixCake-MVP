@@ -49,5 +49,8 @@ std::vector<float> guided(const std::vector<float>& i, const std::vector<float>&
 std::vector<float> guidedFast(const std::vector<float>& i, const std::vector<float>& p, std::size_t w, std::size_t h,
                               std::size_t r, float eps);
 float bilinear(const std::vector<float>& buf, std::size_t w, std::size_t h, float x, float y);
+// The minimum (or maximum) over each (2r + 1)^2 window cut to the frame (dehaze's dark channel
+// and opening).
+std::vector<float> rankFilter(const std::vector<float>& v, std::size_t w, std::size_t h, std::size_t r, bool take_max);
 
 }  // namespace pixcake::gpu::camera_raw

@@ -290,6 +290,34 @@ std::vector<float> guidedFast(const std::vector<float>& i, const std::vector<flo
   return out;
 }
 
+std::vector<float> rankFilter(const std::vector<float>& v, std::size_t sw, std::size_t sh, std::size_t r, bool take_max) {
+  const std::size_t n = sw * sh;
+  const float start = take_max ? std::numeric_limits<float>::lowest() : std::numeric_limits<float>::max();
+  const auto pick = [take_max](float a, float b) { return take_max ? std::fmax(a, b) : std::fmin(a, b); };
+  std::vector<float> a(n), b(n);
+  par(sh, n, [&](std::size_t first, std::size_t end) {
+    for (std::size_t y = first; y < end; ++y) {
+      for (std::size_t x = 0; x < sw; ++x) {
+        const std::size_t x0 = x >= r ? x - r : 0, x1 = std::min(x + r, sw - 1);
+        float acc = start;
+        for (std::size_t xx = x0; xx <= x1; ++xx) acc = pick(acc, v[y * sw + xx]);
+        a[y * sw + x] = acc;
+      }
+    }
+  });
+  par(sh, n, [&](std::size_t first, std::size_t end) {
+    for (std::size_t y = first; y < end; ++y) {
+      for (std::size_t x = 0; x < sw; ++x) {
+        const std::size_t y0 = y >= r ? y - r : 0, y1 = std::min(y + r, sh - 1);
+        float acc = start;
+        for (std::size_t yy = y0; yy <= y1; ++yy) acc = pick(acc, a[yy * sw + x]);
+        b[y * sw + x] = acc;
+      }
+    }
+  });
+  return b;
+}
+
 void dehaze(Frame& frame, float amount) {
   const std::size_t w = frame.width, h = frame.height;
   if (w == 0 || h == 0) return;
@@ -308,33 +336,7 @@ void dehaze(Frame& frame, float amount) {
   for (std::size_t i = 0; i < n; ++i)
     for (int c = 0; c < 3; ++c) small[i][c] = small[i][c] / std::max(cnt[i], 1.0F);
   const std::size_t r = std::max<std::size_t>(std::max(sw, sh) / 60, 2);
-  // The minimum (or maximum) over each (2r + 1)^2 window.
-  const auto rank_filter = [&](const std::vector<float>& v, bool take_max) {
-    const float start = take_max ? std::numeric_limits<float>::lowest() : std::numeric_limits<float>::max();
-    const auto pick = [take_max](float a, float b) { return take_max ? std::fmax(a, b) : std::fmin(a, b); };
-    std::vector<float> a(n), b(n);
-    par(sh, n, [&](std::size_t first, std::size_t end) {
-      for (std::size_t y = first; y < end; ++y) {
-        for (std::size_t x = 0; x < sw; ++x) {
-          const std::size_t x0 = x >= r ? x - r : 0, x1 = std::min(x + r, sw - 1);
-          float acc = start;
-          for (std::size_t xx = x0; xx <= x1; ++xx) acc = pick(acc, v[y * sw + xx]);
-          a[y * sw + x] = acc;
-        }
-      }
-    });
-    par(sh, n, [&](std::size_t first, std::size_t end) {
-      for (std::size_t y = first; y < end; ++y) {
-        for (std::size_t x = 0; x < sw; ++x) {
-          const std::size_t y0 = y >= r ? y - r : 0, y1 = std::min(y + r, sh - 1);
-          float acc = start;
-          for (std::size_t yy = y0; yy <= y1; ++yy) acc = pick(acc, a[yy * sw + x]);
-          b[y * sw + x] = acc;
-        }
-      }
-    });
-    return b;
-  };
+  const auto rank_filter = [&](const std::vector<float>& v, bool take_max) { return rankFilter(v, sw, sh, r, take_max); };
   std::vector<float> channel_min(n);
   for (std::size_t i = 0; i < n; ++i) channel_min[i] = std::fmin(std::fmin(small[i][0], small[i][1]), small[i][2]);
   const auto dark = rank_filter(channel_min, false);

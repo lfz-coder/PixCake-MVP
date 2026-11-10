@@ -380,6 +380,9 @@ add_test(NAME test_gpu_backend_C57_C60 COMMAND test_gpu_backend_native)
 add_executable(test_gl_float_textures gpu/test_gl_float_textures.cpp)
 target_link_libraries(test_gl_float_textures PRIVATE pixcake_gpu_backend_native pixcake_warnings)
 add_test(NAME test_gl_float_textures COMMAND test_gl_float_textures)
+add_executable(test_camera_raw_gl gpu/test_camera_raw_gl.cpp)
+target_link_libraries(test_camera_raw_gl PRIVATE pixcake_gpu_render pixcake_gpu_backend_native pixcake_warnings)
+add_test(NAME test_camera_raw_gl COMMAND test_camera_raw_gl)
 
 add_test(
   NAME arch_dependencies
