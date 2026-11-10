@@ -11,3 +11,5 @@ description = "Dumps PhotoCraft Camera Raw per-pixel vectors for PixCake's C++ p
 [dependencies]
 photocraft-algo = { path = "../../third_party/photocraft/crates/algo" }
 photocraft-compose = { path = "../../third_party/photocraft/crates/compose" }
+photocraft-color = { path = "../../third_party/photocraft/crates/color" }
+photocraft-doc = { path = "../../third_party/photocraft/crates/doc" }

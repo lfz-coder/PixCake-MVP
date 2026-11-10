@@ -3,12 +3,15 @@
 //! `develop` runs white balance/exposure, Contrast, Presence, Color Mixer and Color Grading.
 //! With `brightness`: samples of `compose::adjust::modern_lut(b, 0)`
 //! (`tests/gpu/data/modern_brightness_vectors.inc`).
+//! With `adjust`: Levels, Selective Color, 3D LUT and composite (`tests/gpu/data/adjust_vectors.inc`).
+
+mod adjust;
 
 use photocraft_algo::camera_raw::{CameraRaw, Wheel, develop};
 
-const COMMIT: &str = "885a6ddf27cc58c07faf1722e5c327cd38953657";
+pub(crate) const COMMIT: &str = "885a6ddf27cc58c07faf1722e5c327cd38953657";
 
-fn inputs() -> Vec<[f32; 3]> {
+pub(crate) fn inputs() -> Vec<[f32; 3]> {
     let levels = [0.05f32, 0.3, 0.6, 0.95];
     let mut v = Vec::new();
     for r in levels {
@@ -111,11 +114,11 @@ fn settings(p: &CameraRaw) -> Vec<f32> {
     v
 }
 
-fn f(v: f32) -> String {
+pub(crate) fn f(v: f32) -> String {
     format!("{v:.9e}f")
 }
 
-fn list(v: &[f32]) -> String {
+pub(crate) fn list(v: &[f32]) -> String {
     v.iter().map(|x| f(*x)).collect::<Vec<_>>().join(", ")
 }
 
@@ -133,6 +136,10 @@ fn brightness() {
 }
 
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("adjust") {
+        adjust::run();
+        return;
+    }
     if std::env::args().nth(1).as_deref() == Some("brightness") {
         brightness();
         return;

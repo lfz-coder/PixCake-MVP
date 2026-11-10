@@ -232,6 +232,10 @@ add_executable(test_brightness_port gpu/test_brightness_port.cpp)
 target_include_directories(test_brightness_port PRIVATE ${CMAKE_SOURCE_DIR}/tests/gpu)
 target_link_libraries(test_brightness_port PRIVATE pixcake_gpu_render pixcake_warnings)
 add_test(NAME test_brightness_port COMMAND test_brightness_port)
+add_executable(test_adjust_port gpu/test_adjust_port.cpp)
+target_include_directories(test_adjust_port PRIVATE ${CMAKE_SOURCE_DIR}/tests/gpu)
+target_link_libraries(test_adjust_port PRIVATE pixcake_gpu_render pixcake_warnings)
+add_test(NAME test_adjust_port COMMAND test_adjust_port)
 add_test(NAME check_photocraft_license
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P ${CMAKE_SOURCE_DIR}/tests/gpu/check_photocraft_license.cmake)
 # Not a test: frame time of the reference renderer at the preview's maximum size (run the Release build).
