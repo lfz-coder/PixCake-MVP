@@ -42,35 +42,33 @@ Rgb rgbToHsv(const Rgb& c) {
   return {h, mx > 1e-9F ? d / mx : 0.0F, mx};
 }
 
-bool hslNeutral(const Settings& s) {
-  for (int k = 0; k < 8; ++k) {
-    if (s.hsl_hue[k] != 0.0F || s.hsl_sat[k] != 0.0F || s.hsl_lum[k] != 0.0F) return false;
-  }
-  return true;
-}
-
-bool gradeNeutral(const Settings& s) {
-  for (const Wheel& w : s.grade) {
-    if (w.sat != 0.0F || w.lum != 0.0F) return false;
-  }
-  return true;
-}
-
 bool wbNeutral(const Settings& s) { return s.temperature == 0.0F && s.tint == 0.0F && s.exposure == 0.0F; }
 
-// Stage 1: white balance and exposure as gains in linear light.
-Rgb balance(Rgb c, const Settings& s) {
-  const Rgb g = whiteBalanceGains(s.temperature, s.tint);
+}  // namespace
+
+bool isIdentity(const Settings& s) {
+  return wbNeutral(s) && s.contrast == 0.0F && s.vibrance == 0.0F && s.saturation == 0.0F &&
+         colorMixerNeutral(s.hsl_hue, s.hsl_sat, s.hsl_lum) && gradeNeutral(s.grade);
+}
+
+Rgb balanceGains(float temperature, float tint, float exposure) {
+  const Rgb g = whiteBalanceGains(temperature, tint);
   const float norm = luma(g);
-  for (int i = 0; i < 3; ++i) {
-    const float gain = g[i] / norm * std::pow(2.0F, s.exposure);
-    c[i] = linearToSrgb(std::max(srgbToLinear(c[i]) * gain, 0.0F));
-  }
+  Rgb gains{};
+  for (int i = 0; i < 3; ++i) gains[i] = g[i] / norm * std::pow(2.0F, exposure);
+  return gains;
+}
+
+Rgb applyBalance(const Rgb& encoded, const Rgb& gains) {
+  Rgb c = encoded;
+  for (int i = 0; i < 3; ++i) c[i] = linearToSrgb(std::max(srgbToLinear(c[i]) * gains[i], 0.0F));
   return c;
 }
 
-// Stage 3 with Contrast as its only control: an S-curve on luminance, colour ratios kept.
-Rgb contrast(Rgb c, float k_con) {
+// An S-curve on luminance, colour ratios kept.
+Rgb applyContrast(const Rgb& in, float contrast) {
+  const float k_con = contrast / 100.0F * 0.6F;
+  Rgb c = in;
   const float l0 = std::max(luma(c), 0.0F);
   const float lc = std::min(l0, 1.0F);
   float lv = lc - k_con * std::sin(kTau * std::clamp(lc, 0.0F, 1.0F)) / kTau;
@@ -80,29 +78,38 @@ Rgb contrast(Rgb c, float k_con) {
   return c;
 }
 
-// Stage 4, Presence: Vibrance weighted towards less saturated, non-skin colours.
-Rgb presence(Rgb c, const Settings& s) {
+// Vibrance weighted towards less saturated, non-skin colours.
+Rgb applyPresence(const Rgb& in, float vibrance, float saturation) {
+  Rgb c = in;
   const float l = luma(c);
   const float mx = std::max({c[0], c[1], c[2]});
   const float mn = std::min({c[0], c[1], c[2]});
   const float sat = mx > 1e-6F ? (mx - mn) / mx : 0.0F;
   const float hue = rgbToHsv(c)[0];
   const float skin = std::clamp(1.0F - std::fabs(hue - 25.0F) / 25.0F, 0.0F, 1.0F) * 0.5F;
-  const float k = 1.0F + s.saturation / 100.0F + s.vibrance / 100.0F * (1.0F - sat) * (1.0F - skin);
+  const float k = 1.0F + saturation / 100.0F + vibrance / 100.0F * (1.0F - sat) * (1.0F - skin);
   for (float& v : c) v = l + (v - l) * std::max(k, 0.0F);
   return c;
 }
 
-// Stage 6, Color Mixer: hue, saturation and luminance per band; greys are left alone.
-Rgb colorMixer(Rgb c, const Settings& s) {
+bool colorMixerNeutral(const std::array<float, 8>& hue, const std::array<float, 8>& sat,
+                       const std::array<float, 8>& lum) {
+  for (int k = 0; k < 8; ++k) {
+    if (hue[k] != 0.0F || sat[k] != 0.0F || lum[k] != 0.0F) return false;
+  }
+  return true;
+}
+
+Rgb applyColorMixer(const Rgb& c, const std::array<float, 8>& hue, const std::array<float, 8>& sat,
+                    const std::array<float, 8>& lum) {
   const Rgb hsv = rgbToHsv({std::max(c[0], 0.0F), std::max(c[1], 0.0F), std::max(c[2], 0.0F)});
   if (hsv[1] <= 1e-4F) return c;
   const std::array<float, 8> w = bandWeights(hsv[0]);
   float dh = 0.0F, ds = 0.0F, dl = 0.0F;
   for (int k = 0; k < 8; ++k) {
-    dh += w[k] * s.hsl_hue[k];
-    ds += w[k] * s.hsl_sat[k];
-    dl += w[k] * s.hsl_lum[k];
+    dh += w[k] * hue[k];
+    ds += w[k] * sat[k];
+    dl += w[k] * lum[k];
   }
   const float nh = hsv[0] + dh / 100.0F * 30.0F;
   const float ns = std::clamp(hsv[1] * (1.0F + ds / 100.0F), 0.0F, 1.0F);
@@ -117,36 +124,42 @@ Rgb colorMixer(Rgb c, const Settings& s) {
   return out;
 }
 
-// Stage 7, Color Grading: shadows / midtones / highlights / global wheels.
-Rgb colorGrading(Rgb c, const Settings& s) {
-  std::array<Rgb, 4> tints{};
-  for (int k = 0; k < 4; ++k) {
-    const Rgb hue = hsvToRgb(s.grade[k].hue, 1.0F, 1.0F);
-    const float l = luma(hue);
-    for (int ch = 0; ch < 3; ++ch) tints[k][ch] = (hue[ch] - l) * s.grade[k].sat / 100.0F * 0.3F;
+bool gradeNeutral(const std::array<Wheel, 4>& wheels) {
+  for (const Wheel& w : wheels) {
+    if (w.sat != 0.0F || w.lum != 0.0F) return false;
   }
-  const float blend = 0.15F + std::clamp(s.grade_blending, 0.0F, 100.0F) / 100.0F * 0.35F;
-  const float bal = std::clamp(s.grade_balance, -100.0F, 100.0F) / 100.0F * 0.25F;
+  return true;
+}
+
+Grade resolveGrade(const std::array<Wheel, 4>& wheels, float blending, float balance) {
+  Grade g;
+  for (int k = 0; k < 4; ++k) {
+    const Rgb hue = hsvToRgb(wheels[k].hue, 1.0F, 1.0F);
+    const float l = luma(hue);
+    for (int ch = 0; ch < 3; ++ch) g.tints[k][ch] = (hue[ch] - l) * wheels[k].sat / 100.0F * 0.3F;
+    g.lums[k] = wheels[k].lum;
+  }
+  g.blend = 0.15F + std::clamp(blending, 0.0F, 100.0F) / 100.0F * 0.35F;
+  g.balance = std::clamp(balance, -100.0F, 100.0F) / 100.0F * 0.25F;
+  return g;
+}
+
+// Shadows / midtones / highlights / global wheels.
+Rgb applyColorGrading(const Rgb& in, const Grade& g) {
+  Rgb c = in;
   const float l = std::clamp(luma(c), 0.0F, 1.0F);
-  const float sh = 1.0F - smoothstep(0.0F, 0.5F + bal + blend, l);
-  const float hi = smoothstep(0.5F + bal - blend, 1.0F, l);
+  const float sh = 1.0F - smoothstep(0.0F, 0.5F + g.balance + g.blend, l);
+  const float hi = smoothstep(0.5F + g.balance - g.blend, 1.0F, l);
   const float mid = std::max(1.0F - sh - hi, 0.0F);
   const std::array<float, 4> masks = {sh, mid, hi, 1.0F};
   for (int k = 0; k < 4; ++k) {
-    for (int ch = 0; ch < 3; ++ch) c[ch] += masks[k] * tints[k][ch];
-    if (s.grade[k].lum != 0.0F) {
-      const float f = std::pow(2.0F, masks[k] * s.grade[k].lum / 100.0F * 0.6F);
+    for (int ch = 0; ch < 3; ++ch) c[ch] += masks[k] * g.tints[k][ch];
+    if (g.lums[k] != 0.0F) {
+      const float f = std::pow(2.0F, masks[k] * g.lums[k] / 100.0F * 0.6F);
       for (float& v : c) v = v * f;
     }
   }
   return c;
-}
-
-}  // namespace
-
-bool isIdentity(const Settings& s) {
-  return wbNeutral(s) && s.contrast == 0.0F && s.vibrance == 0.0F && s.saturation == 0.0F && hslNeutral(s) &&
-         gradeNeutral(s);
 }
 
 std::array<float, 8> bandWeights(float hue) {
@@ -194,11 +207,11 @@ Rgb whiteBalanceGains(float temperature, float tint) {
 Rgb developPixel(const Rgb& encoded, const Settings& s) {
   if (isIdentity(s)) return encoded;
   Rgb c = encoded;
-  if (!wbNeutral(s)) c = balance(c, s);
-  if (s.contrast != 0.0F) c = contrast(c, s.contrast / 100.0F * 0.6F);
-  if (s.vibrance != 0.0F || s.saturation != 0.0F) c = presence(c, s);
-  if (!hslNeutral(s)) c = colorMixer(c, s);
-  if (!gradeNeutral(s)) c = colorGrading(c, s);
+  if (!wbNeutral(s)) c = applyBalance(c, balanceGains(s.temperature, s.tint, s.exposure));
+  if (s.contrast != 0.0F) c = applyContrast(c, s.contrast);
+  if (s.vibrance != 0.0F || s.saturation != 0.0F) c = applyPresence(c, s.vibrance, s.saturation);
+  if (!colorMixerNeutral(s.hsl_hue, s.hsl_sat, s.hsl_lum)) c = applyColorMixer(c, s.hsl_hue, s.hsl_sat, s.hsl_lum);
+  if (!gradeNeutral(s.grade)) c = applyColorGrading(c, resolveGrade(s.grade, s.grade_blending, s.grade_balance));
   for (float& v : c) v = std::clamp(v, 0.0F, 1.0F);
   return c;
 }

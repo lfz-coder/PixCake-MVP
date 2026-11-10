@@ -45,6 +45,30 @@ Rgb whiteBalanceGains(float temperature, float tint);
 std::array<float, 8> bandWeights(float hue);
 Rgb hsvToRgb(float h, float s, float v);
 
+// The stages one at a time, without the final clip.  developPixel is these in order.
+// Stage 1: per-channel gains (white balance normalised to unit luminance, times 2^exposure);
+// applyBalance encodes(max(decode(v) * gain, 0)).  Skip it when all three sliders are 0.
+Rgb balanceGains(float temperature, float tint, float exposure);
+Rgb applyBalance(const Rgb& encoded, const Rgb& gains);
+// Stage 3 with Contrast as its only control (slider -100..100; skip at 0).
+Rgb applyContrast(const Rgb& c, float contrast);
+// Stage 4, Presence (sliders -100..100; skip when both are 0).
+Rgb applyPresence(const Rgb& c, float vibrance, float saturation);
+// Stage 6, Color Mixer (sliders per band); greys come back unchanged.
+bool colorMixerNeutral(const std::array<float, 8>& hue, const std::array<float, 8>& sat,
+                       const std::array<float, 8>& lum);
+Rgb applyColorMixer(const Rgb& c, const std::array<float, 8>& hue, const std::array<float, 8>& sat,
+                    const std::array<float, 8>& lum);
+// Stage 7, Color Grading, its wheels resolved once.
+struct Grade {
+  std::array<Rgb, 4> tints{};
+  std::array<float, 4> lums{};
+  float blend = 0.0F, balance = 0.0F;
+};
+bool gradeNeutral(const std::array<Wheel, 4>& wheels);
+Grade resolveGrade(const std::array<Wheel, 4>& wheels, float blending, float balance);
+Rgb applyColorGrading(const Rgb& c, const Grade& g);
+
 // One display-encoded pixel through stages 1, 3, 4, 6, 7, then clipped to 0..1 unless
 // the settings are an identity (PhotoCraft's develop with float = false).
 Rgb developPixel(const Rgb& encoded, const Settings& s);
