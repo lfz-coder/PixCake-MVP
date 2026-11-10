@@ -116,8 +116,9 @@ int main() {
          pixcake::gpu::PassStatus::Implemented);
   assert(executor.renderReference(white_balance, image(128, 128, 128), inputs, result));
   assert(result.success && result.image.revision == 77);
-  // PP-WB-001 golden vector: D65 gray -> D50 at temperature +100.
-  assert(result.image.pixels[0] == 151 && result.image.pixels[1] == 125 && result.image.pixels[2] == 92);
+  // PhotoCraft Camera Raw white balance (camera_raw::balanceGains): temperature +100 warms grey
+  // in linear light at unit luminance.  (The former Bradford D65 -> D50 vector was 151/125/92.)
+  assert(result.image.pixels[0] == 144 && result.image.pixels[1] == 125 && result.image.pixels[2] == 102);
   auto neutral_balance = operation("color.global", "color", "pixcake.color.global",
                                    {value("temperature", 0.0), value("tint", 0.0)});
   assert(executor.renderReference(neutral_balance, image(120, 100, 80), inputs, result));
@@ -126,24 +127,26 @@ int main() {
                         {value("temperature", 0.0), value("tint", 50.0)});
   assert(pixcake::gpu::PassRegistry::classify(tint.operations[0]) == pixcake::gpu::PassStatus::Implemented);
   assert(executor.renderReference(tint, image(128, 128, 128), inputs, result));
-  // PP-WB-001 golden vector: D65 gray -> green-cone half-stop at tint +50.
-  assert(result.image.pixels[0] == 95 && result.image.pixels[1] == 156 && result.image.pixels[2] == 126);
+  // Camera Raw tint: positive lowers green towards magenta.  (The former Bradford green-cone
+  // vector went the other way: 95/156/126.)
+  assert(result.image.pixels[0] == 134 && result.image.pixels[1] == 126 && result.image.pixels[2] == 134);
 
   auto exposure = operation("color.global", "tone", "pixcake.color.global",
                             {value("exposure", 1.0)});
   assert(executor.renderReference(exposure, image(64, 64, 64), inputs, result));
-  assert(result.image.pixels[0] >= 126 && result.image.pixels[0] <= 130);
+  // Camera Raw exposure doubles linear light: sRGB 64 -> 90 (the former byte doubling gave 128).
+  assert(result.image.pixels[0] == 90);
   auto half_stop = operation("color.global", "tone", "pixcake.color.global",
                              {value("exposure", 0.5)});
   assert(executor.renderReference(half_stop, image(64, 64, 64), inputs, result));
-  assert(result.image.pixels[0] >= 90 && result.image.pixels[0] <= 91);
+  assert(result.image.pixels[0] == 76);  // former: 90-91
 
   auto contrast = operation("color.global", "tone", "pixcake.color.global",
                             {value("contrast", 100.0)});
   assert(pixcake::gpu::PassRegistry::classify(contrast.operations[0]) ==
          pixcake::gpu::PassStatus::Implemented);
   assert(executor.renderReference(contrast, image(64, 64, 64), inputs, result));
-  assert(result.image.pixels[0] <= 2);
+  assert(result.image.pixels[0] == 40);  // Camera Raw S-curve on luminance (former affine: <= 2)
   auto neutral_contrast = operation("color.global", "tone", "pixcake.color.global",
                                     {value("contrast", 0.0)});
   assert(executor.renderReference(neutral_contrast, image(64, 128, 192), inputs, result));
@@ -151,8 +154,9 @@ int main() {
   auto contrast_vector = operation("color.global", "tone", "pixcake.color.global",
                                    {value("contrast", 100.0)});
   assert(executor.renderReference(contrast_vector, image(64, 128, 192), inputs, result));
-  // PP-CONTRAST-001 golden vector: amount=2 around the 0.5 midpoint.
-  assert(result.image.pixels[0] == 1 && result.image.pixels[1] == 129 && result.image.pixels[2] == 255);
+  // Camera Raw Contrast scales the pixel by its luminance's change, colour ratios kept.
+  // (The former W3C affine vector was 1/129/255.)
+  assert(result.image.pixels[0] == 61 && result.image.pixels[1] == 123 && result.image.pixels[2] == 184);
 
   // 创意色彩“程度”按官方 0..100（2026-11-05 用户裁定）：100 是满格，偏色 +0.04/+0.01/-0.03 全部生效。
   auto style_full = operation("color.style", "color", "pixcake.color.style", {value("amount", 100.0)});

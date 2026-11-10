@@ -111,7 +111,7 @@ int main() {
   PreviewResult frame = service.render_latest();
   assert(frame.code == ResultCode::Ok);
   assert(frame.header.width == 2 && frame.header.stride == 8);
-  assert(frame.rgba[0] > 200);    // masked pixel: brightened
+  assert(frame.rgba[0] > 150);    // masked pixel: brightened (modern brightness +100: 100 -> 179)
   assert(frame.rgba[4] == 100);   // unmasked pixel: unchanged
   assert(segmenter->calls == 1);
   assert(std::any_of(frame.statuses.begin(), frame.statuses.end(), [](const auto& s) {
@@ -165,6 +165,7 @@ int main() {
   const int before = segmenter->calls;
   assert(service.submit(work(8, {}, 140), diagnostic) == ResultCode::Ok);
   frame = service.render_latest();
+  // Modern brightness +100: 140 -> 219.
   assert(frame.code == ResultCode::Ok && frame.rgba[0] > 200 && frame.rgba[4] > 200);
   assert(segmenter->calls == before);
   return 0;

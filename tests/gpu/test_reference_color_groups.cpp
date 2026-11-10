@@ -3,11 +3,16 @@
 // The formulas are the project's provisional ones (render_executor.cpp); these
 // vectors pin them, check identity at the registered defaults, and check that
 // each group acts only on the pixels it targets.
+#include <pixcake/gpu/brightness.hpp>
+#include <pixcake/gpu/camera_raw.hpp>
 #include <pixcake/gpu/render_executor.hpp>
 #include <pixcake/editdoc/edit_document.hpp>
 #include <pixcake/render/render_description.hpp>
 
+#include <algorithm>
+#include <array>
 #include <cassert>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -64,6 +69,75 @@ bool near(Rgb got, Rgb want, int tolerance = 1) {
                   std::abs(got.b - want.b) <= tolerance;
   if (!ok) std::fprintf(stderr, "got %d %d %d, want %d %d %d\n", got.r, got.g, got.b, want.r, want.g, want.b);
   return ok;
+}
+
+namespace cr = pixcake::gpu::camera_raw;
+namespace br = pixcake::gpu::brightness;
+cr::Rgb unit(int r, int g, int b) { return {r / 255.0F, g / 255.0F, b / 255.0F}; }
+Rgb quantize(const cr::Rgb& c) {
+  const auto q = [](float v) { return static_cast<int>(std::lround(std::clamp(v, 0.0F, 1.0F) * 255.0F)); };
+  return {q(c[0]), q(c[1]), q(c[2])};
+}
+
+// The global tool runs PhotoCraft's Camera Raw stages (white balance and exposure,
+// Contrast, Presence, Color Mixer, Color Grading) in Camera Raw's order.
+void test_global_uses_camera_raw() {
+  cr::Settings s;
+  s.temperature = 60;
+  s.tint = -20;
+  s.exposure = 0.7F;
+  s.contrast = 40;
+  s.vibrance = 30;
+  s.saturation = -10;
+  s.hsl_hue[1] = 60;
+  s.hsl_sat[1] = -50;
+  s.hsl_lum[1] = 40;
+  s.grade[0] = {220, 60, -30};
+  s.grade[1] = {40, 50, 20};
+  s.grade[2] = {50, 70, 30};
+  s.grade_blending = 70;
+  const auto description = global({value("temperature", 60), value("tint", -20), value("exposure", 0.7),
+                                   value("contrast", 40), value("vibrance", 30), value("saturation", -10),
+                                   value("hsl_hue_orange", 60), value("hsl_saturation_orange", -50),
+                                   value("hsl_luminance_orange", 40), value("grading_shadows_hue", 220),
+                                   value("grading_shadows_saturation", 60), value("grading_shadows_luminance", -30),
+                                   value("grading_midtones_hue", 40), value("grading_midtones_saturation", 50),
+                                   value("grading_midtones_luminance", 20), value("grading_highlights_hue", 50),
+                                   value("grading_highlights_saturation", 70),
+                                   value("grading_highlights_luminance", 30), value("grading_blending", 70)});
+  for (const auto& px : {std::array<int, 3>{200, 120, 40}, std::array<int, 3>{30, 60, 90},
+                         std::array<int, 3>{240, 230, 220}}) {
+    const auto want = quantize(cr::developPixel(unit(px[0], px[1], px[2]), s));
+    assert(near(render(description, image(static_cast<std::uint8_t>(px[0]), static_cast<std::uint8_t>(px[1]),
+                                          static_cast<std::uint8_t>(px[2]))),
+                want, 0));
+  }
+}
+
+// Photoshop's modern brightness follows Camera Raw's white balance and exposure.
+void test_brightness_after_balance() {
+  const auto lut = br::modernLut(-40);
+  const cr::Rgb balanced = cr::applyBalance(unit(90, 140, 210), cr::balanceGains(0, 0, 0.5F));
+  const cr::Rgb want{br::sampleLut(lut, balanced[0]), br::sampleLut(lut, balanced[1]), br::sampleLut(lut, balanced[2])};
+  assert(near(render(global({value("exposure", 0.5), value("brightness", -40)}), image(90, 140, 210)), quantize(want), 0));
+  // The same through the general per-pixel path (a neutral HSL value opts out of the table).
+  assert(near(render(global({value("exposure", 0.5), value("brightness", -40), value("hsl_hue_red", 0)}),
+                     image(90, 140, 210)),
+              quantize(want), 0));
+}
+
+// In the black-and-white profile the Color Mixer does not run.
+void test_monochrome_skips_color_mixer() {
+  const auto mono = render(global({choice("profile", "monochrome", 2)}), image(200, 60, 40));
+  assert(near(render(global({choice("profile", "monochrome", 2), value("hsl_hue_red", 100)}), image(200, 60, 40)),
+              mono, 0));
+}
+
+// Local colour runs the same Camera Raw stages.
+void test_local_uses_camera_raw() {
+  const auto description = op("color.local", "color", "pixcake.color.local", {value("exposure", 1), value("contrast", 50)});
+  const cr::Rgb want = cr::applyContrast(cr::applyBalance(unit(90, 140, 210), cr::balanceGains(0, 0, 1)), 50);
+  assert(near(render(description, image(90, 140, 210)), quantize(want), 0));
 }
 
 void test_identity_at_defaults() {
@@ -134,21 +208,52 @@ void test_scalar_tone_fast_path_matches_general_reference() {
   assert(RenderExecutor{}.renderReference(fast_levels, translucent, RenderInputs{}, fast_result));
   assert(RenderExecutor{}.renderReference(general_levels, translucent, RenderInputs{}, general_result));
   assert(fast_result.image.pixels == general_result.image.pixels);
+
+  // Brightness alone, and exposure + brightness + levels, opaque and translucent.
+  const auto fast_bright = global({value("brightness", 35)});
+  const auto general_bright = global({value("brightness", 35), value("hsl_hue_red", 0)});
+  const auto fast_all = global({value("exposure", -0.4), value("brightness", -55), value("levels_rgb_input_black", 12),
+                                value("levels_rgb_input_gray", -0.2), value("levels_rgb_output_white", 230)});
+  const auto general_all = global({value("exposure", -0.4), value("brightness", -55),
+                                   value("levels_rgb_input_black", 12), value("levels_rgb_input_gray", -0.2),
+                                   value("levels_rgb_output_white", 230), value("hsl_hue_red", 0)});
+  for (const RgbaImage* frame : {&input, static_cast<const RgbaImage*>(&translucent)}) {
+    assert(RenderExecutor{}.renderReference(fast_bright, *frame, RenderInputs{}, fast_result));
+    assert(RenderExecutor{}.renderReference(general_bright, *frame, RenderInputs{}, general_result));
+    assert(fast_result.image.pixels == general_result.image.pixels);
+    assert(RenderExecutor{}.renderReference(fast_all, *frame, RenderInputs{}, fast_result));
+    assert(RenderExecutor{}.renderReference(general_all, *frame, RenderInputs{}, general_result));
+    assert(fast_result.image.pixels == general_result.image.pixels);
+  }
 }
 
+// Camera Raw's Color Mixer: hue turns up to 30 degrees, saturation scales HSV saturation,
+// and both keep the pixel's luminance; luminance is a gain weighted by saturation.
+Rgb developed(const cr::Settings& s, int r, int g, int b) { return quantize(cr::developPixel(unit(r, g, b), s)); }
 void test_hsl() {
-  // Red hue +100 turns pure red 30 degrees, to orange; blue is outside the red band.
-  assert(near(render(global({value("hsl_hue_red", 100)}), image(255, 0, 0)), {255, 128, 0}));
+  cr::Settings turn;
+  turn.hsl_hue[0] = 100;
+  // Pure red turns towards orange at red's luminance (0.2126): darker, green rises, no blue.
+  const Rgb orange = render(global({value("hsl_hue_red", 100)}), image(255, 0, 0));
+  assert(near(orange, developed(turn, 255, 0, 0), 0));
+  assert(orange.g > 0 && orange.b == 0 && orange.r > orange.g);
   assert(near(render(global({value("hsl_hue_red", 100)}), image(0, 0, 255)), {0, 0, 255}, 0));
-  // Red saturation -100 removes the chroma, keeping HSL lightness (200+50)/2.
-  assert(near(render(global({value("hsl_saturation_red", -100)}), image(200, 50, 50)), {125, 125, 125}));
+  // Red saturation -100 greys it at its own luminance.
+  cr::Settings grey;
+  grey.hsl_sat[0] = -100;
+  const Rgb greyed = render(global({value("hsl_saturation_red", -100)}), image(200, 50, 50));
+  assert(near(greyed, developed(grey, 200, 50, 50), 0));
+  assert(greyed.r == greyed.g && greyed.g == greyed.b);
   // Greys have no hue: no band moves them.
   assert(near(render(global({value("hsl_luminance_red", 100), value("hsl_saturation_aqua", 100)}),
                      image(128, 128, 128)),
               {128, 128, 128}, 0));
-  // Red luminance +100 brightens a red, never past white.
+  // Red luminance +100 brightens a red.
+  cr::Settings bright;
+  bright.hsl_lum[0] = 100;
   const Rgb brighter = render(global({value("hsl_luminance_red", 100)}), image(200, 50, 50));
-  assert(brighter.r >= 200 && brighter.g > 50 && brighter.b > 50);
+  assert(near(brighter, developed(bright, 200, 50, 50), 0));
+  assert(brighter.r > 200 && brighter.g > 50 && brighter.b > 50);
 }
 
 void test_monochrome() {
@@ -179,20 +284,31 @@ void test_selective_color() {
   assert(grey.r <= 2 && grey.g <= 2 && grey.b <= 2);
 }
 
+// Camera Raw's Color Grading: wheels add a tint of zero luminance, luminance is a gain.
 void test_grading() {
-  // A red global tint on grey: red up, green and blue down, overall lightness kept.
+  // A red global tint on grey: red up, green and blue down, luminance kept.
+  cr::Settings red;
+  red.grade[3] = {0, 100, 0};
   const Rgb tinted =
       render(global({value("grading_global_hue", 0), value("grading_global_saturation", 100)}), image(128, 128, 128));
+  assert(near(tinted, developed(red, 128, 128, 128), 0));
   assert(tinted.r > 160 && tinted.g < 128 && tinted.b < 128);
   const double luma = 0.2126 * tinted.r + 0.7152 * tinted.g + 0.0722 * tinted.b;
-  assert(luma > 124 && luma < 132);
-  // Shadows lift reaches black fully and does not reach white.
-  assert(near(render(global({value("grading_shadows_luminance", 100)}), image(0, 0, 0)), {64, 64, 64}));
+  assert(luma > 126 && luma < 130);
+  // Shadows luminance +100 brightens a dark grey, leaves white and black alone.
+  cr::Settings lift;
+  lift.grade[0] = {0, 0, 100};
+  const Rgb dark = render(global({value("grading_shadows_luminance", 100)}), image(40, 40, 40));
+  assert(near(dark, developed(lift, 40, 40, 40), 0));
+  assert(dark.r > 50);  // 40 * 2^(0.6 * shadow mask ~0.9) ~ 58
   assert(near(render(global({value("grading_shadows_luminance", 100)}), image(255, 255, 255)), {255, 255, 255}, 0));
-  // Blending 0 narrows the zones: mid grey is outside the shadows zone (radius 0.5, l = 0.502).
-  assert(near(render(global({value("grading_shadows_luminance", 100), value("grading_blending", 0)}),
-                     image(128, 128, 128)),
-              {128, 128, 128}));
+  assert(near(render(global({value("grading_shadows_luminance", 100)}), image(0, 0, 0)), {0, 0, 0}, 0));
+  // Blending widens the zones: mid grey moves less at blending 0 than at 100.
+  const Rgb narrow = render(global({value("grading_shadows_luminance", 100), value("grading_blending", 0)}),
+                            image(128, 128, 128));
+  const Rgb wide = render(global({value("grading_shadows_luminance", 100), value("grading_blending", 100)}),
+                          image(128, 128, 128));
+  assert(narrow.r > 128 && wide.r > narrow.r);
 }
 
 void test_color_editor_is_reported_not_drawn() {
@@ -265,6 +381,10 @@ void test_document_to_pixels() {
 
 int main() {
   test_document_to_pixels();
+  test_global_uses_camera_raw();
+  test_brightness_after_balance();
+  test_monochrome_skips_color_mixer();
+  test_local_uses_camera_raw();
   test_identity_at_defaults();
   test_levels();
   test_scalar_tone_fast_path_matches_general_reference();

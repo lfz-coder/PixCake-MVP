@@ -1,6 +1,8 @@
 #include "pixcake/gpu/render_executor.hpp"
 
 #include "pixcake/capability/capability_registry.hpp"
+#include "pixcake/gpu/brightness.hpp"
+#include "pixcake/gpu/camera_raw.hpp"
 #include "shader_sources.hpp"
 
 #include <algorithm>
@@ -25,78 +27,11 @@ bool known_blend_mode(const std::string& blend_mode) {
 }
 
 struct Pixel { float r, g, b, a; };
-struct Vec3 { float x, y, z; };
-struct Mat3 { float m[3][3]; };
 float clamp01(float value) { return std::clamp(value, 0.0F, 1.0F); }
-// PP-EXP-001: exposure is an EV offset over the linear working buffer.
-// ISO 2720 defines one EV step as a factor-of-two exposure change.  The
-// conversion to and from an encoded file color space belongs to the I/O
-// adapter, so this function deliberately operates only on linear values.
-float apply_exposure(float value, float ev) { return value * std::exp2(ev); }
 float get(const std::map<std::string, float>& values, const char* key) {
   const auto it = values.find(key);
   return it == values.end() ? 0.0F : it->second;
 }
-Vec3 mul(const Mat3& matrix, Vec3 value) {
-  return {matrix.m[0][0] * value.x + matrix.m[0][1] * value.y + matrix.m[0][2] * value.z,
-          matrix.m[1][0] * value.x + matrix.m[1][1] * value.y + matrix.m[1][2] * value.z,
-          matrix.m[2][0] * value.x + matrix.m[2][1] * value.y + matrix.m[2][2] * value.z};
-}
-Mat3 multiply(const Mat3& left, const Mat3& right) {
-  Mat3 result{};
-  for (int row = 0; row < 3; ++row) {
-    for (int column = 0; column < 3; ++column) {
-      for (int k = 0; k < 3; ++k) result.m[row][column] += left.m[row][k] * right.m[k][column];
-    }
-  }
-  return result;
-}
-Mat3 identity_matrix() {
-  return {{{1.0F, 0.0F, 0.0F}, {0.0F, 1.0F, 0.0F}, {0.0F, 0.0F, 1.0F}}};
-}
-Vec3 add(Vec3 left, Vec3 right) { return {left.x + right.x, left.y + right.y, left.z + right.z}; }
-Vec3 scale(Vec3 value, float factor) { return {value.x * factor, value.y * factor, value.z * factor}; }
-Vec3 white_from_xy(float x, float y) { return {x / y, 1.0F, (1.0F - x - y) / y}; }
-
-// PP-WB-001: IEC/ICC sRGB D65 matrices and the linear Bradford CAT from ICC
-// 1:2022 Annex E.  The matrices are kept here as data, not as UI constants.
-constexpr Mat3 kSrgbToXyz{{{0.4124564F, 0.3575761F, 0.1804375F},
-                            {0.2126729F, 0.7151522F, 0.0721750F},
-                            {0.0193339F, 0.1191920F, 0.9503041F}}};
-constexpr Mat3 kXyzToSrgb{{{3.2404542F, -1.5371385F, -0.4985314F},
-                            {-0.9692660F, 1.8760108F, 0.0415560F},
-                            {0.0556434F, -0.2040259F, 1.0572252F}}};
-constexpr Mat3 kBradford{{{0.8951F, 0.2664F, -0.1614F},
-                           {-0.7502F, 1.7135F, 0.0367F},
-                           {0.0389F, -0.0685F, 1.0296F}}};
-constexpr Mat3 kBradfordInverse{{{0.9869929F, -0.1470543F, 0.1599627F},
-                                  {0.4323053F, 0.5183603F, 0.0492912F},
-                                  {-0.0085287F, 0.0400428F, 0.9684867F}}};
-
-// PP-WB-001: tint is a symmetric half-stop of the Bradford green-cone response;
-// temperature is interpolated between the D75/D65/D50 white points above.
-Mat3 white_balance_matrix(float temperature, float tint) {
-  if (std::abs(temperature) < 1e-6F && std::abs(tint) < 1e-6F) return identity_matrix();
-  const Vec3 source_white = white_from_xy(0.3127F, 0.3290F);  // CIE D65.
-  const Vec3 warm_white = white_from_xy(0.3457F, 0.3585F);    // CIE D50.
-  const Vec3 cool_white = white_from_xy(0.2990F, 0.3149F);    // CIE D75.
-  const float temperature_fraction = std::clamp(temperature / 100.0F, -1.0F, 1.0F);
-  const Vec3 target_white = temperature_fraction >= 0.0F
-                                ? add(source_white, scale(add(warm_white, scale(source_white, -1.0F)),
-                                                         temperature_fraction))
-                                : add(source_white, scale(add(cool_white, scale(source_white, -1.0F)),
-                                                         -temperature_fraction));
-  const Vec3 source_lms = mul(kBradford, source_white);
-  Vec3 target_lms = mul(kBradford, target_white);
-  target_lms.y *= std::exp2(std::clamp(tint / 100.0F, -1.0F, 1.0F) * 0.5F);
-  const Mat3 cone_scale{{{target_lms.x / source_lms.x, 0.0F, 0.0F},
-                         {0.0F, target_lms.y / source_lms.y, 0.0F},
-                         {0.0F, 0.0F, target_lms.z / source_lms.z}}};
-  // RGB -> XYZ -> Bradford LMS -> scaled LMS -> XYZ -> RGB.
-  return multiply(kXyzToSrgb, multiply(kBradfordInverse, multiply(cone_scale,
-                                                                   multiply(kBradford, kSrgbToXyz))));
-}
-
 float luminance(Pixel p) { return 0.2126F * p.r + 0.7152F * p.g + 0.0722F * p.b; }
 Pixel mix(Pixel a, Pixel b, float amount) {
   amount = clamp01(amount);
@@ -117,77 +52,99 @@ void write(RgbaImage& image, std::uint32_t x, std::uint32_t y, Pixel p) {
   image.pixels[i + 2] = static_cast<std::uint8_t>(std::lround(clamp01(p.b) * 255.0F));
   image.pixels[i + 3] = static_cast<std::uint8_t>(std::lround(clamp01(p.a) * 255.0F));
 }
-// White balance, style tint and tone, read once per operation (the white
-// balance matrix and the exposure gain included) instead of once per pixel.
-// The float operations and their order are the same as the per-pixel form
-// they replace, so frames are bit-identical.
+namespace cr = pixcake::gpu::camera_raw;
+namespace br = pixcake::gpu::brightness;
+
+cr::Rgb rgb_of(const Pixel& p) { return {p.r, p.g, p.b}; }
+Pixel with_rgb(Pixel p, const cr::Rgb& c) {
+  p.r = c[0];
+  p.g = c[1];
+  p.b = c[2];
+  return p;
+}
+
+// White balance, exposure, style tint and tone, read once per operation.
+//
+// The frame's values are the decoder's sRGB-encoded bytes / 255, which is the
+// display encoding PhotoCraft's Camera Raw develop takes (encoding_gamma 0); the
+// executor does not linearise them.  Per pixel, in this order:
+//   1. Camera Raw stage 1: temperature, tint, exposure (PhotoCraft port)
+//   2. AI style tint (amount; PixCake's provisional offset)
+//   3. Photoshop modern brightness (PhotoCraft port; placed after stage 1 by the
+//      2026-11-09 user decision)
+//   4. highlights/shadows/whites/blacks lift and clarity/texture/dehaze local
+//      contrast -- PixCake legacy-provisional placeholders until their spatial
+//      and image-statistics stages are ported
+//   5. Camera Raw stage 3, Contrast; 6. stage 4, Vibrance / Saturation
+// then the global tool's groups (apply_color_groups).
 struct ToneColor {
-  bool white_balance = false;
-  Mat3 white_balance_matrix{};
+  bool balance = false;
+  cr::Rgb gains{1.0F, 1.0F, 1.0F};
   float style = 0;
-  float exposure_gain = 1, brightness = 0, contrast_amount = 1;
-  float highlights = 0, shadows = 0, whites = 0, blacks = 0, local = 0, saturation = 0, vibrance = 0;
+  bool brightness_on = false;
+  std::vector<float> brightness_lut;
+  float brightness = 0;  // slider -100..100 (the GPU evaluates the curve from it)
+  float highlights = 0, shadows = 0, whites = 0, blacks = 0, local = 0;
+  float contrast = 0, vibrance = 0, saturation = 0;  // Camera Raw sliders, -100..100
 };
 ToneColor tone_color_of(const std::map<std::string, float>& v) {
   ToneColor t;
   const float temperature = get(v, "temperature");
   const float tint = get(v, "tint");
-  t.white_balance = !(std::abs(temperature) < 1e-6F && std::abs(tint) < 1e-6F);
-  if (t.white_balance) t.white_balance_matrix = white_balance_matrix(temperature, tint);
+  const float exposure = get(v, "exposure");
+  t.balance = temperature != 0.0F || tint != 0.0F || exposure != 0.0F;
+  if (t.balance) t.gains = cr::balanceGains(temperature, tint, exposure);
   // 程度 100 是默认强度：AI 色彩风格 0..100，AI 追色 0..200（200 为两倍强度），与参数模式一致。
   t.style = std::clamp(get(v, "amount") / 100.0F, 0.0F, 2.0F);
-  // PP-EXP-001: the EV gain, computed once (apply_exposure(1, ev) is exactly exp2(ev)).
-  t.exposure_gain = apply_exposure(1.0F, get(v, "exposure"));
-  t.brightness = get(v, "brightness") / 100.0F;
-  // PP-CONTRAST-001: W3C Filter Effects contrast() is an affine transfer
-  // around the 0.5 midpoint.  The project maps -100..100 to a 0..2 slope.
-  t.contrast_amount = 1.0F + get(v, "contrast") / 100.0F;
+  t.brightness = get(v, "brightness");
+  t.brightness_on = t.brightness != 0.0F;
+  if (t.brightness_on) t.brightness_lut = br::modernLut(t.brightness);
   t.highlights = get(v, "highlights") / 100.0F;
   t.shadows = get(v, "shadows") / 100.0F;
   t.whites = get(v, "whites") / 100.0F;
   t.blacks = get(v, "blacks") / 100.0F;
   t.local = (get(v, "clarity") + get(v, "texture") + get(v, "dehaze")) / 300.0F * 0.35F;
-  t.saturation = get(v, "saturation") / 100.0F;
-  t.vibrance = get(v, "vibrance") / 100.0F;
+  t.contrast = get(v, "contrast");
+  t.saturation = get(v, "saturation");
+  t.vibrance = get(v, "vibrance");
   return t;
 }
+bool lift_is_active(const ToneColor& t) {
+  return t.highlights != 0.0F || t.shadows != 0.0F || t.whites != 0.0F || t.blacks != 0.0F;
+}
 bool color_is_active(const ToneColor& t) {
-  return t.white_balance || std::abs(t.style) > 1e-7F;
+  return t.balance || std::abs(t.style) > 1e-7F;
 }
 bool tone_is_active(const ToneColor& t) {
-  return std::abs(t.exposure_gain - 1.0F) > 1e-7F || std::abs(t.brightness) > 1e-7F ||
-         std::abs(t.contrast_amount - 1.0F) > 1e-7F || std::abs(t.highlights) > 1e-7F ||
-         std::abs(t.shadows) > 1e-7F || std::abs(t.whites) > 1e-7F || std::abs(t.blacks) > 1e-7F ||
-         std::abs(t.local) > 1e-7F || std::abs(t.saturation) > 1e-7F || std::abs(t.vibrance) > 1e-7F;
+  return t.brightness_on || lift_is_active(t) || t.local != 0.0F || t.contrast != 0.0F || t.vibrance != 0.0F ||
+         t.saturation != 0.0F;
 }
+// Steps 1 and 2.
 Pixel color(Pixel p, const ToneColor& t) {
-  if (t.white_balance) {
-    const Vec3 adapted = mul(t.white_balance_matrix, {p.r, p.g, p.b});
-    p.r = adapted.x;
-    p.g = adapted.y;
-    p.b = adapted.z;
-  }
+  if (t.balance) p = with_rgb(p, cr::applyBalance(rgb_of(p), t.gains));
   p.r += t.style * 0.04F; p.g += t.style * 0.01F; p.b -= t.style * 0.03F;
   return p;
 }
-// PP-EXP-001 and PP-CONTRAST-001 are source-backed reference effects here;
-// brightness/highlights/shadows and the detail controls remain provisional.
+// Steps 3 to 6; a step whose controls are at rest leaves the pixel untouched.
 Pixel tone(Pixel p, const ToneColor& t) {
-  p.r *= t.exposure_gain; p.g *= t.exposure_gain; p.b *= t.exposure_gain;
-  p.r += t.brightness; p.g += t.brightness; p.b += t.brightness;
-  p.r = (p.r - 0.5F) * t.contrast_amount + 0.5F;
-  p.g = (p.g - 0.5F) * t.contrast_amount + 0.5F;
-  p.b = (p.b - 0.5F) * t.contrast_amount + 0.5F;
-  const float l = luminance(p);
-  const float hi = clamp01((l - 0.5F) * 2.0F), lo = clamp01((0.5F - l) * 2.0F);
-  const float lift = t.highlights * hi * 0.45F + t.shadows * lo * 0.45F + t.whites * hi * 0.2F + t.blacks * lo * 0.2F;
-  p.r += lift; p.g += lift; p.b += lift;
-  p.r = (p.r - 0.5F) * (1.0F + t.local) + 0.5F;
-  p.g = (p.g - 0.5F) * (1.0F + t.local) + 0.5F;
-  p.b = (p.b - 0.5F) * (1.0F + t.local) + 0.5F;
-  const float saturation = 1.0F + t.saturation + t.vibrance * (1.0F - std::max({p.r, p.g, p.b}));
-  const float gray = luminance(p);
-  p.r = gray + (p.r - gray) * saturation; p.g = gray + (p.g - gray) * saturation; p.b = gray + (p.b - gray) * saturation;
+  if (t.brightness_on) {
+    p.r = br::sampleLut(t.brightness_lut, p.r);
+    p.g = br::sampleLut(t.brightness_lut, p.g);
+    p.b = br::sampleLut(t.brightness_lut, p.b);
+  }
+  if (lift_is_active(t)) {
+    const float l = luminance(p);
+    const float hi = clamp01((l - 0.5F) * 2.0F), lo = clamp01((0.5F - l) * 2.0F);
+    const float lift = t.highlights * hi * 0.45F + t.shadows * lo * 0.45F + t.whites * hi * 0.2F + t.blacks * lo * 0.2F;
+    p.r += lift; p.g += lift; p.b += lift;
+  }
+  if (t.local != 0.0F) {
+    p.r = (p.r - 0.5F) * (1.0F + t.local) + 0.5F;
+    p.g = (p.g - 0.5F) * (1.0F + t.local) + 0.5F;
+    p.b = (p.b - 0.5F) * (1.0F + t.local) + 0.5F;
+  }
+  if (t.contrast != 0.0F) p = with_rgb(p, cr::applyContrast(rgb_of(p), t.contrast));
+  if (t.vibrance != 0.0F || t.saturation != 0.0F) p = with_rgb(p, cr::applyPresence(rgb_of(p), t.vibrance, t.saturation));
   return p;
 }
 // ---- color.global sub-groups and detail grain (requirement 10.3) -----------
@@ -233,23 +190,8 @@ Hsl to_hsl(Pixel p) {
   c.h *= 60.0F;
   return c;
 }
-float hue_channel(float p, float q, float t) {
-  if (t < 0.0F) t += 1.0F;
-  if (t > 1.0F) t -= 1.0F;
-  if (t < 1.0F / 6.0F) return p + (q - p) * 6.0F * t;
-  if (t < 0.5F) return q;
-  if (t < 2.0F / 3.0F) return p + (q - p) * (2.0F / 3.0F - t) * 6.0F;
-  return p;
-}
-Pixel from_hsl(Hsl c, float alpha) {
-  if (c.s <= 0.0F) return {c.l, c.l, c.l, alpha};
-  const float q = c.l < 0.5F ? c.l * (1.0F + c.s) : c.l + c.s - c.l * c.s;
-  const float p = 2.0F * c.l - q;
-  const float h = c.h / 360.0F;
-  return {hue_channel(p, q, h + 1.0F / 3.0F), hue_channel(p, q, h), hue_channel(p, q, h - 1.0F / 3.0F), alpha};
-}
-
-// The eight hue bands of the HSL and black-and-white panels, centred on these
+// The eight hue bands of the black-and-white mix (PixCake legacy-provisional;
+// HSL uses Camera Raw's Color Mixer weights in camera_raw.cpp), centred on these
 // hues.  A hue belongs to its two neighbouring bands with linear weights, so
 // the weights always sum to 1 (no band edge shows as a seam).
 constexpr float kBandHue[8] = {0.0F, 30.0F, 60.0F, 120.0F, 180.0F, 240.0F, 270.0F, 300.0F};
@@ -276,17 +218,16 @@ float band_value(const float values[8], float hue) {
 struct ColorGroups {
   bool levels = false;
   float in_black = 0, in_white = 1, gamma = 1, out_black = 0, out_white = 1;
-  bool hsl = false;
-  float hue[8]{}, saturation[8]{}, lightness[8]{};
+  bool hsl = false;  // Camera Raw stage 6, Color Mixer (slider units)
+  std::array<float, 8> hue{}, saturation{}, lightness{};
   bool monochrome = false;
   float mix[8]{};
   bool selective = false, absolute = false;
   float selective_ink[9][4]{};  // target x (cyan, magenta, yellow, black), -1..1
   std::array<std::uint8_t, 9> selective_targets{};
   std::size_t selective_target_count = 0;
-  bool grading = false;
-  float zone_hue[4]{}, zone_saturation[4]{}, zone_lightness[4]{}, blending = 0.5F;
-  float zone_tint[4][3]{};  // the zone hue's colour minus its own luminance
+  bool grading = false;  // Camera Raw stage 7, Color Grading
+  cr::Grade grade;
   bool editor_offsets = false;
 };
 
@@ -306,12 +247,12 @@ ColorGroups color_groups(const Values& v) {
   g.levels = g.in_black != 0.0F || g.in_white != 1.0F || g.gamma != 1.0F || g.out_black != 0.0F || g.out_white != 1.0F;
   for (int i = 0; i < 8; ++i) {
     const std::string band = kBandName[i];
-    g.hue[i] = param(v, cap, "hsl_hue_" + band) / 100.0F;
-    g.saturation[i] = param(v, cap, "hsl_saturation_" + band) / 100.0F;
-    g.lightness[i] = param(v, cap, "hsl_luminance_" + band) / 100.0F;
+    g.hue[i] = param(v, cap, "hsl_hue_" + band);
+    g.saturation[i] = param(v, cap, "hsl_saturation_" + band);
+    g.lightness[i] = param(v, cap, "hsl_luminance_" + band);
     g.mix[i] = param(v, cap, "bw_mix_" + band) / 100.0F;
-    g.hsl = g.hsl || g.hue[i] != 0.0F || g.saturation[i] != 0.0F || g.lightness[i] != 0.0F;
   }
+  g.hsl = !cr::colorMixerNeutral(g.hue, g.saturation, g.lightness);
   g.monochrome = choice_is(v, cap, "profile", "monochrome");
   const char* targets[9] = {"red", "yellow", "green", "cyan", "blue", "magenta", "white", "neutral", "black"};
   const char* inks[4] = {"cyan", "magenta", "yellow", "black"};
@@ -325,20 +266,17 @@ ColorGroups color_groups(const Values& v) {
     if (target_active) g.selective_targets[g.selective_target_count++] = static_cast<std::uint8_t>(t);
   }
   g.absolute = choice_is(v, cap, "selective_mode", "absolute");
+  // Camera Raw units: hue 0..360, saturation 0..100, luminance -100..100, blending
+  // 0..100.  Balance is not registered in PixCake's parameter mode, so it stays 0.
   const char* zones[4] = {"shadows", "midtones", "highlights", "global"};
+  std::array<cr::Wheel, 4> wheels{};
   for (int z = 0; z < 4; ++z) {
     const std::string zone = zones[z];
-    g.zone_hue[z] = param(v, cap, "grading_" + zone + "_hue");
-    g.zone_saturation[z] = param(v, cap, "grading_" + zone + "_saturation") / 100.0F;
-    g.zone_lightness[z] = param(v, cap, "grading_" + zone + "_luminance") / 100.0F;
-    g.grading = g.grading || g.zone_saturation[z] != 0.0F || g.zone_lightness[z] != 0.0F;
-    const Pixel hue = from_hsl({g.zone_hue[z], 1.0F, 0.5F}, 1.0F);
-    const float hue_l = luminance(hue);
-    g.zone_tint[z][0] = hue.r - hue_l;
-    g.zone_tint[z][1] = hue.g - hue_l;
-    g.zone_tint[z][2] = hue.b - hue_l;
+    wheels[z] = {param(v, cap, "grading_" + zone + "_hue"), param(v, cap, "grading_" + zone + "_saturation"),
+                 param(v, cap, "grading_" + zone + "_luminance")};
   }
-  g.blending = param(v, cap, "grading_blending") / 100.0F;
+  g.grading = !cr::gradeNeutral(wheels);
+  if (g.grading) g.grade = cr::resolveGrade(wheels, param(v, cap, "grading_blending"), 0.0F);
   for (const char* item : {"hue", "saturation", "luminance"}) {
     g.editor_offsets = g.editor_offsets || param(v, cap, std::string("color_editor_") + item + "_shift") != 0.0F;
   }
@@ -354,21 +292,9 @@ Pixel apply_levels(Pixel p, const ColorGroups& g) {
   return {map(p.r), map(p.g), map(p.b), p.a};
 }
 
-// HSL: per band, hue +-100 turns the hue by +-30 degrees (half the distance
-// between the primary bands), saturation scales chroma by 1 + amount (-100
-// removes it), luminance moves lightness toward white or black by up to half
-// the headroom, scaled by the pixel's saturation so greys never move.
+// HSL: PhotoCraft's Camera Raw Color Mixer (camera_raw.cpp).
 Pixel apply_hsl(Pixel p, const ColorGroups& g) {
-  Hsl c = to_hsl(p);
-  if (c.s <= 0.0F) return p;
-  const float hue = band_value(g.hue, c.h);
-  const float saturation = band_value(g.saturation, c.h);
-  const float lightness = band_value(g.lightness, c.h);
-  const float s0 = c.s;
-  c.h = std::fmod(c.h + hue * 30.0F + 360.0F, 360.0F);
-  c.s = clamp01(c.s * (1.0F + saturation));
-  c.l = clamp01(c.l + lightness * 0.5F * s0 * (lightness > 0.0F ? 1.0F - c.l : c.l));
-  return from_hsl(c, p.a);
+  return with_rgb(p, cr::applyColorMixer(rgb_of(p), g.hue, g.saturation, g.lightness));
 }
 
 // Black-and-white profile: Rec. 709 luminance (the same weights as
@@ -425,27 +351,8 @@ Pixel apply_selective(Pixel p, const ColorGroups& g) {
   return {out[0], out[1], out[2], p.a};
 }
 
-// Color grading: shadows, midtones and highlights are luminance zones centred
-// on 0, 0.5 and 1 with triangular weights; blending widens them from radius
-// 0.5 (blending 0, zones meet at their neighbours' centres) to 1 (blending
-// 100).  Global applies everywhere.  Each zone adds a chroma tint in its hue
-// (the hue's colour with its own luminance removed, so the tint does not
-// brighten) scaled by saturation, and shifts lightness by up to a quarter.
-Pixel apply_grading(Pixel p, const ColorGroups& g) {
-  const float l = luminance(p);
-  const float radius = 0.5F + 0.5F * g.blending;
-  const float centre[3] = {0.0F, 0.5F, 1.0F};
-  for (int z = 0; z < 4; ++z) {
-    const float w = z == 3 ? 1.0F : std::max(0.0F, 1.0F - std::abs(l - centre[z]) / radius);
-    if (w <= 0.0F || (g.zone_saturation[z] == 0.0F && g.zone_lightness[z] == 0.0F)) continue;
-    const float tint = w * g.zone_saturation[z] * 0.25F;
-    const float lift = w * g.zone_lightness[z] * 0.25F;
-    p.r += tint * g.zone_tint[z][0] + lift;
-    p.g += tint * g.zone_tint[z][1] + lift;
-    p.b += tint * g.zone_tint[z][2] + lift;
-  }
-  return p;
-}
+// Color grading: PhotoCraft's Camera Raw Color Grading (camera_raw.cpp).
+Pixel apply_grading(Pixel p, const ColorGroups& g) { return with_rgb(p, cr::applyColorGrading(rgb_of(p), g.grade)); }
 
 Pixel apply_color_groups(Pixel p, const ColorGroups& g) {
   if (g.levels) p = apply_levels(p, g);
@@ -802,17 +709,15 @@ void draw_reference(const PreparedOperation& draw, RgbaImage& frame) {
 // every pixel.
 bool scalar_tone_operation(const PreparedOperation& draw) {
   if (draw.operation == nullptr || draw.has_lut || draw.is_detail || !draw.is_color || !draw.is_tone ||
-      !draw.masks.empty() || draw.blend != Blend::Normal || draw.tone_color.white_balance ||
-      std::abs(draw.tone_color.style) > 1e-7F || std::abs(draw.tone_color.local) > 1e-7F ||
-      std::abs(draw.tone_color.saturation) > 1e-7F || std::abs(draw.tone_color.vibrance) > 1e-7F ||
-      std::abs(draw.tone_color.highlights) > 1e-7F || std::abs(draw.tone_color.shadows) > 1e-7F ||
-      std::abs(draw.tone_color.whites) > 1e-7F || std::abs(draw.tone_color.blacks) > 1e-7F ||
+      !draw.masks.empty() || draw.blend != Blend::Normal || std::abs(draw.tone_color.style) > 1e-7F ||
       draw.groups.hsl || draw.groups.monochrome || draw.groups.selective || draw.groups.grading ||
       draw.groups.editor_offsets) {
     return false;
   }
   for (const auto& value : draw.operation->values) {
-    const bool scalar = value.channel == "exposure" || value.channel == "brightness" || value.channel == "contrast";
+    // Each of these acts on every channel on its own (Camera Raw's exposure gain, the
+    // brightness curve, RGB levels).  Contrast works on luminance, so it is not here.
+    const bool scalar = value.channel == "exposure" || value.channel == "brightness";
     const bool levels = draw.groups.levels && has_prefix(value.channel, "levels_rgb_");
     if (!scalar && !levels) {
       return false;
@@ -828,16 +733,13 @@ void draw_scalar_tone(const PreparedOperation& draw, RgbaImage& frame) {
   std::array<std::array<float, 256>, 3> after{};
   for (std::size_t channel = 0; channel < lut.size(); ++channel) {
     for (std::size_t i = 0; i < lut[channel].size(); ++i) {
-      float value = static_cast<float>(i) / 255.0F;
-      value *= draw.tone_color.exposure_gain;
-      value += draw.tone_color.brightness;
-      value = (value - 0.5F) * draw.tone_color.contrast_amount + 0.5F;
-      if (draw.groups.levels) {
-        const float span = std::max(draw.groups.in_white - draw.groups.in_black, 1.0F / 255.0F);
-        const float x = clamp01((value - draw.groups.in_black) / span);
-        value = draw.groups.out_black + std::pow(x, 1.0F / draw.groups.gamma) *
-                                               (draw.groups.out_white - draw.groups.out_black);
-      }
+      // The same functions draw_reference calls, on a grey of this level.
+      const float level = static_cast<float>(i) / 255.0F;
+      Pixel p{level, level, level, 1.0F};
+      if (draw.color_active) p = color(p, draw.tone_color);
+      if (draw.tone_active) p = tone(p, draw.tone_color);
+      if (draw.groups.levels) p = apply_levels(p, draw.groups);
+      const float value = channel == 0 ? p.r : channel == 1 ? p.g : p.b;
       after[channel][i] = value;
       lut[channel][i] = static_cast<std::uint8_t>(std::lround(clamp01(value) * 255.0F));
     }
@@ -937,24 +839,26 @@ void pack_masks(const std::vector<const RenderMask*>& masks, std::uint32_t frame
 bool set_color_uniforms(gl::Program& program, const PreparedOperation& draw, std::string& error) {
   const ToneColor& t = draw.tone_color;
   const ColorGroups& g = draw.groups;
-  const auto& m = t.white_balance_matrix.m;
-  const float on = t.white_balance ? 1.0F : 0.0F;
   const auto flag = [](bool value) { return value ? 1.0F : 0.0F; };
   // Sub-groups only belong to the global tool (has_groups); elsewhere they stay off.
   const bool colour_step = !draw.has_lut && draw.is_color, tone_step = !draw.has_lut && draw.is_tone;
+  const br::Curve curve = br::curve(t.brightness);
   bool ok = program.setVec4("stage0", {flag(colour_step), flag(tone_step), 0.0F, 0.0F}, error) &&
-            program.setVec4("wb0", {m[0][0], m[0][1], m[0][2], on}, error) &&
-            program.setVec4("wb1", {m[1][0], m[1][1], m[1][2], 0.0F}, error) &&
-            program.setVec4("wb2", {m[2][0], m[2][1], m[2][2], 0.0F}, error) &&
-            program.setVec4("tone0", {t.style, t.exposure_gain, t.brightness, t.contrast_amount}, error) &&
+            program.setVec4("cr0", {t.gains[0], t.gains[1], t.gains[2], flag(t.balance)}, error) &&
+            program.setVec4("cr1", {t.contrast / 100.0F * 0.6F, t.vibrance, t.saturation,
+                                    flag(t.vibrance != 0.0F || t.saturation != 0.0F)}, error) &&
+            program.setVec4("bright0", {curve.s, curve.e, curve.x0, curve.alpha}, error) &&
+            program.setVec4("bright1", {flag(t.brightness_on), flag(curve.raise), flag(curve.hermite), 0.0F}, error) &&
+            program.setVec4("tone0", {t.style, 0.0F, 0.0F, 0.0F}, error) &&
             program.setVec4("tone1", {t.highlights, t.shadows, t.whites, t.blacks}, error) &&
-            program.setVec4("tone2", {t.local, t.saturation, t.vibrance, 0.0F}, error) &&
+            program.setVec4("tone2", {t.local, 0.0F, 0.0F, 0.0F}, error) &&
             program.setVec4("groups0", {flag(draw.has_groups && g.levels), flag(draw.has_groups && g.monochrome),
                                         flag(draw.has_groups && g.hsl), flag(draw.has_groups && g.selective)}, error) &&
-            program.setVec4("groups1", {flag(draw.has_groups && g.grading), flag(g.absolute), g.blending, 0.0F}, error) &&
+            program.setVec4("groups1", {flag(draw.has_groups && g.grading), flag(g.absolute), g.grade.blend,
+                                        g.grade.balance}, error) &&
             program.setVec4("levels0", {g.in_black, g.in_white, g.gamma, g.out_black}, error) &&
             program.setVec4("levels1", {g.out_white, 0.0F, 0.0F, 0.0F}, error);
-  const auto bands = [&](const char* a, const char* b, const float (&v)[8]) {
+  const auto bands = [&](const char* a, const char* b, const auto& v) {
     return program.setVec4(a, {v[0], v[1], v[2], v[3]}, error) && program.setVec4(b, {v[4], v[5], v[6], v[7]}, error);
   };
   ok = ok && bands("hue_a", "hue_b", g.hue) && bands("sat_a", "sat_b", g.saturation) &&
@@ -963,10 +867,9 @@ bool set_color_uniforms(gl::Program& program, const PreparedOperation& draw, std
     const auto& ink = g.selective_ink[target];
     ok = program.setVec4("ink" + std::to_string(target), {ink[0], ink[1], ink[2], ink[3]}, error);
   }
-  ok = ok && program.setVec4("zone_sat", {g.zone_saturation[0], g.zone_saturation[1], g.zone_saturation[2], g.zone_saturation[3]}, error) &&
-       program.setVec4("zone_light", {g.zone_lightness[0], g.zone_lightness[1], g.zone_lightness[2], g.zone_lightness[3]}, error);
+  ok = ok && program.setVec4("zone_light", {g.grade.lums[0], g.grade.lums[1], g.grade.lums[2], g.grade.lums[3]}, error);
   for (int zone = 0; ok && zone < 4; ++zone) {
-    const auto& tint = g.zone_tint[zone];
+    const auto& tint = g.grade.tints[zone];
     ok = program.setVec4("zone_tint" + std::to_string(zone), {tint[0], tint[1], tint[2], 0.0F}, error);
   }
   return ok;

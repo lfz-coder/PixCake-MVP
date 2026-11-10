@@ -107,7 +107,7 @@ int main() {
   assert(server.step(server_side, 1000, diagnostic) == ResultCode::Ok);
   assert(client.receive(frame, 1000, diagnostic) == ResultCode::Ok);
   assert(frame.result.code == ResultCode::Ok && frame.result.client_sequence == 5);
-  assert(frame.rgba[0] > base + 40);  // +1 EV
+  assert(frame.rgba[0] > base + 30);  // +1 EV doubles linear light: sRGB 100 -> 137
   assert(client.receive(frame, 50, diagnostic) == ResultCode::Cancelled);  // no result for 3 and 4
   assert(server.decodes() == 1);  // one decode for all of them
 
