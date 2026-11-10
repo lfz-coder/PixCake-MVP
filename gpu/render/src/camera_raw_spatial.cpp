@@ -16,6 +16,8 @@
 #include <limits>
 #include <numeric>
 
+#include "whites_blacks_tables.inc"
+
 namespace pixcake::gpu::camera_raw {
 namespace {
 
@@ -602,6 +604,114 @@ void localTone(Frame& frame, float shadows, float highlights) {
     const float gain = std::exp2(change[i]);
     auto& q = frame.px[i];
     for (int c = 0; c < 3; ++c) q[c] = linearToSrgb(srgbToLinear(q[c]) * gain);
+  }
+}
+
+// ---- Whites and Blacks (camera_raw/whites_blacks.rs, camera_raw.rs luminance_points)
+namespace {
+namespace wb = whites_blacks_tables;
+constexpr std::size_t kSteps = 33;
+constexpr float kWhitesFrom = -100.0F, kBlacksFrom = -100.0F, kPhotoBlacks = 1.2F;
+
+template <std::size_t Rows>
+float curve(const float (&rows)[Rows][kSteps], float from, float x, float v) {
+  if (v >= 1.0F) return 1.0F;
+  const float r = std::clamp((x - from) / 10.0F, 0.0F, static_cast<float>(Rows - 1));
+  const std::size_t i = std::min(static_cast<std::size_t>(r), Rows - 2);
+  const float t = r - static_cast<float>(i);
+  const auto at = [&](const float (&row)[kSteps]) {
+    const float p = std::fmax(v, 0.0F) * static_cast<float>(kSteps - 1);
+    const std::size_t j = std::min(static_cast<std::size_t>(p), kSteps - 2);
+    const float s = p - static_cast<float>(j);
+    return row[j] + (row[j + 1] - row[j]) * s;
+  };
+  return at(rows[i]) * (1.0F - t) + at(rows[i + 1]) * t;
+}
+
+template <std::size_t N>
+std::pair<std::size_t, float> grid_index(const float (&grid)[N], float v) {
+  v = std::clamp(v, grid[0], grid[N - 1]);
+  std::size_t i = N - 2;
+  for (std::size_t k = 0; k + 1 < N; ++k) {
+    if (v <= grid[k + 1]) {
+      i = k;
+      break;
+    }
+  }
+  return {i, (v - grid[i]) / (grid[i + 1] - grid[i])};
+}
+
+float adapt(const float (&table)[9][8], float bp, float wp) {
+  const auto [i, s] = grid_index(wb::kBps, bp);
+  const auto [j, t] = grid_index(wb::kWps, wp);
+  const std::size_t jj = j;
+  const float tt = t;
+  const auto row = [&](std::size_t r) { return table[r][jj] * (1.0F - tt) + table[r][jj + 1] * tt; };
+  return row(i) * (1.0F - s) + row(i + 1) * s;
+}
+
+std::pair<float, float> amounts(float whites, float blacks, float bp, float wp) {
+  const float w = whites > 0.0F ? whites * adapt(wb::kAW, bp, wp) : whites;
+  const float b = blacks < 0.0F ? blacks * std::fmax(adapt(wb::kAB, bp, wp), kPhotoBlacks) : blacks;
+  return {std::clamp(w, -100.0F, 270.0F), std::clamp(b, -100.0F, 100.0F)};
+}
+
+float percentile(std::vector<float> v, float q) {
+  std::stable_sort(v.begin(), v.end(), total_less);
+  return v[static_cast<std::size_t>(std::round(static_cast<float>(v.size() - 1) * q))];
+}
+
+}  // namespace
+
+std::array<float, 2> luminancePoints(const Frame& frame) {
+  const std::size_t w = frame.width, h = frame.height;
+  const std::size_t f = std::max<std::size_t>(div_ceil(std::max(w, h), 256), 1);
+  const std::size_t sw = div_ceil(w, f), sh = div_ceil(h, f);
+  std::vector<std::array<double, 4>> sum(sw * sh, {0.0, 0.0, 0.0, 0.0});
+  for (std::size_t y = 0; y < h; ++y) {
+    for (std::size_t x = 0; x < w; ++x) {
+      const auto& q = frame.px[y * w + x];
+      auto& s = sum[(y / f) * sw + x / f];
+      for (int c = 0; c < 3; ++c) s[c] += static_cast<double>(std::clamp(srgbToLinear(q[c]), 0.0F, 1.0F));
+      s[3] += 1.0;
+    }
+  }
+  std::vector<float> lum, brightest;
+  for (const auto& s : sum) {
+    if (!(s[3] > 0.0)) continue;
+    const float c0 = static_cast<float>(s[0] / s[3]), c1 = static_cast<float>(s[1] / s[3]), c2 = static_cast<float>(s[2] / s[3]);
+    lum.push_back(luma3(c0, c1, c2));
+    brightest.push_back(std::fmax(std::fmax(c0, c1), c2));
+  }
+  if (lum.empty()) return {0.0F, 1.0F};
+  return {linearToSrgb(percentile(lum, 0.03F)), linearToSrgb(percentile(brightest, 0.995F))};
+}
+
+void whitesBlacks(Frame& frame, float whites, float blacks) {
+  if (whites == 0.0F && blacks == 0.0F) return;
+  const auto points = luminancePoints(frame);
+  const auto [w, b] = amounts(std::clamp(whites, -100.0F, 100.0F), std::clamp(blacks, -100.0F, 100.0F), points[0], points[1]);
+  if (w == 0.0F && b == 0.0F) return;
+  const float wv = w, bv = b;
+  const auto grey = [wv, bv](float v) {
+    v = wv != 0.0F ? curve(wb::kWhites, kWhitesFrom, wv, v) : v;
+    return bv != 0.0F ? curve(wb::kBlacks, kBlacksFrom, bv, v) : v;
+  };
+  const bool per_channel = w > 0.0F || b < 0.0F;
+  for (auto& q : frame.px) {
+    const float lin[3] = {srgbToLinear(q[0]), srgbToLinear(q[1]), srgbToLinear(q[2])};
+    if (per_channel) {
+      for (int c = 0; c < 3; ++c) {
+        const float over = std::fmax(lin[c] - 1.0F, 0.0F);
+        q[c] = linearToSrgb(srgbToLinear(grey(linearToSrgb(std::fmin(lin[c], 1.0F)))) + over);
+      }
+    } else {
+      const float y = std::fmax(luma3(lin[0], lin[1], lin[2]), 0.0F);
+      if (y <= 1e-7F) continue;
+      const float y2 = srgbToLinear(grey(linearToSrgb(std::fmin(y, 1.0F)))) + std::fmax(y - 1.0F, 0.0F);
+      const float k = y2 / y;
+      for (int c = 0; c < 3; ++c) q[c] = linearToSrgb(lin[c] * k);
+    }
   }
 }
 

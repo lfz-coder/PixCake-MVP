@@ -29,6 +29,11 @@ void toneDetail(Frame& frame, float contrast, float texture, float clarity, floa
 // Stage 3: Highlights and Shadows (-100..100), a fast local Laplacian filter on log2 luminance,
 // at most 1600 px across with a guided upsampling of the change (local_tone.rs apply).
 void localTone(Frame& frame, float shadows, float highlights);
+// The image's black and white points as sRGB-encoded grey levels (3rd percentile of the
+// luminance, 99.5th of the brightest channel, on a copy at most 256 px across).
+std::array<float, 2> luminancePoints(const Frame& frame);
+// Stage 3b: Whites and Blacks (-100..100), adapted to the frame's black and white points.
+void whitesBlacks(Frame& frame, float whites, float blacks);
 
 // Building blocks, exposed for tests.
 std::array<std::size_t, 3> gaussBoxRadii(float sigma);

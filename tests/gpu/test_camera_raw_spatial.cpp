@@ -39,10 +39,10 @@ cr::Frame frame_of(const std::string& name) {
 
 // develop's whole-frame stages in its order, with what this build has ported.
 bool develop(const SpatialCase& c, cr::Frame& f) {
-  if (c.whites != 0.0F || c.blacks != 0.0F) return false;
   if (c.dehaze != 0.0F) cr::dehaze(f, c.dehaze / 100.0F);
   if (c.shadows != 0.0F || c.highlights != 0.0F) cr::localTone(f, c.shadows, c.highlights);
   if (c.contrast != 0.0F || c.texture != 0.0F || c.clarity != 0.0F) cr::toneDetail(f, c.contrast, c.texture, c.clarity, c.pixel_scale);
+  if (c.whites != 0.0F || c.blacks != 0.0F) cr::whitesBlacks(f, c.whites, c.blacks);
   return true;
 }
 

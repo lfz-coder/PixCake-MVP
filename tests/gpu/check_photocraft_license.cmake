@@ -14,7 +14,8 @@ endforeach()
 foreach(ported gpu/render/src/camera_raw.cpp gpu/render/include/pixcake/gpu/camera_raw.hpp
                gpu/render/src/brightness.cpp gpu/render/include/pixcake/gpu/brightness.hpp
                gpu/render/src/adjust.cpp gpu/render/include/pixcake/gpu/adjust.hpp
-               gpu/render/src/camera_raw_spatial.cpp gpu/render/include/pixcake/gpu/camera_raw_spatial.hpp)
+               gpu/render/src/camera_raw_spatial.cpp gpu/render/include/pixcake/gpu/camera_raw_spatial.hpp
+               gpu/render/src/whites_blacks_tables.inc)
   file(READ "${SOURCE_DIR}/${ported}" body)
   string(FIND "${body}" "third_party/photocraft-LICENSES/LICENSE-MIT" at)
   if(at EQUAL -1)
