@@ -1,4 +1,4 @@
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network)
 find_package(Qt6Svg REQUIRED PATHS
   /opt/homebrew/opt/qtsvg/lib/cmake/Qt6Svg
   /usr/local/opt/qtsvg/lib/cmake/Qt6Svg)
@@ -7,6 +7,8 @@ add_executable(pixcake_app_shell
   main.cpp
   shell_window.cpp
   shell_controller.cpp
+  assistant_client.cpp
+  assistant_gateway_server.cpp
   page_kit.cpp
   shell_icons.cpp
   login_page.cpp
@@ -55,18 +57,24 @@ target_link_libraries(pixcake_app_shell PRIVATE
   Qt6::Core
   Qt6::Gui
   Qt6::Widgets
+  Qt6::Network
   Qt6::Svg
 )
 target_compile_features(pixcake_app_shell PRIVATE cxx_std_17)
 target_link_libraries(pixcake_app_shell PRIVATE pixcake_account pixcake_preview_session pixcake_project_session
   pixcake_export_session
-  pixcake_platform_macos pixcake_logging)
+  pixcake_generation_session
+  pixcake_platform_macos pixcake_logging
+  pixcake_assistant)
 # The shell starts renderd for previews; development builds use the build tree's copy.
 add_dependencies(pixcake_app_shell pixcake_app_renderd)
 target_compile_definitions(pixcake_app_shell PRIVATE PIXCAKE_RENDERD_DEV_PATH="$<TARGET_FILE:pixcake_app_renderd>")
 # Exports go to exportd (architecture 10: the shell does not export at full resolution).
 add_dependencies(pixcake_app_shell pixcake_app_exportd)
 target_compile_definitions(pixcake_app_shell PRIVATE PIXCAKE_EXPORTD_DEV_PATH="$<TARGET_FILE:pixcake_app_exportd>")
+# The development shell can exercise the explicit fixture generation process.
+add_dependencies(pixcake_app_shell pixcake_app_generated)
+target_compile_definitions(pixcake_app_shell PRIVATE PIXCAKE_GENERATED_DEV_PATH="$<TARGET_FILE:pixcake_app_generated>")
 
 # --page 直达业务页只在开发构建里有（安全清单 S-25）。发布构建由账号会话决定首屏。
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
@@ -77,12 +85,18 @@ endif()
 option(PIXCAKE_DEV_PAGES "Allow --page previews of business pages (development builds only)" ${PIXCAKE_DEV_PAGES_DEFAULT})
 if(PIXCAKE_DEV_PAGES)
   target_compile_definitions(pixcake_app_shell PRIVATE PIXCAKE_DEV_PAGES=1)
+  target_sources(pixcake_app_shell PRIVATE ${CMAKE_SOURCE_DIR}/tests/apps/assistant_smoke.cpp)
+  target_include_directories(pixcake_app_shell PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 endif()
 
 add_test(NAME test_shell_app_help COMMAND pixcake_app_shell --help)
 set_tests_properties(test_shell_app_help PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 if(PIXCAKE_DEV_PAGES)
+  add_test(NAME test_shell_assistant_ui COMMAND pixcake_app_shell --smoke --smoke-assistant-ui)
+  set_tests_properties(test_shell_assistant_ui PROPERTIES TIMEOUT 20 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+  add_test(NAME test_shell_assistant_generation COMMAND pixcake_app_shell --smoke --smoke-assistant-generation)
+  set_tests_properties(test_shell_assistant_generation PROPERTIES TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
   # Opens a real photo: renderd starts, the first frame and an exposure change reach the canvas.
   add_test(NAME test_shell_app_open_photo
            COMMAND pixcake_app_shell --open ${CMAKE_CURRENT_SOURCE_DIR}/login-hero.png --smoke)

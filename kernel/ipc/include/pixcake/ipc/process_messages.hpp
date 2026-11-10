@@ -10,7 +10,7 @@
 namespace pixcake::ipc {
 
 // 进程间消息的唯一定义（契约 C-30、质量清单 Q-25，架构第 354 行）：预览请求与结果、导出进度、
-// 生成进度、取消、心跳。四个进程都用这里的结构，不各写一套字段。编码见 src/message_codec.hpp。
+// 生成提交/进度/结果确认、取消、心跳。四个进程都用这里的结构，不各写一套字段。编码见 src/message_codec.hpp。
 inline constexpr std::uint32_t kEnvelopeRecord = 0x10000;
 inline constexpr std::uint32_t kProcessProtocolVersion = 1;
 inline constexpr std::size_t kMaxProcessMessageBytes = 64 * 1024;
@@ -35,6 +35,19 @@ struct ExportStartMessage {
   std::string source_path;
 };
 
+// A generated pixel result written by apps/generated.  The progress message
+// carries a vector for multi-output tools; the legacy scalar fields below are
+// kept as a mirror of the first item for older process readers.
+struct GenerationResultInfo {
+  std::uint32_t ordinal = 0;
+  std::string result_id;
+  std::string pixel_file;
+  std::string checksum;
+  std::uint32_t width = 0;
+  std::uint32_t height = 0;
+  std::vector<std::uint8_t> continuation_parameters;
+};
+
 // 生成进度。state 是 kernel/generate 的任务状态；结果文件与校验和随成功一起带回。
 struct GenerationProgressMessage {
   std::uint32_t protocol_version = kProcessProtocolVersion;
@@ -43,6 +56,24 @@ struct GenerationProgressMessage {
   std::uint32_t percent = 0;
   std::string result_id;
   std::string pixel_file;
+  std::string checksum;
+  ResultCode code = ResultCode::Ok;
+  std::vector<GenerationResultInfo> results;
+};
+
+// 主进程 → generated：提交一个已经报价并排队的生成任务。任务字段复用
+// kernel/generate 的 provider-neutral 契约；供应商 JSON 不进入 IPC。
+struct GenerationSubmitMessage {
+  std::uint32_t protocol_version = kProcessProtocolVersion;
+  generate::GenerationTask task;
+};
+
+// 主进程 → generated：确认主进程已经验证并落层（或拒绝）结果。确认消息使生成进程
+// 可以区分“结果文件已写好”和“结果已经进入图层文档”。
+struct GenerationResultConfirmMessage {
+  std::uint32_t protocol_version = kProcessProtocolVersion;
+  std::string task_id;
+  std::string result_id;
   std::string checksum;
   ResultCode code = ResultCode::Ok;
 };
@@ -69,9 +100,18 @@ ResultCode decode_export_start(const std::vector<std::uint8_t>& bytes, ExportSta
 // The message kind in the envelope, so a reader can dispatch before decoding.
 bool is_export_start(const std::vector<std::uint8_t>& bytes);
 bool is_export_progress(const std::vector<std::uint8_t>& bytes);
+bool is_generation_progress(const std::vector<std::uint8_t>& bytes);
+bool is_generation_submit(const std::vector<std::uint8_t>& bytes);
+bool is_generation_result_confirm(const std::vector<std::uint8_t>& bytes);
 bool is_task_cancel(const std::vector<std::uint8_t>& bytes);
 ResultCode encode_generation_progress(const GenerationProgressMessage& message, std::vector<std::uint8_t>& out);
 ResultCode decode_generation_progress(const std::vector<std::uint8_t>& bytes, GenerationProgressMessage& out);
+ResultCode encode_generation_submit(const GenerationSubmitMessage& message, std::vector<std::uint8_t>& out);
+ResultCode decode_generation_submit(const std::vector<std::uint8_t>& bytes, GenerationSubmitMessage& out);
+ResultCode encode_generation_result_confirm(const GenerationResultConfirmMessage& message,
+                                            std::vector<std::uint8_t>& out);
+ResultCode decode_generation_result_confirm(const std::vector<std::uint8_t>& bytes,
+                                            GenerationResultConfirmMessage& out);
 ResultCode encode_task_cancel(const TaskCancelMessage& message, std::vector<std::uint8_t>& out);
 ResultCode decode_task_cancel(const std::vector<std::uint8_t>& bytes, TaskCancelMessage& out);
 ResultCode encode_heartbeat(const HeartbeatMessage& message, std::vector<std::uint8_t>& out);

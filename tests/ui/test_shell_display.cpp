@@ -172,20 +172,19 @@ void test_q11_regions_take_copy_from_the_page_table() {
 
   SignedIn session;
   const auto home = ShellDisplay::for_session(session).regions();
-  expect_ids(home, {"home-nav", "home-import", "home-search", "home-global", "home-common", "home-quick",
+  expect_ids(home, {"home-nav", "home-import", "home-search", "home-global", "home-quick",
                     "home-projects"});
   expect_region(home, "home-nav", "导航栏", {"主页", "AI工具箱", "本地项目", "云空间", "工作流", "选片交付", "回收站"});
   expect_region(home, "home-import", "导入照片创建新项目", {});
   expect_region(home, "home-search", "搜索", {});
   expect_region(home, "home-global", "全局功能区", {"技术支持", "个人中心", "消息中心", "传输列表", "导出列表"});
-  expect_region(home, "home-common", "常用功能", {});
-  expect_region(home, "home-quick", "快捷功能", {});
+  expect_region(home, "home-quick", "快捷功能", {"一句话生图", "祛路人", "老照片修复", "AI面部重绘", "发光"});
   expect_region(home, "home-projects", "项目列表", {});
 
   auto local = ShellDisplay::for_session(session);
   EXPECT(local.navigate(Page::LocalProjects) == pixcake::ResultCode::Ok);
-  expect_ids(local.regions(), {"local-projects-nav", "local-projects-list"});
-  expect_region(local.regions(), "local-projects-nav", "本地项目导航", {"首页"});
+  expect_ids(local.regions(), {"local-projects-nav", "local-projects-search", "local-projects-global", "local-projects-list"});
+  expect_region(local.regions(), "local-projects-nav", "本地项目导航", {"主页", "AI工具箱", "本地项目", "云空间", "工作流", "选片交付", "回收站"});
   expect_region(local.regions(), "local-projects-list", "本地项目列表", {});
 
   auto project = ShellDisplay::for_session(session);

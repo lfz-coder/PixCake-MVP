@@ -1,19 +1,865 @@
 #include "shell_controller.hpp"
 
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QImageReader>
+#include <QInputDialog>
+#include <QLineEdit>
 
 #include "pixcake/capability/capability_registry.hpp"
+#include "pixcake/generate/generation_tool_catalog.hpp"
 
 #include <QDebug>
+#include <QCoreApplication>
+#include <QMetaObject>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 
 namespace pixcake::shell {
 
+ShellController::ShellController(ShellDisplay display)
+    : display_(std::move(display)),
+      assistant_gateway_(assistant::GatewayHandlers{
+          [this](const assistant::AssistantRequest& request) { return assistant_read_edit_context(request); },
+          [this](const assistant::AssistantRequest& request) { return assistant_read_selection_context(request); },
+          [this](const assistant::AssistantRequest& request, const assistant::EditPlan& plan) {
+            return assistant_preview_plan(request, plan);
+          },
+          [this](const assistant::AssistantRequest& request, const assistant::EditPlan& plan) {
+            return assistant_commit_plan(request, plan);
+          },
+          [this](const assistant::AssistantRequest& request, const std::string& plan_id) {
+            return assistant_reject_plan(request, plan_id);
+          },
+          [this](const assistant::AssistantRequest& request, const std::string& command_id) {
+            return assistant_undo(request, command_id);
+          },
+          [this](const assistant::AssistantRequest& request, const assistant::AssistantCard& card) {
+            return assistant_request_card(request, card);
+          },
+          [this](const assistant::AssistantRequest& request, const std::string& label) {
+            return assistant_create_snapshot(request, label);
+          },
+          [this](const assistant::AssistantRequest& request, const assistant::AssistantSnapshotRequest& snapshot) {
+            return assistant_apply_snapshot(request, snapshot);
+          },
+          [this](const assistant::AssistantRequest& request) { return assistant_list_task_history(request); },
+          [this](const assistant::AssistantRequest& request, const assistant::AssistantGenerationRequest& task) {
+            return assistant_run_generation(request, task);
+          },
+          [this](const assistant::AssistantRequest& request,
+                 const assistant::AssistantGenerationCancelRequest& task) {
+            return assistant_cancel_generation(request, task);
+          },
+          [this] { refresh_assistant_approvals(); }
+      }) {}
+
 ShellController::~ShellController() {
+  stop_assistant_generation_worker();
   notifier_.reset();
   session_.reset();  // closes the connection; renderd exits
+}
+
+void ShellController::request_assistant() {
+  if (!session_) {
+    display_.post_notice(UserNotice{qtext("assistant.no-photo").toStdString(), true, false});
+    if (changed_) changed_();
+    return;
+  }
+  if (assistant_client_.busy()) {
+    assistant_visible_ = true;
+    assistant_status_ = qtext("assistant.status.busy");
+    if (changed_) changed_();
+    return;
+  }
+  assistant_visible_ = true;
+  assistant_status_ = qtext("assistant.prompt");
+  if (changed_) changed_();
+
+  bool accepted = false;
+  const QString message =
+      QInputDialog::getText(nullptr, qtext("assistant.dialog.title"), qtext("assistant.dialog.prompt"), QLineEdit::Normal,
+                            QString(), &accepted)
+          .trimmed();
+  if (!accepted || message.isEmpty()) {
+    assistant_status_ = qtext("assistant.status.idle");
+    if (changed_) changed_();
+    return;
+  }
+
+  static std::atomic<std::uint64_t> sequence{0};
+  const std::string image_id = session_->document().image_id();
+  if (assistant_thread_id_.empty()) assistant_thread_id_ = "thread-" + image_id;
+  const std::string request_id = "request-" + std::to_string(++sequence);
+  QJsonObject image;
+  image.insert(QStringLiteral("image_id"), QString::fromStdString(image_id));
+  image.insert(QStringLiteral("editing_instance_id"), QString::fromStdString(session_->document().editing_instance_id()));
+  image.insert(QStringLiteral("source_revision"), static_cast<qint64>(session_->document().revision()));
+  QJsonObject request;
+  request.insert(QStringLiteral("protocol_version"), 1);
+  request.insert(QStringLiteral("request_id"), QString::fromStdString(request_id));
+  request.insert(QStringLiteral("thread_id"), QString::fromStdString(assistant_thread_id_));
+  request.insert(QStringLiteral("message"), message);
+  request.insert(QStringLiteral("base_revision"), static_cast<qint64>(session_->document().revision()));
+  request.insert(QStringLiteral("mode"), QStringLiteral("assistant"));
+  request.insert(QStringLiteral("image"), image);
+
+  append_assistant_row(QStringLiteral("user"), message);
+  AssistantClient::Options options;
+  options.stream_url = QUrl(qEnvironmentVariable(
+      "PIXCAKE_ASSISTANT_URL", QStringLiteral("http://127.0.0.1:27461/threads/{thread_id}/runs/stream")));
+  options.assistant_id = qEnvironmentVariable("PIXCAKE_ASSISTANT_ID", QStringLiteral("assistant"));
+  QString diagnostic;
+  view_.status = qtext("assistant.status.starting");
+  assistant_status_ = view_.status;
+  publish();
+  if (changed_) changed_();
+  if (!assistant_client_.stream(
+          options, request,
+          [this](const assistant::AssistantEvent& event) {
+            append_assistant_row(event);
+            view_.status = assistant_status_;
+            publish();
+            if (changed_) changed_();
+          },
+          [this](const QString& error) {
+            append_assistant_row(QStringLiteral("error"), error);
+            assistant_status_ = qtext("assistant.status.failed") + error;
+            view_.status = assistant_status_;
+            publish();
+            if (changed_) changed_();
+          },
+          diagnostic)) {
+    append_assistant_row(QStringLiteral("error"), diagnostic);
+    assistant_status_ = qtext("assistant.status.failed") + diagnostic;
+    view_.status = assistant_status_;
+    publish();
+    if (changed_) changed_();
+  }
+}
+
+void ShellController::append_assistant_row(QString type, QString text) {
+  type = type.trimmed();
+  text = text.trimmed();
+  if (type.isEmpty()) type = QStringLiteral("message");
+  if (text.isEmpty()) text = qtext("assistant.no-content");
+  // A broken or overly chatty sidecar must not grow the desktop process
+  // without bound. The latest 80 rows are enough for the visible task log.
+  if (assistant_transcript_.size() >= 80) assistant_transcript_.erase(assistant_transcript_.begin());
+  assistant_transcript_.push_back({std::move(type), std::move(text)});
+}
+
+void ShellController::append_assistant_row(const assistant::AssistantEvent& event) {
+  QString text = QString::fromStdString(event.data).trimmed();
+  if (!text.isEmpty()) {
+    QJsonParseError parse_error;
+    const QJsonDocument document = QJsonDocument::fromJson(text.toUtf8(), &parse_error);
+    if (parse_error.error == QJsonParseError::NoError) {
+      if (document.isObject()) {
+        const QJsonObject object = document.object();
+        for (const char* key : {"message", "text", "content", "diagnostic", "detail", "title", "plan_id",
+                                "card_type"}) {
+          const auto value = object.value(QLatin1String(key));
+          if (value.isString() && !value.toString().trimmed().isEmpty()) {
+            text = value.toString().trimmed();
+            break;
+          }
+        }
+        if (text.startsWith(QLatin1Char('{')) || text.startsWith(QLatin1Char('['))) {
+          text = QString::fromUtf8(document.toJson(QJsonDocument::Compact)).trimmed();
+        }
+      }
+    }
+  }
+  if (text.size() > 512) text = text.left(509) + QStringLiteral("...");
+  const QString type = QString::fromStdString(event.type).trimmed();
+  append_assistant_row(type, text);
+  if (type == QStringLiteral("completed") || type == QStringLiteral("done")) {
+    assistant_status_ = !assistant_confirmations_.empty() ? qtext("assistant.status.approval")
+                        : assistant_generation_busy_ ? qtext("assistant.generation.queued") : qtext("assistant.status.completed");
+  } else if (type == QStringLiteral("approval.required")) {
+    assistant_status_ = qtext("assistant.status.approval");
+  } else if (type == QStringLiteral("preview.ready")) {
+    assistant_status_ = qtext("assistant.status.preview");
+  } else if (type == QStringLiteral("error")) {
+    assistant_status_ = qtext("assistant.status.error");
+  } else {
+    assistant_status_ = qtext("assistant.status.event") + type;
+  }
+}
+
+void ShellController::request_assistant_cancel() {
+  if (!assistant_busy() && assistant_confirmations_.empty() && assistant_previews_.empty()) return;
+  for (const auto& action : assistant_gateway_.pending_approvals()) {
+    assistant_gateway_.resolve_approval(action.approval_id, false);
+  }
+  while (!assistant_previews_.empty()) {
+    const auto preview = assistant_previews_.begin()->second;
+    assistant_reject_plan(preview.request, preview.plan.plan_id);
+  }
+  assistant_gateway_.invalidate_approvals();
+  assistant_confirmations_.clear();
+  if (assistant_generation_busy_) {
+    assistant_generation_cancel_requested_.store(true, std::memory_order_release);
+    assistant_generation_entry_.status = "cancelling";
+    generation_status_ = "cancelling";
+  }
+  assistant_client_.cancel();
+  assistant_status_ = assistant_generation_busy_ ? qtext("assistant.generation.cancelling") : qtext("assistant.stopped");
+  append_assistant_row(assistant_generation_busy_ ? QStringLiteral("task.progress") : QStringLiteral("cancelled"),
+                       assistant_generation_busy_ ? assistant_status_ : qtext("assistant.cancelled"));
+  view_.status = assistant_status_;
+  publish();
+  if (changed_) changed_();
+}
+
+void ShellController::request_assistant_hide() {
+  assistant_visible_ = false;
+  if (changed_) changed_();
+}
+
+assistant::GatewayReply ShellController::assistant_read_edit_context(
+    const assistant::AssistantRequest& request) const {
+  assistant::GatewayReply reply;
+  reply.request_id = request.request_id;
+  if (!session_) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "no photo is open";
+    return reply;
+  }
+  const auto& document = session_->document();
+  if (!request.image.image_id.empty() && request.image.image_id != document.image_id()) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "assistant image does not match the open photo";
+    return reply;
+  }
+  reply.revision = document.revision();
+  reply.image_id = document.image_id();
+  reply.editing_instance_id = document.editing_instance_id();
+  const auto registry = CapabilityRegistry::phase_one();
+  for (const auto& descriptor : registry.descriptors()) {
+    if (!descriptor.registered_for_drawing) continue;
+    reply.capabilities.push_back(descriptor.id);
+    assistant::AssistantCapabilityDescriptor advertised;
+    advertised.capability_id = descriptor.id;
+    advertised.module_label = descriptor.module_label;
+    advertised.label = descriptor.label;
+    advertised.can_use_in_preset = descriptor.can_use_in_preset;
+    advertised.can_batch_sync = descriptor.can_batch_sync;
+    advertised.batch_sync_blocked_reason = descriptor.batch_sync_blocked_reason;
+    reply.capability_descriptors.push_back(std::move(advertised));
+  }
+  for (const auto& mode : phase_one_parameter_modes()) {
+    const auto* capability = registry.find(mode.capability_id);
+    if (capability == nullptr || !capability->registered_for_drawing) continue;
+    assistant::AssistantParameterDescriptor advertised;
+    advertised.capability_id = mode.capability_id;
+    advertised.parameter_id = mode.parameter_id;
+    advertised.minimum = mode.minimum;
+    advertised.maximum = mode.maximum;
+    advertised.step = mode.step;
+    advertised.default_value = mode.default_value;
+    advertised.render_stage = mode.render_stage;
+    advertised.render_program = mode.render_program;
+    advertised.render_channel = mode.render_channel;
+    advertised.schema_version = mode.schema_version;
+    advertised.order = mode.order;
+    advertised.choices = mode.choices;
+    advertised.default_choice = mode.default_choice;
+    advertised.step_confirmed = mode.step_confirmed;
+    advertised.default_confirmed = mode.default_confirmed;
+    advertised.text = mode.text;
+    advertised.max_length = mode.max_length;
+    for (const auto& rule : mode.disable_rules) {
+      advertised.disable_rules.push_back({rule.when_capability_id, rule.when_parameter_id, rule.when_choice,
+                                          rule.reason, rule.when_zero});
+    }
+    reply.parameter_descriptors.push_back(std::move(advertised));
+  }
+  return reply;
+}
+
+assistant::GatewayReply ShellController::assistant_read_selection_context(
+    const assistant::AssistantRequest& request) const {
+  assistant::GatewayReply reply;
+  reply.request_id = request.request_id;
+  if (!session_) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "no photo is open";
+    return reply;
+  }
+  if (!request.image.image_id.empty() && request.image.image_id != session_->document().image_id()) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "assistant image does not match the open photo";
+    return reply;
+  }
+  reply.revision = session_->document().revision();
+  reply.selection_id = request.selection.selection_id;
+  reply.selection_kind = request.selection.kind.empty() ? "whole_image" : request.selection.kind;
+  reply.selection_label = request.selection.label;
+  return reply;
+}
+
+assistant::GatewayReply ShellController::assistant_preview_plan(const assistant::AssistantRequest& request,
+                                                                const assistant::EditPlan& plan) {
+  assistant::GatewayReply reply;
+  reply.request_id = request.request_id;
+  if (!assistant_context_matches(request)) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "assistant photo, editing instance or revision is stale";
+    return reply;
+  }
+  if (!session_) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "no photo is open";
+    return reply;
+  }
+  if (!request.image.image_id.empty() && request.image.image_id != session_->document().image_id()) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "assistant image does not match the open photo";
+    return reply;
+  }
+  if (plan.base_revision != session_->document().revision()) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "assistant preview revision is stale";
+    return reply;
+  }
+  if (plan.operations.size() != 1 || plan.operations.front().parameters.empty()) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "the first assistant adapter accepts one capability with one or more parameters per preview";
+    return reply;
+  }
+  const auto& operation = plan.operations.front();
+  if (!operation.target_selection_id.empty()) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "assistant target selection requires a registered selection adapter";
+    return reply;
+  }
+  const auto key = request.request_id + ":" + plan.plan_id;
+  if (assistant_previews_.find(key) != assistant_previews_.end()) {
+    assistant_reject_plan(request, plan.plan_id);
+  }
+  AssistantPreviewState saved{request, plan, {}};
+  for (const auto& parameter : operation.parameters) {
+    if (!validate_parameter_display_value(operation.tool_id, parameter.name, parameter.value)) {
+      reply.code = ResultCode::StateConflict;
+      reply.diagnostic = "assistant parameter is invalid";
+      return reply;
+    }
+    saved.previous.push_back(session_->document().preview(operation.tool_id, parameter.name));
+  }
+  std::string diagnostic;
+  for (const auto& parameter : operation.parameters) {
+    reply.code = session_->preview(operation.tool_id, parameter.name, parameter.value, diagnostic);
+    if (reply.code != ResultCode::Ok) {
+      assistant_previews_[key] = saved;
+      assistant_reject_plan(request, plan.plan_id);
+      reply.diagnostic = std::move(diagnostic);
+      return reply;
+    }
+  }
+  assistant_previews_[key] = std::move(saved);
+  reply.preview_id = request.request_id + ":" + plan.plan_id;
+  reply.revision = session_->document().revision();
+  return reply;
+}
+
+assistant::GatewayReply ShellController::assistant_commit_plan(const assistant::AssistantRequest& request,
+                                                               const assistant::EditPlan& plan) {
+  assistant::GatewayReply reply;
+  reply.request_id = request.request_id;
+  if (!assistant_context_matches(request)) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "assistant photo, editing instance or revision is stale";
+    return reply;
+  }
+  if (!session_) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "no photo is open";
+    return reply;
+  }
+  if (!request.image.image_id.empty() && request.image.image_id != session_->document().image_id()) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "assistant image does not match the open photo";
+    return reply;
+  }
+  if (plan.base_revision != session_->document().revision()) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "assistant commit revision is stale";
+    return reply;
+  }
+  if (plan.operations.size() != 1 || plan.operations.front().parameters.empty()) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "the first assistant adapter accepts one capability with one or more parameters per commit";
+    return reply;
+  }
+  const auto& operation = plan.operations.front();
+  if (!operation.target_selection_id.empty()) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "assistant target selection requires a registered selection adapter";
+    return reply;
+  }
+  std::string diagnostic;
+  if (operation.parameters.size() == 1) {
+    const auto& parameter = operation.parameters.front();
+    reply.code = session_->commit(operation.tool_id, parameter.name, parameter.value, diagnostic);
+  } else {
+    for (const auto& parameter : operation.parameters) {
+      reply.code = session_->preview(operation.tool_id, parameter.name, parameter.value, diagnostic);
+      if (reply.code != ResultCode::Ok) break;
+    }
+    if (reply.code == ResultCode::Ok) {
+      std::vector<std::pair<std::string, std::string>> values;
+      values.reserve(operation.parameters.size());
+      for (const auto& parameter : operation.parameters) values.emplace_back(parameter.name, parameter.value);
+      reply.code = session_->commit_parameters(operation.tool_id, values, diagnostic);
+    }
+  }
+  reply.diagnostic = std::move(diagnostic);
+  reply.command_id = request.request_id + ":" + plan.plan_id;
+  reply.revision = session_->document().revision();
+  if (reply.code == ResultCode::Ok) {
+    assistant_previews_.erase(request.request_id + ":" + plan.plan_id);
+    reply.snapshot_id = reply.command_id;
+    assistant_snapshots_[reply.snapshot_id] = {
+        session_->document().image_id(), session_->history_current(), reply.revision, plan.summary};
+    if (changed_) changed_();
+  }
+  return reply;
+}
+
+assistant::GatewayReply ShellController::assistant_reject_plan(const assistant::AssistantRequest& request,
+                                                               const std::string& plan_id) {
+  assistant::GatewayReply reply;
+  reply.request_id = request.request_id;
+  reply.command_id = request.request_id + ":reject:" + plan_id;
+  const auto found = assistant_previews_.find(request.request_id + ":" + plan_id);
+  if (found != assistant_previews_.end()) {
+    if (assistant_context_matches(request)) {
+      const auto& operation = found->second.plan.operations.front();
+      bool restored = false;
+      for (std::size_t index = 0; index < operation.parameters.size(); ++index) {
+        const auto& parameter = operation.parameters[index];
+        restored = session_->restore_preview_value(operation.tool_id, parameter.name, parameter.value,
+                                                   found->second.previous[index]) || restored;
+      }
+      if (restored) {
+        std::string diagnostic;
+        session_->refresh_preview(diagnostic);
+      }
+    }
+    assistant_previews_.erase(found);
+  }
+  reply.notices.push_back("assistant plan rejected");
+  return reply;
+}
+
+assistant::GatewayReply ShellController::assistant_undo(const assistant::AssistantRequest& request,
+                                                       const std::string& command_id) {
+  assistant::GatewayReply reply;
+  reply.request_id = request.request_id;
+  if (!assistant_context_matches(request)) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "assistant photo, editing instance or revision is stale";
+    return reply;
+  }
+  if (!session_) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "no photo is open";
+    return reply;
+  }
+  if (!request.image.image_id.empty() && request.image.image_id != session_->document().image_id()) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "assistant image does not match the open photo";
+    return reply;
+  }
+  const auto committed = assistant_snapshots_.find(command_id);
+  if (committed == assistant_snapshots_.end() || committed->second.revision != session_->document().revision() ||
+      committed->second.history_index != session_->history_current()) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "assistant undo no longer refers to the current edit";
+    return reply;
+  }
+  std::string diagnostic;
+  reply.code = session_->undo(diagnostic);
+  reply.diagnostic = std::move(diagnostic);
+  reply.command_id = request.request_id + ":undo:" + command_id;
+  reply.revision = session_->document().revision();
+  if (reply.code == ResultCode::Ok && changed_) changed_();
+  return reply;
+}
+
+assistant::GatewayReply ShellController::assistant_request_card(const assistant::AssistantRequest& request,
+                                                               const assistant::AssistantCard& card) {
+  assistant::GatewayReply reply;
+  reply.request_id = request.request_id;
+  reply.card = card;
+  reply.notices.push_back("structured card is awaiting UI input");
+  return reply;
+}
+
+assistant::GatewayReply ShellController::assistant_create_snapshot(const assistant::AssistantRequest& request,
+                                                                   const std::string& label) {
+  assistant::GatewayReply reply;
+  reply.request_id = request.request_id;
+  if (!session_) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "no photo is open";
+    return reply;
+  }
+  if (!request.image.image_id.empty() && request.image.image_id != session_->document().image_id()) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "assistant snapshot image does not match the open photo";
+    return reply;
+  }
+  static std::atomic<std::uint64_t> sequence{0};
+  reply.snapshot_id = request.request_id + ":snapshot:" + std::to_string(++sequence);
+  reply.revision = session_->document().revision();
+  assistant_snapshots_[reply.snapshot_id] = {
+      session_->document().image_id(), session_->history_current(), reply.revision, label};
+  return reply;
+}
+
+assistant::GatewayReply ShellController::assistant_apply_snapshot(
+    const assistant::AssistantRequest& request, const assistant::AssistantSnapshotRequest& snapshot) {
+  assistant::GatewayReply reply;
+  reply.request_id = request.request_id;
+  if (!assistant_context_matches(request)) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "assistant photo, editing instance or revision is stale";
+    return reply;
+  }
+  if (!session_) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "no photo is open";
+    return reply;
+  }
+  const auto found = assistant_snapshots_.find(snapshot.snapshot_id);
+  if (found == assistant_snapshots_.end()) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "assistant snapshot is unavailable";
+    return reply;
+  }
+  const std::string image_id = snapshot.image_id.empty() ? request.image.image_id : snapshot.image_id;
+  if ((!image_id.empty() && image_id != session_->document().image_id()) ||
+      found->second.image_id != session_->document().image_id()) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "assistant snapshot image does not match the open photo";
+    return reply;
+  }
+  std::string diagnostic;
+  reply.code = session_->select_history(found->second.history_index, diagnostic);
+  reply.diagnostic = std::move(diagnostic);
+  reply.snapshot_id = snapshot.snapshot_id;
+  reply.revision = session_->document().revision();
+  if (reply.code == ResultCode::Ok && changed_) changed_();
+  return reply;
+}
+
+assistant::GatewayReply ShellController::assistant_list_task_history(
+    const assistant::AssistantRequest& request) const {
+  assistant::GatewayReply reply;
+  reply.request_id = request.request_id;
+  if (!generation_) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "generation task history is unavailable";
+    return reply;
+  }
+  const auto& history = assistant_generation_busy_ ? assistant_generation_history_ : generation_->history();
+  for (const auto& entry : history) {
+    if (entry.task_id == assistant_generation_entry_.task_id) continue;
+    reply.task_history.push_back({entry.task_id, entry.image_id, entry.tool_id, entry.status, entry.source_revision,
+                                  static_cast<std::uint32_t>(entry.results.size())});
+  }
+  if (!assistant_generation_entry_.task_id.empty()) reply.task_history.push_back(assistant_generation_entry_);
+  return reply;
+}
+
+void ShellController::reap_assistant_generation_worker() {
+  if (assistant_generation_busy_ || !assistant_generation_worker_.joinable()) return;
+  assistant_generation_worker_.join();
+  discard_pending_generation_result();
+}
+
+void ShellController::discard_pending_generation_result() {
+  const auto pending = assistant_generation_pending_;
+  if (!pending || pending->handled) return;
+  if (pending->code == ResultCode::Ok && !pending->progress.results.empty()) {
+    LayerDocument rejected;
+    std::string diagnostic;
+    if (generation_ != nullptr) {
+      (void)generation_->place_result(pending->verified, rejected, {}, diagnostic);
+    }
+    // If the generated child has already gone away, confirmation cannot reach
+    // it; remove the verified files locally so a stale callback cannot leave
+    // creative/ filled with orphaned pixels.
+    for (const auto& result : pending->progress.results) generation_files_.remove_file(result.pixel_file);
+  }
+  pending->handled = true;
+  assistant_generation_pending_.reset();
+}
+
+void ShellController::stop_assistant_generation_worker() {
+  assistant_generation_cancel_requested_.store(true, std::memory_order_release);
+  assistant_generation_lifetime_.reset();
+  if (assistant_generation_worker_.joinable()) assistant_generation_worker_.join();
+  discard_pending_generation_result();
+  assistant_generation_busy_ = false;
+  assistant_generation_task_id_.clear();
+}
+
+assistant::GatewayReply ShellController::assistant_run_generation(
+    const assistant::AssistantRequest& request, const assistant::AssistantGenerationRequest& task_request) {
+  assistant::GatewayReply reply;
+  reply.request_id = request.request_id;
+  if (!assistant_context_matches(request)) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "assistant photo, editing instance or revision is stale";
+    return reply;
+  }
+  reap_assistant_generation_worker();
+  if (!generation_ || !projects_ || !session_ || !current_project_ || !selected_photo_) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "generation is unavailable for the current photo";
+    return reply;
+  }
+  if (assistant_generation_busy_) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "a generation task is already running";
+    return reply;
+  }
+  if (!assistant_generation_fixture_ || task_request.tool_id != generate::kDevelopmentFixtureToolId) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "generation requires a configured provider quote and UI cost confirmation";
+    return reply;
+  }
+  if (QCoreApplication::instance() == nullptr) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "generation requires the shell event loop";
+    return reply;
+  }
+  const std::string image_id = projects_->image_id(*selected_photo_);
+  if (task_request.image_id != image_id || image_id != session_->document().image_id() ||
+      task_request.source_revision != session_->document().revision() ||
+      (!request.image.editing_instance_id.empty() &&
+       request.image.editing_instance_id != session_->document().editing_instance_id())) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "generation source image or revision is stale";
+    return reply;
+  }
+  for (const auto& entry : generation_->history()) {
+    if (entry.task_id == task_request.task_id) {
+      reply.code = ResultCode::StateConflict;
+      reply.diagnostic = "generation task id already exists in durable history";
+      return reply;
+    }
+  }
+  const auto* descriptor = generation_catalog_.find(task_request.tool_id);
+  if (descriptor == nullptr) {
+    reply.code = ResultCode::UnsupportedFormat;
+    reply.diagnostic = "generation tool is unavailable";
+    return reply;
+  }
+
+  std::vector<std::pair<std::string, std::string>> parameter_values;
+  parameter_values.reserve(task_request.parameters.size());
+  for (const auto& parameter : task_request.parameters) {
+    parameter_values.emplace_back(parameter.name, parameter.value);
+  }
+  if (parameter_values.empty() && generation_catalog_.default_parameters(task_request.tool_id, parameter_values) !=
+                                      ResultCode::Ok) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "generation defaults are unavailable";
+    return reply;
+  }
+  std::vector<std::uint8_t> parameter_payload;
+  if (generation_catalog_.encode_parameters(task_request.tool_id, parameter_values, parameter_payload) !=
+      ResultCode::Ok) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "generation parameters are invalid";
+    return reply;
+  }
+
+  generate::GenerationTask task;
+  std::vector<std::string> mask_ids = task_request.mask_ids;
+  std::vector<std::string> reference_image_ids = task_request.reference_image_ids;
+  if (mask_ids.empty()) mask_ids = session_->document().mask_ids();
+  if (reference_image_ids.empty()) reference_image_ids = session_->document().manual_refs();
+  const ResultCode built = generation_catalog_.build_task(
+      task_request.tool_id, task_request.task_id, image_id, task_request.source_revision,
+      std::move(parameter_payload), std::move(mask_ids), std::move(reference_image_ids), task_request.idempotency_key,
+      task);
+  if (built != ResultCode::Ok) {
+    reply.code = built;
+    reply.diagnostic = "generation task is invalid";
+    return reply;
+  }
+
+  TaskQuote quote;
+  quote.task_id = task.task_id;
+  quote.tool_id = task.tool.tool_id;
+  quote.origin = kLedgerOriginPackage;
+  quote.quoted_points = 0;  // Only the explicitly enabled development fixture reaches this path.
+  const std::string layer_path = projects_->layer_document_path(*selected_photo_);
+  const std::uint64_t source_revision = task.source_revision;
+  const std::string task_id = task.task_id;
+  const std::string task_image_id = task.image_id;
+  const std::string tool_id = task.tool.tool_id;
+  const std::string editing_instance_id = session_->document().editing_instance_id();
+  const std::vector<std::pair<std::string, std::string>> draft_parameters = parameter_values;
+  generation_retry_draft_ = GenerationDraft{tool_id, task_image_id, source_revision, draft_parameters,
+                                            task.mask_ids, task.reference_image_ids};
+  assistant_generation_busy_ = true;
+  assistant_generation_task_id_ = task_id;
+  assistant_generation_entry_ = {task_id, task_image_id, tool_id, "running", source_revision, 0};
+  assistant_generation_history_ = generation_->history();
+  assistant_generation_cancel_requested_.store(false, std::memory_order_release);
+  if (!assistant_generation_lifetime_) assistant_generation_lifetime_ = std::make_shared<int>(0);
+  generation_status_ = "queued";
+  assistant_status_ = qtext("assistant.generation.queued");
+  append_assistant_row(QStringLiteral("task.started"), assistant_status_);
+  if (changed_) changed_();
+
+  const std::weak_ptr<int> lifetime = assistant_generation_lifetime_;
+  assistant_generation_worker_ = std::thread([this, lifetime, task = std::move(task), quote, layer_path, task_id,
+                                               task_image_id, source_revision, editing_instance_id]() mutable {
+    std::string diagnostic;
+    ipc::GenerationProgressMessage progress;
+    generation_session::VerifiedGenerationResult verified;
+    const ResultCode code = generation_->generate(task, quote, progress, 30'000, diagnostic,
+                                                 &assistant_generation_cancel_requested_, &verified);
+    auto pending = std::make_shared<PendingGenerationResult>();
+    pending->code = code;
+    pending->diagnostic = std::move(diagnostic);
+    pending->progress = std::move(progress);
+    pending->verified = std::move(verified);
+    assistant_generation_pending_ = pending;
+    const auto reject_unplaced = [&] {
+      if (pending->code != ResultCode::Ok || pending->progress.results.empty() || pending->handled) return;
+      LayerDocument rejected;
+      std::string reject_diagnostic;
+      (void)generation_->place_result(pending->verified, rejected, {}, reject_diagnostic);
+      pending->handled = true;
+    };
+    auto* application = QCoreApplication::instance();
+    if (application == nullptr || lifetime.expired()) {
+      reject_unplaced();
+      return;
+    }
+    QMetaObject::invokeMethod(
+        application,
+        [this, lifetime, pending, task_id, task_image_id, source_revision, layer_path,
+         editing_instance_id]() mutable {
+          if (lifetime.expired()) return;
+          // The worker has finished accessing the session before it posts this
+          // callback. Join before exposing it to other shell operations.
+          if (assistant_generation_worker_.joinable()) assistant_generation_worker_.join();
+          const ResultCode code = pending->code;
+          std::string& diagnostic = pending->diagnostic;
+          auto& progress = pending->progress;
+          auto& verified = pending->verified;
+          assistant_generation_busy_ = false;
+          assistant_generation_task_id_.clear();
+          if (code == ResultCode::Cancelled) {
+            generation_status_ = "cancelled";
+          } else if (code != ResultCode::Ok) {
+            generation_status_ = "failed";
+            if (!diagnostic.empty()) qWarning("assistant generation: %s", diagnostic.c_str());
+          } else if (assistant_generation_cancel_requested_.load(std::memory_order_acquire)) {
+            if (!progress.results.empty()) {
+              LayerDocument rejected;
+              std::string reject_diagnostic;
+              (void)generation_->place_result(verified, rejected, {}, reject_diagnostic);
+            }
+            generation_status_ = "succeeded-not-applied";
+          } else if (!session_ || session_->document().image_id() != task_image_id ||
+                     session_->document().editing_instance_id() != editing_instance_id ||
+                     session_->document().revision() != source_revision) {
+            if (!progress.results.empty()) {
+              LayerDocument rejected;
+              std::string reject_diagnostic;
+              (void)generation_->place_result(verified, rejected, {}, reject_diagnostic);
+            }
+            generation_status_ = "succeeded-source-changed";
+          } else {
+            LayerDocument document;
+            const LoadResult loaded = LayerDocument::load(document, generation_files_, layer_path);
+            ResultCode placed = ResultCode::Ok;
+            bool placement_attempted = false;
+            if (loaded.absent) {
+              auto created = LayerDocument::create(task_image_id, source_revision);
+              if (created) document = std::move(*created);
+              else placed = ResultCode::StateConflict;
+            } else if (loaded.recovered_empty || !loaded.code || *loaded.code != ResultCode::Ok) {
+              placed = loaded.code.value_or(ResultCode::DocumentCorrupt);
+              if (placed == ResultCode::Ok) placed = ResultCode::DocumentCorrupt;
+            }
+            if (placed == ResultCode::Ok) {
+              placement_attempted = true;
+              placed = generation_->place_result(verified, document, layer_path, diagnostic);
+            }
+            if (placed != ResultCode::Ok) {
+              if (!placement_attempted && !progress.results.empty()) {
+                LayerDocument rejected;
+                std::string reject_diagnostic;
+                (void)generation_->place_result(verified, rejected, {}, reject_diagnostic);
+              }
+              generation_status_ = "succeeded-placement-failed";
+            } else if (session_->refresh_layer_document(layer_path, diagnostic) != ResultCode::Ok) {
+              generation_status_ = "succeeded-refresh-failed";
+            } else {
+              generation_status_ = "succeeded";
+              generation_retry_draft_.reset();
+              if (current_photo_) request_thumbnail(*current_photo_);
+            }
+            if (!diagnostic.empty()) qWarning("assistant generation placement: %s", diagnostic.c_str());
+          }
+          assistant_generation_entry_.status = generation_status_;
+          assistant_generation_entry_.result_count = static_cast<std::uint32_t>(progress.results.size());
+          if (session_ && session_->document().editing_instance_id() == editing_instance_id) {
+            const char* key = generation_status_ == "succeeded" ? "assistant.generation.completed" :
+                generation_status_ == "cancelled" ? "assistant.generation.cancelled" :
+                generation_status_ == "failed" ? "assistant.generation.failed" : "assistant.generation.withheld";
+            assistant_status_ = qtext(key);
+            append_assistant_row(QStringLiteral("task.progress"), assistant_status_);
+          }
+          pending->handled = true;
+          if (assistant_generation_pending_ == pending) assistant_generation_pending_.reset();
+          if (changed_) changed_();
+        },
+        Qt::QueuedConnection);
+  });
+
+  reply.task_id = task_id;
+  reply.task_status = "queued";
+  reply.revision = source_revision;
+  return reply;
+}
+
+assistant::GatewayReply ShellController::assistant_cancel_generation(
+    const assistant::AssistantRequest& request, const assistant::AssistantGenerationCancelRequest& task) {
+  assistant::GatewayReply reply;
+  reply.request_id = request.request_id;
+  if (task.task_id != assistant_generation_entry_.task_id ||
+      (!request.image.image_id.empty() && request.image.image_id != assistant_generation_entry_.image_id)) {
+    reply.code = ResultCode::StateConflict;
+    reply.diagnostic = "assistant generation task is unknown or belongs to another image";
+    return reply;
+  }
+  if (assistant_generation_busy_) {
+    assistant_generation_cancel_requested_.store(true, std::memory_order_release);
+    assistant_generation_entry_.status = "cancelling";
+    generation_status_ = "cancelling";
+    assistant_status_ = qtext("assistant.generation.cancelling");
+    append_assistant_row(QStringLiteral("task.progress"), assistant_status_);
+    if (changed_) changed_();
+  }
+  reply.task_id = task.task_id;
+  reply.task_status = assistant_generation_entry_.status;
+  return reply;
 }
 
 void ShellController::request_page(Page target) {
@@ -99,9 +945,13 @@ void ShellController::request_library_view(const std::string& view) {
 }
 
 void ShellController::close_photo() {
+  // Switching photos remains non-blocking. The completion callback checks the
+  // editing instance again before any layer write.
+  if (assistant_generation_busy_) assistant_generation_cancel_requested_.store(true, std::memory_order_release);
   notifier_.reset();
   session_.reset();
   current_photo_.reset();
+  clear_assistant_state();
   view_ = {};
   original_preview_visible_ = false;
   original_sequence_.reset();
@@ -115,6 +965,99 @@ void ShellController::close_photo() {
   guides_.clear();
   guides_visible_ = true;
   guides_changed();
+}
+
+void ShellController::clear_assistant_state() {
+  assistant_gateway_.invalidate_approvals();
+  assistant_confirmations_.clear();
+  assistant_client_.cancel();
+  assistant_visible_ = false;
+  assistant_status_.clear();
+  assistant_transcript_.clear();
+  assistant_thread_id_.clear();
+  assistant_snapshots_.clear();
+  assistant_previews_.clear();
+}
+
+bool ShellController::assistant_context_matches(const assistant::AssistantRequest& request) const {
+  return session_ && request.image.image_id == session_->document().image_id() &&
+         request.image.editing_instance_id == session_->document().editing_instance_id() &&
+         request.base_revision == session_->document().revision();
+}
+
+void ShellController::refresh_assistant_approvals() {
+  assistant_confirmations_.clear();
+  const auto registry = CapabilityRegistry::phase_one();
+  std::map<std::pair<std::string, std::string>, std::string> parameter_labels;
+  for (const auto& rows : {ui::panels::refine_color_rows(), ui::panels::refine_post_color_rows(), ui::panels::refine_local_rows()}) {
+    for (const auto& row : rows) {
+      if (row.binding) parameter_labels[{row.binding->capability_id, row.binding->parameter_id}] = row.label;
+    }
+  }
+  for (const auto& pending : assistant_gateway_.pending_approvals()) {
+    AssistantConfirmationCard card;
+    card.approval_id = qs(pending.approval_id);
+    card.details = qtext("assistant.confirm.context").arg(pending.request.base_revision);
+    switch (pending.kind) {
+      case assistant::AssistantApprovalKind::Commit:
+        card.title = qtext("assistant.confirm.edit");
+        for (const auto& operation : pending.plan.operations) {
+          const auto* descriptor = registry.find(operation.tool_id);
+          card.details += QStringLiteral("\n") + qs(descriptor ? descriptor->label : operation.tool_id);
+          for (const auto& parameter : operation.parameters) {
+            const auto label = parameter_labels.find({operation.tool_id, parameter.name});
+            card.details += QStringLiteral("\n%1 = %2").arg(qs(label == parameter_labels.end() ? parameter.name : label->second),
+                                                            qs(parameter.value));
+          }
+        }
+        card.details += QStringLiteral("\n") + qtext("assistant.confirm.local-cost");
+        break;
+      case assistant::AssistantApprovalKind::Undo:
+        card.title = qtext("assistant.confirm.undo");
+        card.details += QStringLiteral("\n") + qtext("assistant.confirm.undo-detail");
+        break;
+      case assistant::AssistantApprovalKind::ApplySnapshot: {
+        card.title = qtext("assistant.confirm.snapshot");
+        const auto found = assistant_snapshots_.find(pending.snapshot.snapshot_id);
+        card.details += QStringLiteral("\n") + qtext("assistant.confirm.snapshot-detail");
+        if (found != assistant_snapshots_.end() && !found->second.label.empty()) {
+          card.details += QStringLiteral("\n") + qs(found->second.label);
+        }
+        break;
+      }
+      case assistant::AssistantApprovalKind::Generation:
+        card.title = qtext("assistant.confirm.generation");
+        card.can_confirm = assistant_generation_fixture_ && pending.generation.tool_id == generate::kDevelopmentFixtureToolId;
+        card.details += QStringLiteral("\n") + qtext(card.can_confirm ? "assistant.confirm.fixture-cost"
+                                                                       : "assistant.confirm.quote-unavailable");
+        for (const auto& parameter : pending.generation.parameters) {
+          card.details += QStringLiteral("\n%1 = %2").arg(qs(parameter.name), qs(parameter.value));
+        }
+        break;
+    }
+    assistant_confirmations_.push_back(std::move(card));
+  }
+  if (!assistant_confirmations_.empty()) {
+    assistant_visible_ = true;
+    assistant_status_ = qtext("assistant.status.approval");
+  }
+  if (changed_) changed_();
+}
+
+void ShellController::request_assistant_resolve(const QString& approval_id, bool approved) {
+  // The button supplies only a C++-owned ID; never accept replacement payloads from UI or Python.
+  const auto pending = assistant_gateway_.pending_approvals();
+  const auto found = std::find_if(pending.begin(), pending.end(), [&](const auto& item) {
+    return item.approval_id == approval_id.toStdString();
+  });
+  if (found == pending.end()) return;
+  const auto reply = assistant_gateway_.resolve_approval(found->approval_id, approved);
+  assistant_status_ = !approved ? qtext("assistant.confirm.rejected")
+                     : reply.code != ResultCode::Ok ? qtext("assistant.confirm.failed")
+                     : reply.task_status == "queued" ? qtext("assistant.generation.queued")
+                                                       : qtext("assistant.confirm.applied");
+  append_assistant_row(qtext("assistant.event"), assistant_status_);
+  refresh_assistant_approvals();
 }
 
 void ShellController::close_project() {
@@ -161,8 +1104,13 @@ void ShellController::request_thumbnail(std::int64_t photo_id) {
   if (projects_->resolve_photo(photo_id, path, diagnostic) != ResultCode::Ok) return;  // missing: no thumbnail
   std::vector<std::uint8_t> document;
   if (projects_->document_bytes(photo_id, document) != ResultCode::Ok) document.clear();  // show the original
+  std::vector<std::uint8_t> layer_document;
+  const std::string layer_path = projects_->layer_document_path(photo_id);
+  if (generation_files_.exists(layer_path)) {
+    if (generation_files_.read_file(layer_path, layer_document).ok == false) layer_document.clear();
+  }
   if (thumbnails_->request(photo_id, projects_->image_id(photo_id), path,
-                           std::move(document), kThumbnailEdge, diagnostic) != ResultCode::Ok) {
+                           std::move(document), kThumbnailEdge, diagnostic, std::move(layer_document)) != ResultCode::Ok) {
     qWarning("thumbnail request failed: %s", diagnostic.c_str());
   }
 }
@@ -228,10 +1176,19 @@ void ShellController::attach_projects(std::unique_ptr<project_session::ProjectSe
 }
 
 void ShellController::request_import(const std::vector<std::string>& paths) {
+  request_import_internal(paths, std::nullopt);
+}
+
+void ShellController::request_import_named(const std::vector<std::string>& paths, const std::string& name) {
+  request_import_internal(paths, name.empty() ? std::nullopt : std::optional<std::string>(name));
+}
+
+void ShellController::request_import_internal(const std::vector<std::string>& paths,
+                                               const std::optional<std::string>& name) {
   if (!projects_ || paths.empty()) return;
   const bool in_project = current_project_.has_value() && display_.in_project();
   const auto outcome = in_project ? projects_->import_into(*current_project_, paths)
-                                  : projects_->import_new_project(paths);
+                                  : (name ? projects_->import_new_project(paths, *name) : projects_->import_new_project(paths));
   if (!in_project && outcome.project_id != 0 && outcome.accepted > 0) {
     // Requirement 5.3: entering a project shows refine with the first photo.
     if (display_.open_project() == ResultCode::Ok) {
@@ -272,7 +1229,11 @@ void ShellController::request_open_project(std::int64_t project_id) {
   // Evidence 2026-11-06-project-entry-observation.md.
   if (!projects_) return;
   const auto place = projects_->last_place(project_id);
-  const Page landing = place.workspace == project_session::Workspace::Library ? Page::Library : Page::Refine;
+  // The dedicated local-projects surface always enters the refine canvas;
+  // the home project list keeps the user's last workspace.
+  const Page landing = display_.page() == Page::LocalProjects
+                           ? Page::Refine
+                           : (place.workspace == project_session::Workspace::Library ? Page::Library : Page::Refine);
   if (display_.open_project(landing) != ResultCode::Ok) return;
   current_project_ = project_id;
   filter_ = {};
@@ -788,6 +1749,7 @@ void ShellController::open_project_photo(std::int64_t photo_id) {
   options.max_edge = preview_max_edge_;
   options.document_directory = projects_->document_directory();
   options.document_id = projects_->document_name(photo_id);
+  options.layer_document_path = projects_->layer_document_path(photo_id);
   if (open_photo(path, options, diagnostic) == ResultCode::Ok) {
     session_->on_committed([this, photo_id] {
       projects_->mark_edited(photo_id);
@@ -1158,6 +2120,434 @@ void ShellController::attach_exports(const SessionState& session, export_session
   // Tasks queued by an earlier session (or left by a crash, now failed and retryable).
   if (exports_->resume(diagnostic) != ResultCode::Ok) qWarning("export resume: %s", diagnostic.c_str());
   watch_exportd();
+}
+
+void ShellController::attach_generation(const SessionState& session,
+                                        generation_session::GenerationSessionOptions options) {
+  stop_assistant_generation_worker();
+  assistant_generation_lifetime_ = std::make_shared<int>(0);
+  assistant_generation_entry_ = {};
+  assistant_generation_history_.clear();
+  assistant_generation_fixture_ = options.process.fixture;
+  generation_.reset();
+  generation_status_.clear();
+  generation_tool_id_.clear();
+  generation_parameter_values_.clear();
+  generation_retry_draft_.reset();
+  generation_use_retry_draft_ = false;
+  if (!projects_) return;
+  std::string diagnostic;
+  if (generation_session::GenerationSession::open(session, std::move(options), generation_, diagnostic) !=
+      ResultCode::Ok) {
+    qWarning("generation unavailable: %s", diagnostic.c_str());
+    generation_status_ = "unavailable";
+  } else if (!generation_catalog_.descriptors().empty()) {
+    generation_tool_id_ = generation_catalog_.descriptors().front().spec.tool_id;
+    (void)generation_catalog_.default_parameters(generation_tool_id_, generation_parameter_values_);
+  }
+}
+
+std::vector<GenerationToolEntry> ShellController::generation_tools() const {
+  std::vector<GenerationToolEntry> entries;
+  if (!generation_) return entries;
+  for (const auto& descriptor : generation_catalog_.descriptors()) {
+    entries.push_back({descriptor.spec.tool_id, descriptor.title, descriptor.category,
+                       descriptor.spec.tool_id == generation_tool_id_});
+  }
+  return entries;
+}
+
+void ShellController::request_generation_tool(const std::string& tool_id) {
+  if (!generation_ || generation_catalog_.find(tool_id) == nullptr || tool_id == generation_tool_id_) return;
+  std::vector<std::pair<std::string, std::string>> defaults;
+  if (generation_catalog_.default_parameters(tool_id, defaults) != ResultCode::Ok) return;
+  generation_tool_id_ = tool_id;
+  generation_parameter_values_ = std::move(defaults);
+  generation_status_.clear();
+  if (changed_) changed_();
+}
+
+bool ShellController::generation_cancel_available() const {
+  return generation_ != nullptr && assistant_generation_busy_ && !assistant_generation_task_id_.empty();
+}
+
+void ShellController::request_generation_cancel() {
+  if (!generation_cancel_available()) return;
+  assistant_generation_cancel_requested_.store(true, std::memory_order_release);
+  generation_status_ = "cancelling";
+  assistant_generation_entry_.status = "cancelling";
+  if (changed_) changed_();
+}
+
+std::vector<GenerationTaskEntry> ShellController::generation_tasks() const {
+  std::vector<GenerationTaskEntry> entries;
+  if (!generation_) return entries;
+  if (assistant_generation_busy_) {
+    entries.push_back({assistant_generation_task_id_, assistant_generation_entry_.status});
+    return entries;
+  }
+  for (const auto& [task_id, status] : generation_->task_statuses()) {
+    entries.push_back({task_id, status});
+  }
+  return entries;
+}
+
+std::vector<GenerationHistoryEntry> ShellController::generation_history() const {
+  std::vector<GenerationHistoryEntry> entries;
+  if (!generation_) return entries;
+  const auto& history = assistant_generation_busy_ ? assistant_generation_history_ : generation_->history();
+  for (const auto& entry : history) {
+    entries.push_back({entry.task_id, entry.tool_id, entry.status, entry.results.size(), entry.source_revision});
+  }
+  return entries;
+}
+
+bool ShellController::generation_retry_available() const {
+  if (!generation_) return false;
+  if (generation_status_ == "failed" && generation_retry_draft_ && projects_ && session_ && selected_photo_ &&
+      generation_retry_draft_->image_id == projects_->image_id(*selected_photo_) &&
+      generation_retry_draft_->source_revision == session_->document().revision()) {
+    return true;
+  }
+  if (!projects_ || !session_ || !selected_photo_) return false;
+  const std::string image_id = projects_->image_id(*selected_photo_);
+  const std::uint64_t revision = session_->document().revision();
+  const auto& history = generation_->history();
+  for (auto it = history.rbegin(); it != history.rend(); ++it) {
+    if (it->status != generation_session::kGenerationHistoryFailedStatus || it->image_id != image_id ||
+        it->source_revision != revision ||
+        generation_catalog_.find(it->tool_id) == nullptr) {
+      continue;
+    }
+    std::vector<std::pair<std::string, std::string>> values;
+    if (generation_catalog_.decode_parameters(it->tool_id, it->parameter_payload, values) == ResultCode::Ok) return true;
+  }
+  return false;
+}
+
+std::vector<GenerationParameterEntry> ShellController::generation_parameters() const {
+  std::vector<GenerationParameterEntry> entries;
+  if (!generation_) return entries;
+  const auto* selected = generation_catalog_.find(generation_tool_id_);
+  if (selected == nullptr) return entries;
+  for (const auto& parameter : selected->parameters) {
+    const auto found = std::find_if(generation_parameter_values_.begin(), generation_parameter_values_.end(),
+                                    [&](const auto& value) { return value.first == parameter.id; });
+    const std::string type = parameter.type == generate::ToolParameterType::Choice
+                                 ? "choice"
+                                 : parameter.type == generate::ToolParameterType::Number
+                                       ? "number"
+                                       : parameter.type == generate::ToolParameterType::Boolean ? "boolean" : "text";
+    entries.push_back({parameter.id,
+                       parameter.title,
+                       type,
+                       found == generation_parameter_values_.end() ? parameter.default_value : found->second,
+                       parameter.choices,
+                       parameter.max_length,
+                       parameter.required});
+  }
+  return entries;
+}
+
+void ShellController::request_generation_parameter(const std::string& id, const std::string& value) {
+  if (!generation_) return;
+  auto values = generation_parameter_values_;
+  if (values.empty()) {
+    (void)generation_catalog_.default_parameters(generation_tool_id_, values);
+  }
+  bool found = false;
+  for (auto& entry : values) {
+    if (entry.first == id) {
+      entry.second = value;
+      found = true;
+      break;
+    }
+  }
+  if (!found) return;
+  std::vector<std::uint8_t> encoded;
+  if (generation_catalog_.encode_parameters(generation_tool_id_, values, encoded) != ResultCode::Ok) {
+    return;
+  }
+  generation_parameter_values_ = std::move(values);
+  if (changed_) changed_();
+}
+
+void ShellController::request_generation_retry() {
+  if (!generation_ || !projects_ || !session_ || !selected_photo_) return;
+  if (!generation_retry_draft_) {
+    const std::string image_id = projects_->image_id(*selected_photo_);
+    const std::uint64_t revision = session_->document().revision();
+    const auto& history = generation_->history();
+    for (auto it = history.rbegin(); it != history.rend(); ++it) {
+      if (it->status != generation_session::kGenerationHistoryFailedStatus || it->image_id != image_id ||
+          it->source_revision != revision) continue;
+      std::vector<std::pair<std::string, std::string>> values;
+      if (generation_catalog_.decode_parameters(it->tool_id, it->parameter_payload, values) != ResultCode::Ok) continue;
+      generation_retry_draft_ = GenerationDraft{it->tool_id, it->image_id, it->source_revision, std::move(values),
+                                                it->mask_ids, it->reference_image_ids};
+      break;
+    }
+  }
+  if (!generation_retry_draft_) {
+    request_generation();
+    return;
+  }
+  const auto& draft = *generation_retry_draft_;
+  if (projects_->image_id(*selected_photo_) != draft.image_id || session_->document().revision() != draft.source_revision) {
+    generation_status_ = "retry-source-changed";
+    if (changed_) changed_();
+    return;
+  }
+  generation_tool_id_ = draft.tool_id;
+  generation_parameter_values_ = draft.parameters;
+  generation_use_retry_draft_ = true;
+  request_generation();
+}
+
+bool ShellController::generation_apply_available() const {
+  if (!generation_ || !projects_ || !session_ || !selected_photo_) return false;
+  LayerDocument document;
+  const LoadResult loaded = LayerDocument::load(document, generation_files_, projects_->layer_document_path(*selected_photo_));
+  return !loaded.absent && (!loaded.code || *loaded.code == ResultCode::Ok) && !loaded.recovered_empty &&
+         document.source_image_id() == projects_->image_id(*selected_photo_) &&
+         document.source_revision() == session_->document().revision() && !document.generations().empty();
+}
+
+void ShellController::request_generation_apply() {
+  if (!generation_apply_available() || !projects_ || !selected_photo_ || !session_) return;
+  std::string diagnostic;
+  const ResultCode applied = session_->apply_layers(diagnostic);
+  if (applied != ResultCode::Ok) {
+    generation_status_ = "apply-failed";
+    if (!diagnostic.empty()) qWarning("generation apply: %s", diagnostic.c_str());
+    show_notices({}, NoticeScene::Generation, applied);
+    if (changed_) changed_();
+    return;
+  }
+  // The layer document stays alongside the photo, so renderd continues to
+  // composite the verified generated pixels after the edit document records
+  // the bake.  Enter Refine only after the command and redraw have succeeded.
+  generation_status_ = "applied";
+  display_.navigate(Page::Refine);
+  if (changed_) changed_();
+}
+
+void ShellController::request_generation() {
+  if (assistant_generation_busy_) {
+    generation_status_ = "busy";
+    if (changed_) changed_();
+    return;
+  }
+  const bool use_retry_draft = generation_use_retry_draft_;
+  generation_use_retry_draft_ = false;
+  reap_assistant_generation_worker();
+  if (!generation_ || generation_tool_id_.empty() || !projects_ || !current_project_ || !selected_photo_ || !session_) {
+    generation_status_ = "no-photo";
+    if (changed_) changed_();
+    return;
+  }
+
+  const std::int64_t photo_id = *selected_photo_;
+  const std::string layer_path = projects_->layer_document_path(photo_id);
+  LayerDocument document;
+  const LoadResult loaded = LayerDocument::load(document, generation_files_, layer_path);
+  if (!loaded.absent && (!loaded.code || *loaded.code != ResultCode::Ok || loaded.recovered_empty)) {
+    generation_status_ = "layer-document-unreadable";
+    show_notices({}, NoticeScene::Generation, loaded.code.value_or(ResultCode::DocumentCorrupt));
+    if (changed_) changed_();
+    return;
+  }
+  if (loaded.absent) {
+    auto created = LayerDocument::create(projects_->image_id(photo_id), session_->document().revision());
+    if (!created) {
+      generation_status_ = "layer-document-create-failed";
+      show_notices({}, NoticeScene::Generation, ResultCode::StateConflict);
+      if (changed_) changed_();
+      return;
+    }
+    document = std::move(*created);
+  }
+
+  static std::atomic<std::uint64_t> sequence{0};
+  const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::system_clock::now().time_since_epoch())
+                       .count();
+  std::vector<std::pair<std::string, std::string>> parameter_values = generation_parameter_values_;
+  std::vector<std::uint8_t> parameter_payload;
+  if (parameter_values.empty()) {
+    (void)generation_catalog_.default_parameters(generation_tool_id_, parameter_values);
+  }
+  const ResultCode parameter_code = generation_catalog_.encode_parameters(
+      generation_tool_id_, parameter_values, parameter_payload);
+  if (parameter_code != ResultCode::Ok) {
+    generation_status_ = "failed";
+    show_notices({}, NoticeScene::Generation, parameter_code);
+    if (changed_) changed_();
+    return;
+  }
+  std::vector<std::string> mask_ids = session_->document().mask_ids();
+  std::vector<std::string> reference_image_ids = session_->document().manual_refs();
+  if (use_retry_draft && generation_retry_draft_ && generation_retry_draft_->tool_id == generation_tool_id_ &&
+      generation_retry_draft_->image_id == projects_->image_id(photo_id) &&
+      generation_retry_draft_->source_revision == session_->document().revision()) {
+    mask_ids = generation_retry_draft_->mask_ids;
+    reference_image_ids = generation_retry_draft_->reference_image_ids;
+  }
+  generate::GenerationTask task;
+  const ResultCode task_code = generation_catalog_.build_task(
+      generation_tool_id_,
+      "creative-" + std::to_string(static_cast<long long>(now)) + "-" + std::to_string(++sequence),
+      projects_->image_id(photo_id), session_->document().revision(), std::move(parameter_payload),
+      std::move(mask_ids), std::move(reference_image_ids), {}, task);
+  if (task_code != ResultCode::Ok) {
+    generation_status_ = "failed";
+    show_notices({}, NoticeScene::Generation, task_code);
+    if (changed_) changed_();
+    return;
+  }
+
+  generation_retry_draft_ = GenerationDraft{task.tool.tool_id,
+                                            task.image_id,
+                                            task.source_revision,
+                                            parameter_values,
+                                            task.mask_ids,
+                                            task.reference_image_ids};
+
+  TaskQuote quote;
+  quote.task_id = task.task_id;
+  quote.tool_id = task.tool.tool_id;
+  quote.origin = kLedgerOriginPackage;
+  quote.quoted_points = 0;  // The fixture is local and deliberately free.
+
+  // Creative-page generation uses the same worker boundary as assistant
+  // generation. The shell stays responsive while the provider process is
+  // queueing, waiting, verifying and writing its result files.
+  const std::string task_id = task.task_id;
+  const std::string task_image_id = task.image_id;
+  const std::uint64_t source_revision = task.source_revision;
+  const std::string editing_instance_id = session_->document().editing_instance_id();
+  assistant_generation_busy_ = true;
+  assistant_generation_task_id_ = task_id;
+  assistant_generation_entry_ = {task_id, task_image_id, task.tool.tool_id, "running", source_revision, 0};
+  assistant_generation_history_ = generation_->history();
+  assistant_generation_cancel_requested_.store(false, std::memory_order_release);
+  if (!assistant_generation_lifetime_) assistant_generation_lifetime_ = std::make_shared<int>(0);
+  const std::weak_ptr<int> lifetime = assistant_generation_lifetime_;
+  generation_status_ = "queued";
+  if (changed_) changed_();
+
+  assistant_generation_worker_ = std::thread(
+      [this, lifetime, task = std::move(task), quote, layer_path, photo_id, task_id, task_image_id, source_revision,
+       editing_instance_id]() mutable {
+        std::string diagnostic;
+        ipc::GenerationProgressMessage progress;
+        generation_session::VerifiedGenerationResult verified;
+        const ResultCode code = generation_->generate(task, quote, progress, 30'000, diagnostic,
+                                                     &assistant_generation_cancel_requested_, &verified);
+        auto pending = std::make_shared<PendingGenerationResult>();
+        pending->code = code;
+        pending->diagnostic = std::move(diagnostic);
+        pending->progress = std::move(progress);
+        pending->verified = std::move(verified);
+        assistant_generation_pending_ = pending;
+        const auto reject_unplaced = [&] {
+          if (pending->code != ResultCode::Ok || pending->progress.results.empty() || pending->handled) return;
+          LayerDocument rejected;
+          std::string reject_diagnostic;
+          (void)generation_->place_result(pending->verified, rejected, {}, reject_diagnostic);
+          pending->handled = true;
+        };
+        auto* application = QCoreApplication::instance();
+        if (application == nullptr || lifetime.expired()) {
+          reject_unplaced();
+          return;
+        }
+        QMetaObject::invokeMethod(
+            application,
+            [this, lifetime, pending, task_id, task_image_id, source_revision, editing_instance_id, layer_path,
+             photo_id]() mutable {
+              if (lifetime.expired()) return;
+              if (assistant_generation_worker_.joinable()) assistant_generation_worker_.join();
+              const ResultCode code = pending->code;
+              std::string& diagnostic = pending->diagnostic;
+              auto& progress = pending->progress;
+              auto& verified = pending->verified;
+              assistant_generation_busy_ = false;
+              assistant_generation_task_id_.clear();
+              const auto reject = [&] {
+                if (code != ResultCode::Ok || progress.results.empty()) return;
+                LayerDocument rejected;
+                std::string reject_diagnostic;
+                (void)generation_->place_result(verified, rejected, {}, reject_diagnostic);
+              };
+              if (code == ResultCode::Cancelled) {
+                generation_status_ = "cancelled";
+              } else if (code != ResultCode::Ok) {
+                generation_status_ = "failed";
+                if (!diagnostic.empty()) qWarning("generation: %s", diagnostic.c_str());
+                show_notices({}, NoticeScene::Generation, code);
+              } else if (assistant_generation_cancel_requested_.load(std::memory_order_acquire)) {
+                reject();
+                generation_status_ = "succeeded-not-applied";
+              } else if (!session_ || session_->document().image_id() != task_image_id ||
+                         session_->document().editing_instance_id() != editing_instance_id ||
+                         session_->document().revision() != source_revision) {
+                reject();
+                generation_status_ = "succeeded-source-changed";
+              } else {
+                LayerDocument document;
+                const LoadResult loaded = LayerDocument::load(document, generation_files_, layer_path);
+                ResultCode placed = ResultCode::Ok;
+                bool placement_attempted = false;
+                if (loaded.absent) {
+                  auto created = LayerDocument::create(task_image_id, source_revision);
+                  if (created) document = std::move(*created);
+                  else placed = ResultCode::StateConflict;
+                } else if (loaded.recovered_empty || !loaded.code || *loaded.code != ResultCode::Ok) {
+                  placed = loaded.code.value_or(ResultCode::DocumentCorrupt);
+                  if (placed == ResultCode::Ok) placed = ResultCode::DocumentCorrupt;
+                }
+                std::string placement_diagnostic = diagnostic;
+                if (placed == ResultCode::Ok) {
+                  placement_attempted = true;
+                  placed = generation_->place_result(verified, document, layer_path, placement_diagnostic);
+                }
+                if (placed != ResultCode::Ok) {
+                  // If loading the sidecar failed before place_result could
+                  // confirm the result, reject it explicitly to reclaim the
+                  // provider's temporary pixel files.
+                  if (!placement_attempted && !progress.results.empty()) {
+                    LayerDocument rejected;
+                    std::string reject_diagnostic;
+                    (void)generation_->place_result(verified, rejected, {}, reject_diagnostic);
+                  }
+                  generation_status_ = "succeeded-placement-failed";
+                  show_notices({}, NoticeScene::Generation, placed);
+                } else {
+                  std::string refresh_diagnostic;
+                  const ResultCode refreshed = session_->refresh_layer_document(layer_path, refresh_diagnostic);
+                  if (refreshed != ResultCode::Ok) {
+                    generation_status_ = "succeeded-refresh-failed";
+                    if (!refresh_diagnostic.empty()) qWarning("generation preview refresh: %s",
+                                                               refresh_diagnostic.c_str());
+                    show_notices({}, NoticeScene::Generation, refreshed);
+                  } else {
+                    generation_status_ = "succeeded";
+                    generation_retry_draft_.reset();
+                    request_thumbnail(photo_id);
+                  }
+                }
+                if (!placement_diagnostic.empty()) qWarning("generation placement: %s",
+                                                            placement_diagnostic.c_str());
+              }
+              assistant_generation_entry_.status = generation_status_;
+              assistant_generation_entry_.result_count = static_cast<std::uint32_t>(progress.results.size());
+              pending->handled = true;
+              if (assistant_generation_pending_ == pending) assistant_generation_pending_.reset();
+              if (changed_) changed_();
+            },
+            Qt::QueuedConnection);
+      });
 }
 
 std::optional<ExportTarget> ShellController::export_target() const {

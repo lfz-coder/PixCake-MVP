@@ -11,6 +11,8 @@ std::optional<ProcessArguments> parse_process_arguments(int argc, char** argv) {
     const std::string_view argument(argv[i]);
     if (argument == "--health") {
       parsed.health = true;
+    } else if (argument == "--fixture") {
+      parsed.fixture = true;
     } else if (argument == "--log-dir" && i + 1 < argc && !directory_given) {
       parsed.log_directory = argv[++i];
       directory_given = true;

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PixCake Assistant tool call",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol_version", "call_id", "tool", "arguments"],
+  "properties": {
+    "protocol_version": {"const": 1},
+    "call_id": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"},
+    "tool": {
+      "enum": [
+        "get_edit_context",
+        "get_selection_context",
+        "create_task_plan",
+        "build_edit_plan",
+        "preview_edit_plan",
+        "request_structured_card",
+        "commit_edit_plan",
+        "reject_edit_plan",
+        "undo_edit",
+        "run_generation",
+        "cancel_generation",
+        "create_snapshot",
+        "apply_snapshot",
+        "list_task_history",
+        "get_approval_status"
+      ]
+    },
+    "arguments": {"type": "object"},
+    "user_confirmed": {"type": "boolean", "deprecated": true, "description": "Legacy input only; never grants desktop approval."}
+  }
+}

@@ -2,6 +2,7 @@
 
 #include "pixcake/command/command_gate.hpp"
 #include "pixcake/editdoc/edit_document.hpp"
+#include "pixcake/layerdoc/layer_document.hpp"
 #include "pixcake/persist/file_system.hpp"
 #include "pixcake/preview_channel/preview_client.hpp"
 
@@ -50,6 +51,9 @@ struct PreviewSessionOptions {
   // The edit document's image id (file <document_id>.pxedit).  Empty: derived
   // from the photo path (photos opened outside a project).
   std::string document_id;
+  // Optional creative layer document.  Empty keeps the normal refine-only
+  // preview path; project photos provide the sibling .pxlayer path.
+  std::string layer_document_path;
 };
 
 // One photo being edited in the shell: its edit document (changed only through
@@ -81,6 +85,10 @@ class PreviewSession {
   // exports and the edit formulas are independent of this setting.
   void set_preview_max_edge(std::uint32_t max_edge);
   ResultCode refresh_preview(std::string& diagnostic);
+  bool restore_preview_value(const std::string& capability_id, const std::string& parameter_id,
+                             const std::string& expected, const std::optional<std::string>& previous) {
+    return document_.restore_preview_value(capability_id, parameter_id, expected, previous);
+  }
   // Writes the value into the document (new revision) and shows it.
   ResultCode commit(const std::string& capability_id, const std::string& parameter_id,
                     const std::string& display_value, std::string& diagnostic);
@@ -127,6 +135,15 @@ class PreviewSession {
   ResultCode redo(std::string& diagnostic);
   // Called after each successful commit (e.g. to mark the photo edited).
   void on_committed(std::function<void()> callback) { committed_ = std::move(callback); }
+  // Reloads the optional creative layer document and sends it through the
+  // existing source channel.  The next preview request will then composite
+  // verified generated pixels without reopening the photo session.
+  ResultCode refresh_layer_document(const std::string& path, std::string& diagnostic);
+  // Applies the currently loaded creative result through the same command
+  // gate as every other edit.  The creative layer document remains the
+  // verified pixel source for refine preview; the edit document records that
+  // its editable effects have been baked and resets their sliders.
+  ResultCode apply_layers(std::string& diagnostic);
 
  private:
   PreviewSession(std::string photo_path, EditDocument document, std::string document_path,
@@ -146,6 +163,8 @@ class PreviewSession {
 
   std::string photo_path_;
   EditDocument document_;
+  std::optional<LayerDocument> layers_;
+  std::string layer_document_path_;
   std::string document_path_;
   PreviewSessionOptions options_;
   PosixFileSystem files_;

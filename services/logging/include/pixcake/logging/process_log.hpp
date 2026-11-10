@@ -8,9 +8,11 @@
 
 namespace pixcake::logging {
 
-// 进程入口的命令行：--health、--log-dir <目录>、--socket <路径> 顺序不限。认不出的参数让 parsed 为空。
+// 进程入口的命令行：--health、--log-dir <目录>、--socket <路径>、--data-dir <目录>、--fixture 顺序不限。
+// 认不出的参数让 parsed 为空；--fixture 只用于没有官方 provider 时的本地生成替身。
 struct ProcessArguments {
   bool health = false;
+  bool fixture = false;
   std::string log_directory;  // 没给时为 default_log_directory()
   std::string socket_path;    // 预览通道（renderd）或导出通道（exportd）；没给时为空
   std::string data_directory; // 应用数据目录（exportd 的导出日志在 <data>/exports）；没给时为空

@@ -218,6 +218,24 @@ CompileResult compile(const EditDocument& document, const LayerDocument& layers,
     }
     result.description.layers.push_back(std::move(output));
   }
+  // The layer document records the latest verified result for each generated
+  // layer.  Keep this lookup in the backend-neutral description; renderd is
+  // responsible for opening and validating the actual pixel file.
+  std::unordered_map<std::string, GenerationView> generation_by_layer;
+  for (const auto& generation : layers.generations()) {
+    if (!generation.layer_id.empty() && !generation.pixel_file.empty()) {
+      generation_by_layer[generation.layer_id] = generation;
+    }
+  }
+  for (auto& output : result.description.layers) {
+    const auto found = generation_by_layer.find(output.id);
+    if (found == generation_by_layer.end()) continue;
+    const auto& generation = found->second;
+    output.pixel_file = generation.pixel_file;
+    output.pixel_checksum = generation.checksum;
+    output.pixel_width = generation.width;
+    output.pixel_height = generation.height;
+  }
   const auto selection = layers.selection();
   result.description.selection.present = selection.present;
   result.description.selection.inverted = selection.inverted;

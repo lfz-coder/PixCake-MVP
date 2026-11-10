@@ -35,6 +35,7 @@ ExportJob job_from(const ExportEvent& event) {
   job.batch_id = event.batch_id;
   job.document_revision = event.document_revision;
   job.document_snapshot = event.document_snapshot;
+  job.layer_document_snapshot = event.layer_document_snapshot;
   job.destination_path = event.destination_path;
   job.destination_root = event.destination_root;
   if (job.destination_root.empty()) {
@@ -56,6 +57,7 @@ ExportEvent event_from(const ExportJob& job, std::string kind) {
   event.batch_id = job.batch_id.empty() ? job.export_id : job.batch_id;
   event.document_revision = job.document_revision;
   event.document_snapshot = job.document_snapshot;
+  event.layer_document_snapshot = job.layer_document_snapshot;
   event.destination_path = job.destination_path;
   event.destination_root = job.destination_root;
   event.settings_snapshot = job.settings_snapshot;

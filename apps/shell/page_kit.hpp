@@ -62,6 +62,20 @@ struct PreviewView {
   bool histogram_changed = false;
 };
 
+// The assistant panel receives display-ready rows from ShellController. The
+// page does not parse model payloads or reach into the network client.
+struct AssistantTranscriptRow {
+  QString type;
+  QString text;
+};
+
+struct AssistantConfirmationCard {
+  QString approval_id;
+  QString title;
+  QString details;
+  bool can_confirm = true;
+};
+
 // 主页项目列表的一项、图库里的一张照片（只读的显示数据）。
 struct ProjectEntry {
   std::int64_t id = 0;
@@ -109,6 +123,38 @@ struct ExportTarget {
   std::int64_t remaining_sheets = 0;
 };
 
+// Creative tool and task rows are display snapshots. The page does not own a
+// catalog, task ledger, or provider connection.
+struct GenerationToolEntry {
+  std::string id;
+  std::string title;
+  std::string category;
+  bool selected = false;
+};
+
+struct GenerationTaskEntry {
+  std::string task_id;
+  std::string status;
+};
+
+struct GenerationHistoryEntry {
+  std::string task_id;
+  std::string tool_id;
+  std::string status;
+  std::size_t result_count = 0;
+  std::uint64_t source_revision = 0;
+};
+
+struct GenerationParameterEntry {
+  std::string id;
+  std::string title;
+  std::string type;
+  std::string value;
+  std::vector<std::string> choices;
+  std::uint32_t max_length = 0;
+  bool required = false;
+};
+
 // 页面发出的请求。实现方（ShellController）改显示模型；页面不直接改。
 class PageActions {
  public:
@@ -117,6 +163,33 @@ class PageActions {
 
   // 预览：有打开的照片时为真；否则精修页的滑杆保持禁用。
   virtual bool has_photo() const { return false; }
+  // 打开像素助手入口；实现方负责保持请求上下文，不让页面直接访问网络或文档。
+  virtual void request_assistant() {}
+  virtual bool assistant_visible() const { return false; }
+  virtual bool assistant_busy() const { return false; }
+  virtual QString assistant_status() const { return {}; }
+  virtual std::vector<AssistantTranscriptRow> assistant_transcript() const { return {}; }
+  virtual std::vector<AssistantConfirmationCard> assistant_confirmations() const { return {}; }
+  virtual void request_assistant_resolve(const QString&, bool) {}
+  virtual void request_assistant_cancel() {}
+  virtual void request_assistant_hide() {}
+  // Creative generation entry.  The page only emits the intent; the shell
+  // controller owns the task, ledger, process and layer-document writes.
+  virtual bool generation_available() const { return false; }
+  virtual std::string generation_status() const { return {}; }
+  virtual bool generation_cancel_available() const { return false; }
+  virtual void request_generation_cancel() {}
+  virtual std::vector<GenerationToolEntry> generation_tools() const { return {}; }
+  virtual void request_generation_tool(const std::string&) {}
+  virtual std::vector<GenerationTaskEntry> generation_tasks() const { return {}; }
+  virtual std::vector<GenerationHistoryEntry> generation_history() const { return {}; }
+  virtual std::vector<GenerationParameterEntry> generation_parameters() const { return {}; }
+  virtual void request_generation_parameter(const std::string&, const std::string&) {}
+  virtual bool generation_retry_available() const { return false; }
+  virtual void request_generation_retry() {}
+  virtual bool generation_apply_available() const { return false; }
+  virtual void request_generation_apply() {}
+  virtual void request_generation() {}
   // 文档里这个参数当前的显示值（打开照片时滑杆停在这里）。
   virtual std::optional<std::string> parameter_value(const ui::panels::SliderBinding&) const { return std::nullopt; }
   // 拖动中 commit 为假（只预览）；松手或键盘改值 commit 为真（经命令入口提交）。
@@ -145,6 +218,9 @@ class PageActions {
   // 项目（需求 5.2/5.3）。导入：在主页新建项目；在项目里追加到当前项目。
   virtual bool can_import() const { return false; }
   virtual void request_import(const std::vector<std::string>&) {}
+  // Import for a newly named project. The default keeps integrations that do not
+  // expose project naming compatible with the regular import path.
+  virtual void request_import_named(const std::vector<std::string>& paths, const std::string&) { request_import(paths); }
   virtual std::vector<ProjectEntry> projects() const { return {}; }
   virtual void request_open_project(std::int64_t) {}
   virtual std::vector<PhotoEntry> photos() const { return {}; }

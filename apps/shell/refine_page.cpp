@@ -2432,6 +2432,98 @@ void repolish(QWidget* widget) {
   widget->style()->polish(widget);
 }
 
+QFrame* assistantPanel(QWidget* parent, PageActions* actions) {
+  if (parent == nullptr || actions == nullptr || !actions->assistant_visible()) return nullptr;
+  auto* panel = new QFrame(parent);
+  panel->setObjectName(QStringLiteral("assistant-panel"));
+  auto* layout = new QVBoxLayout(panel);
+  layout->setContentsMargins(12, 8, 12, 8);
+  layout->setSpacing(6);
+
+  auto* header = new QHBoxLayout;
+  header->setContentsMargins(0, 0, 0, 0);
+  header->setSpacing(8);
+  auto* title = text(qtext("assistant.title"));
+  title->setObjectName(QStringLiteral("assistant-panel-title"));
+  title->setMinimumWidth(80);
+  header->addWidget(title, 0, Qt::AlignVCenter);
+  auto* status = text(actions->assistant_status().isEmpty() ? qtext("assistant.status.idle")
+                                                            : actions->assistant_status(), true);
+  status->setObjectName(QStringLiteral("assistant-panel-status"));
+  status->setTextInteractionFlags(Qt::TextSelectableByMouse);
+  header->addWidget(status, 1, Qt::AlignVCenter);
+  auto* stop = action(qtext("assistant.stop"), panel, actions->assistant_busy() || !actions->assistant_confirmations().empty());
+  stop->setObjectName(QStringLiteral("assistant-stop"));
+  QObject::connect(stop, &QPushButton::clicked, stop, [actions] { actions->request_assistant_cancel(); });
+  header->addWidget(stop, 0, Qt::AlignVCenter);
+  auto* hide = action(qtext("assistant.hide"), panel, true);
+  hide->setObjectName(QStringLiteral("assistant-hide"));
+  QObject::connect(hide, &QPushButton::clicked, hide, [actions] { actions->request_assistant_hide(); });
+  header->addWidget(hide, 0, Qt::AlignVCenter);
+  layout->addLayout(header);
+
+  auto* scroll = new QScrollArea(panel);
+  scroll->setObjectName(QStringLiteral("assistant-transcript"));
+  scroll->setWidgetResizable(true);
+  scroll->setFrameShape(QFrame::NoFrame);
+  scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  auto* body = new QWidget;
+  auto* rows = new QVBoxLayout(body);
+  rows->setContentsMargins(2, 0, 2, 0);
+  rows->setSpacing(4);
+  for (const auto& card : actions->assistant_confirmations()) {
+    auto* frame = new QFrame(body);
+    frame->setObjectName(QStringLiteral("assistant-confirmation-card"));
+    frame->setProperty("approvalId", card.approval_id);
+    auto* contents = new QVBoxLayout(frame);
+    auto* title = new QLabel(card.title, frame);
+    title->setTextFormat(Qt::PlainText);
+    title->setWordWrap(true);
+    contents->addWidget(title);
+    auto* details = new QLabel(card.details, frame);
+    details->setTextFormat(Qt::PlainText);
+    details->setWordWrap(true);
+    details->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    contents->addWidget(details);
+    auto* buttons = new QHBoxLayout;
+    auto* confirm = action(qtext("assistant.confirm.accept"), frame, card.can_confirm);
+    confirm->setObjectName(QStringLiteral("assistant-confirm"));
+    auto* reject = action(qtext("assistant.confirm.reject"), frame, true);
+    reject->setObjectName(QStringLiteral("assistant-reject"));
+    const auto resolve = [actions, id = card.approval_id, confirm, reject](bool approved) {
+      confirm->setEnabled(false);
+      reject->setEnabled(false);
+      actions->request_assistant_resolve(id, approved);
+    };
+    QObject::connect(confirm, &QPushButton::clicked, confirm, [resolve] { resolve(true); });
+    QObject::connect(reject, &QPushButton::clicked, reject, [resolve] { resolve(false); });
+    buttons->addWidget(confirm);
+    buttons->addWidget(reject);
+    contents->addLayout(buttons);
+    rows->addWidget(frame);
+  }
+  for (const auto& row : actions->assistant_transcript()) {
+    auto* line = new QLabel(body);
+    line->setObjectName(QStringLiteral("assistant-transcript-row"));
+    line->setWordWrap(true);
+    line->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    line->setText(QStringLiteral("<b>%1</b>  %2")
+                      .arg(row.type.toHtmlEscaped(), row.text.toHtmlEscaped()));
+    rows->addWidget(line);
+  }
+  if (actions->assistant_transcript().empty() && actions->assistant_confirmations().empty()) {
+    auto* empty = text(qtext("assistant.prompt"), true);
+    empty->setObjectName(QStringLiteral("assistant-transcript-empty"));
+    rows->addWidget(empty);
+  }
+  rows->addStretch(1);
+  scroll->setWidget(body);
+  layout->addWidget(scroll, 1);
+  panel->setMinimumHeight(132);
+  panel->setMaximumHeight(250);
+  return panel;
+}
+
 }  // namespace
 
 void prepareRefinePageEntry() {
@@ -2471,7 +2563,9 @@ QWidget* buildRefinePage(const PageContext& context) {
   auto* search = itemAction("refine-top", copyItem("refine-top", "search"), top);
   showNameOnHover(search);
   top_layout->addWidget(search);
-  top_layout->addWidget(itemAction("refine-top", copyItem("refine-top", "assistant"), top));
+  auto* assistant = itemAction("refine-top", copyItem("refine-top", "assistant"), top);
+  QObject::connect(assistant, &QPushButton::clicked, assistant, [actions] { actions->request_assistant(); });
+  top_layout->addWidget(assistant);
   top_layout->addStretch();
   auto* tabs = new QHBoxLayout;
   addPageTabs(tabs, context);
@@ -2481,6 +2575,7 @@ QWidget* buildRefinePage(const PageContext& context) {
     top_layout->addWidget(toolbarAction("refine-global", entry, top, &context.actions));
   }
   outer->addWidget(top);
+  if (auto* assistant = assistantPanel(page, actions)) outer->addWidget(assistant);
 
   auto* toolbar = new PixCakeToolbar(QStringLiteral("workspace-tools"), page);
   auto* toolbar_layout = toolbar->row();

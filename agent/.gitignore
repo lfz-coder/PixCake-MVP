@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+build/
+.env
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# LangGraph
+.langgraph_api/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Superpowers / Claude (cache & lock files)
+.agents/
+.superpowers/
+skills-lock.json

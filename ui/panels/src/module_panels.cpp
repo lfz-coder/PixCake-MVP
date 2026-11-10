@@ -106,7 +106,7 @@ constexpr Def kPortrait[] = {
     {K::Slider, "肤色色调", kCenter, {}, "track:skin-tint"},  // 官方肤色色调是自己的绿→紫色带
     {K::AiButton, "AI补光"},
     {K::AiButton, "柔化阴影"},
-    {K::AiButton, "AI面部重绘"},
+    {K::AiButton, ui::shell::kWordAiFaceRedraw},
 
     {K::Section, "面部重塑", 0, kNew},
     {K::Subheading, "脸型预设"},

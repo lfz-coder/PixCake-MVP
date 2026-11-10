@@ -8,6 +8,9 @@
 
 namespace pixcake::generate {
 
+inline constexpr std::uint32_t kGenerationParameterSchemaVersion = 1;
+inline constexpr std::uint32_t kMaxGenerationOutputs = 32;
+
 enum class ResultShape {
   NewLayer,
   ReplaceCurrentGeneratedLayer,
@@ -50,6 +53,15 @@ struct GenerationTask {
   std::string image_id;
   std::uint64_t source_revision = 0;
   ToolSpec tool;
+  // Provider-neutral task inputs.  The kernel preserves the opaque parameter
+  // bytes and references; only the provider codec interprets their schema.
+  std::uint32_t parameter_schema_version = kGenerationParameterSchemaVersion;
+  std::vector<std::uint8_t> parameter_payload;
+  std::vector<std::string> mask_ids;
+  std::vector<std::string> reference_image_ids;
+  // Optional provider idempotency key.  Empty means the adapter must use the
+  // stable task_id as the idempotency key.
+  std::string idempotency_key;
 };
 
 struct GenerationResult {

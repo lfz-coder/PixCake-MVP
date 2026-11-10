@@ -1,9 +1,14 @@
 #pragma once
 
+#include "assistant_client.hpp"
 #include "page_kit.hpp"
 #include "histogram_refresh_gate.hpp"
 
+#include "pixcake/assistant/assistant_gateway.hpp"
 #include "pixcake/export_session/export_session.hpp"
+#include "pixcake/generation_session/generation_session.hpp"
+#include "pixcake/generate/generation_tool_catalog.hpp"
+#include "pixcake/layerdoc/layer_document.hpp"
 #include "pixcake/preview_channel/preview_session.hpp"
 #include "pixcake/preview_channel/thumbnail_service.hpp"
 #include "pixcake/project_session/project_session.hpp"
@@ -11,11 +16,14 @@
 #include <QPointer>
 #include <QSocketNotifier>
 
+#include <atomic>
 #include <functional>
 #include <map>
 #include <set>
+#include <thread>
 #include <vector>
 #include <memory>
+#include <unordered_map>
 #include <string>
 #include <utility>
 
@@ -25,10 +33,14 @@ namespace pixcake::shell {
 // 经预览会话的命令入口进入，不从页面调。
 class ShellController final : public PageActions {
  public:
-  explicit ShellController(ShellDisplay display) : display_(std::move(display)) {}
+  explicit ShellController(ShellDisplay display);
   ~ShellController() override;
 
   const ShellDisplay& display() const { return display_; }
+  assistant::AssistantGateway& assistant_gateway() { return assistant_gateway_; }
+  bool start_assistant_sidecar(const AssistantClient::Options& options, QString& diagnostic) {
+    return assistant_client_.start_sidecar(options, diagnostic);
+  }
   void on_changed(std::function<void()> callback) { changed_ = std::move(callback); }
 
   void request_page(Page target) override;
@@ -36,12 +48,38 @@ class ShellController final : public PageActions {
   // 打开一张照片：启动 renderd、发送预览源并请求第一帧。失败时 diagnostic 说明原因。
   ResultCode open_photo(const std::string& photo_path, const preview_channel::PreviewSessionOptions& options,
                         std::string& diagnostic);
+  void request_assistant() override;
+  bool assistant_visible() const override { return assistant_visible_; }
+  bool assistant_busy() const override { return assistant_client_.busy() || assistant_generation_busy_; }
+  QString assistant_status() const override { return assistant_status_; }
+  std::vector<AssistantTranscriptRow> assistant_transcript() const override { return assistant_transcript_; }
+  std::vector<AssistantConfirmationCard> assistant_confirmations() const override { return assistant_confirmations_; }
+  void request_assistant_resolve(const QString& approval_id, bool approved) override;
+  void request_assistant_cancel() override;
+  void request_assistant_hide() override;
 
   // 登录后接上项目库；preview 是打开照片时的 renderd 设置（文档目录由项目库给）。
   void attach_projects(std::unique_ptr<project_session::ProjectSession> projects,
                        preview_channel::PreviewSessionOptions preview);
   // 接上导出（需求第 19 节）：<数据目录>/exports 的导出日志，导出进程按需启动。上次没交出去的任务接着交。
   void attach_exports(const SessionState& session, export_session::ExportOptions options);
+  // 接上创意生成：报价、排队和子进程由主进程统一协调；没有官方 provider 时开发构建可显式使用 fixture。
+  void attach_generation(const SessionState& session, generation_session::GenerationSessionOptions options);
+  void request_generation() override;
+  bool generation_available() const override { return generation_ != nullptr; }
+  std::string generation_status() const override { return generation_status_; }
+  bool generation_cancel_available() const override;
+  void request_generation_cancel() override;
+  std::vector<GenerationToolEntry> generation_tools() const override;
+  void request_generation_tool(const std::string& tool_id) override;
+  std::vector<GenerationTaskEntry> generation_tasks() const override;
+  std::vector<GenerationHistoryEntry> generation_history() const override;
+  std::vector<GenerationParameterEntry> generation_parameters() const override;
+  void request_generation_parameter(const std::string& id, const std::string& value) override;
+  bool generation_retry_available() const override;
+  void request_generation_retry() override;
+  bool generation_apply_available() const override;
+  void request_generation_apply() override;
   std::optional<ExportTarget> export_target() const override;
   bool has_exports() const override { return exports_ != nullptr; }
   std::vector<std::string> request_export(const ExportRequest& request, const ExportDefaults& defaults,
@@ -56,6 +94,7 @@ class ShellController final : public PageActions {
   void watch_exports(QObject* owner, std::function<void()> changed) override;
   bool can_import() const override { return projects_ != nullptr; }
   void request_import(const std::vector<std::string>& paths) override;
+  void request_import_named(const std::vector<std::string>& paths, const std::string& name) override;
   // 需求 §3.2：文件拖到应用图标（程序坞或访达里的 .app）。按当前页面和模态层决定去向，返回实际采取的去向。
   ui::shell::IconDropAction drop_on_app_icon(const std::vector<std::string>& paths, bool modal_open);
   std::vector<ProjectEntry> projects() const override;
@@ -141,8 +180,14 @@ class ShellController final : public PageActions {
   void open_project_photo(std::int64_t photo_id);
   void request_thumbnails();
   void request_thumbnail(std::int64_t photo_id);
+  void request_import_internal(const std::vector<std::string>& paths, const std::optional<std::string>& name);
   void read_thumbnails();
   void close_project();
+  void append_assistant_row(const assistant::AssistantEvent& event);
+  void append_assistant_row(QString type, QString text);
+  void clear_assistant_state();
+  void refresh_assistant_approvals();
+  bool assistant_context_matches(const assistant::AssistantRequest& request) const;
   // Where the current project is (workspace and selected photo), for the next time it is opened.
   void remember_place();
   // Opens the selected photo (or the project's first) in the preview session unless it already is.
@@ -153,7 +198,38 @@ class ShellController final : public PageActions {
   void read_exports();
   void exports_changed();
 
+  assistant::GatewayReply assistant_read_edit_context(const assistant::AssistantRequest& request) const;
+  assistant::GatewayReply assistant_read_selection_context(const assistant::AssistantRequest& request) const;
+  assistant::GatewayReply assistant_preview_plan(const assistant::AssistantRequest& request,
+                                                 const assistant::EditPlan& plan);
+  assistant::GatewayReply assistant_commit_plan(const assistant::AssistantRequest& request,
+                                                const assistant::EditPlan& plan);
+  assistant::GatewayReply assistant_reject_plan(const assistant::AssistantRequest& request,
+                                                const std::string& plan_id);
+  assistant::GatewayReply assistant_undo(const assistant::AssistantRequest& request,
+                                         const std::string& command_id);
+  assistant::GatewayReply assistant_request_card(const assistant::AssistantRequest& request,
+                                                 const assistant::AssistantCard& card);
+  assistant::GatewayReply assistant_create_snapshot(const assistant::AssistantRequest& request,
+                                                     const std::string& label);
+  assistant::GatewayReply assistant_apply_snapshot(const assistant::AssistantRequest& request,
+                                                   const assistant::AssistantSnapshotRequest& snapshot);
+  assistant::GatewayReply assistant_list_task_history(const assistant::AssistantRequest& request) const;
+  assistant::GatewayReply assistant_run_generation(
+      const assistant::AssistantRequest& request, const assistant::AssistantGenerationRequest& task);
+  assistant::GatewayReply assistant_cancel_generation(
+      const assistant::AssistantRequest& request, const assistant::AssistantGenerationCancelRequest& task);
+  void reap_assistant_generation_worker();
+  void stop_assistant_generation_worker();
+  void discard_pending_generation_result();
+
   ShellDisplay display_;
+  assistant::AssistantGateway assistant_gateway_;
+  AssistantClient assistant_client_;
+  bool assistant_visible_ = false;
+  QString assistant_status_;
+  std::vector<AssistantTranscriptRow> assistant_transcript_;
+  std::vector<AssistantConfirmationCard> assistant_confirmations_;
   std::function<void()> changed_;
   std::unique_ptr<preview_channel::PreviewSession> session_;
   std::unique_ptr<QSocketNotifier> notifier_;
@@ -176,6 +252,20 @@ class ShellController final : public PageActions {
   std::uint32_t preview_max_edge_ = 4000;
   std::optional<std::int64_t> current_project_;
   std::optional<std::int64_t> current_photo_;   // opened in the preview session
+  std::string assistant_thread_id_;
+  struct AssistantSnapshotState {
+    std::string image_id;
+    std::size_t history_index = 0;
+    std::uint64_t revision = 0;
+    std::string label;
+  };
+  std::unordered_map<std::string, AssistantSnapshotState> assistant_snapshots_;
+  struct AssistantPreviewState {
+    assistant::AssistantRequest request;
+    assistant::EditPlan plan;
+    std::vector<std::optional<std::string>> previous;
+  };
+  std::unordered_map<std::string, AssistantPreviewState> assistant_previews_;
   std::optional<std::int64_t> selected_photo_;  // selected in the project (the last clicked)
   // Library multi-selection; meaningful only while it contains selected_photo_
   // (other paths that change selected_photo_ fall back to that one photo).
@@ -201,6 +291,38 @@ class ShellController final : public PageActions {
   std::unique_ptr<export_session::ExportSession> exports_;
   std::unique_ptr<QSocketNotifier> export_notifier_;
   std::vector<std::pair<QPointer<QObject>, std::function<void()>>> export_watchers_;
+  std::unique_ptr<generation_session::GenerationSession> generation_;
+  struct GenerationDraft {
+    std::string tool_id;
+    std::string image_id;
+    std::uint64_t source_revision = 0;
+    std::vector<std::pair<std::string, std::string>> parameters;
+    std::vector<std::string> mask_ids;
+    std::vector<std::string> reference_image_ids;
+  };
+  generate::ToolCatalog generation_catalog_ = generate::ToolCatalog::development_fixture();
+  std::string generation_tool_id_ = generate::kDevelopmentFixtureToolId;
+  std::vector<std::pair<std::string, std::string>> generation_parameter_values_;
+  std::optional<GenerationDraft> generation_retry_draft_;
+  bool generation_use_retry_draft_ = false;
+  std::string generation_status_;
+  mutable PosixFileSystem generation_files_;
+  struct PendingGenerationResult {
+    ResultCode code = ResultCode::StateConflict;
+    std::string diagnostic;
+    ipc::GenerationProgressMessage progress;
+    generation_session::VerifiedGenerationResult verified;
+    bool handled = false;
+  };
+  std::thread assistant_generation_worker_;
+  std::atomic<bool> assistant_generation_cancel_requested_{false};
+  std::shared_ptr<PendingGenerationResult> assistant_generation_pending_;
+  bool assistant_generation_busy_ = false;
+  std::string assistant_generation_task_id_;
+  assistant::AssistantTaskHistoryEntry assistant_generation_entry_;
+  std::vector<generation_session::GenerationHistoryEntry> assistant_generation_history_;
+  bool assistant_generation_fixture_ = false;
+  std::shared_ptr<int> assistant_generation_lifetime_ = std::make_shared<int>(0);
 };
 
 }  // namespace pixcake::shell

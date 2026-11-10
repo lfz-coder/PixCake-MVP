@@ -61,6 +61,21 @@ void test_c24_preview_is_not_written() {
   EXPECT(!loaded.committed_parameter("color.global", "exposure").has_value());
 }
 
+void test_rejected_preview_preserves_subsequent_user_changes() {
+  auto document = *pixcake::EditDocument::create("img-approval");
+  const auto before = document.encode();
+  EXPECT(document.set_preview("color.global", "exposure", "0.75") == pixcake::ResultCode::Ok);
+  EXPECT(document.restore_preview_value("color.global", "exposure", "0.75", std::nullopt));
+  EXPECT(!document.preview("color.global", "exposure"));
+  EXPECT(document.set_preview("color.global", "exposure", "0.75") == pixcake::ResultCode::Ok);
+  EXPECT(document.restore_preview_value("color.global", "exposure", "0.75", std::string("0.25")));
+  EXPECT(document.preview("color.global", "exposure") == "0.25");
+  EXPECT(document.set_preview("color.global", "exposure", "0.90") == pixcake::ResultCode::Ok);
+  EXPECT(!document.restore_preview_value("color.global", "exposure", "0.75", std::nullopt));
+  EXPECT(document.preview("color.global", "exposure") == "0.90");
+  EXPECT(document.revision() == 0 && document.encode() == before);
+}
+
 void test_b61_commit_keeps_latest_display_value() {
   auto document = *pixcake::EditDocument::create("img-1");
   pixcake::test::FakeFileSystem files;
@@ -508,6 +523,7 @@ int main() {
   test_c23_stale_write_snapshot_is_rejected();
   test_b73_reloaded_handle_commits_next_revision();
   test_c24_preview_is_not_written();
+  test_rejected_preview_preserves_subsequent_user_changes();
   test_b61_commit_keeps_latest_display_value();
   test_c26_other_capability_bytes_stay();
   test_b85_unknown_inner_field_survives_commit();

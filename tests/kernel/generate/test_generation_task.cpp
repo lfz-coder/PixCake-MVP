@@ -27,6 +27,10 @@ pixcake::generate::GenerationTask task() {
   value.tool.billing_rule_id = "billing-a";
   value.tool.output_count = 2;
   value.tool.cancellable = true;
+  value.parameter_payload = {0x10, 0x20};
+  value.mask_ids = {"mask-subject"};
+  value.reference_image_ids = {"reference-1"};
+  value.idempotency_key = "provider-key-1";
   return value;
 }
 
@@ -40,10 +44,22 @@ void test_shape_names_and_task_validation() {
   broken.tool.output_count = 0;
   EXPECT(pixcake::generate::validate_task(broken) == pixcake::ResultCode::StateConflict);
   broken = task();
+  broken.tool.output_count = pixcake::generate::kMaxGenerationOutputs + 1;
+  EXPECT(pixcake::generate::validate_task(broken) == pixcake::ResultCode::StateConflict);
+  broken = task();
   broken.task_id.clear();
   EXPECT(pixcake::generate::validate_task(broken) == pixcake::ResultCode::StateConflict);
   broken = task();
   broken.tool.tool_id.push_back('\0');
+  EXPECT(pixcake::generate::validate_task(broken) == pixcake::ResultCode::StateConflict);
+  broken = task();
+  broken.parameter_schema_version = 2;
+  EXPECT(pixcake::generate::validate_task(broken) == pixcake::ResultCode::CapabilityTooNew);
+  broken = task();
+  broken.mask_ids.push_back(std::string("bad\0mask", 8));
+  EXPECT(pixcake::generate::validate_task(broken) == pixcake::ResultCode::StateConflict);
+  broken = task();
+  broken.idempotency_key.push_back('\0');
   EXPECT(pixcake::generate::validate_task(broken) == pixcake::ResultCode::StateConflict);
 }
 

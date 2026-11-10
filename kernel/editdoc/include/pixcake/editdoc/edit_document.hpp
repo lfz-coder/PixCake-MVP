@@ -135,6 +135,9 @@ class EditDocument {
                                              const std::string& prefix, FileSystem& files, const std::string& path);
   // 删掉能力的预览值里编号以 prefix 开头的（不写盘）。
   void clear_preview_prefix(const std::string& capability_id, const std::string& prefix);
+  // Restore an abandoned preview only while it still holds the caller's value.
+  bool restore_preview_value(const std::string& capability_id, const std::string& parameter_id,
+                             const std::string& expected, const std::optional<std::string>& previous);
 
   bool effects_baked() const;
   // 清掉能力片段和预览，留下烘焙标记，修订号加一。已经烘焙且没有片段时不写第二次。

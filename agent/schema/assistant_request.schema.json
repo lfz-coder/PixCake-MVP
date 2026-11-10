@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PixCake AssistantRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol_version", "request_id", "thread_id", "message", "base_revision"],
+  "properties": {
+    "protocol_version": {"const": 1},
+    "request_id": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"},
+    "thread_id": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"},
+    "message": {"type": "string", "minLength": 1, "maxLength": 16384},
+    "base_revision": {"type": "integer", "minimum": 0},
+    "mode": {"type": "string", "maxLength": 64},
+    "image": {"$ref": "#/$defs/image"},
+    "selection": {"$ref": "#/$defs/selection"},
+    "preferences": {"type": "object"}
+  },
+  "$defs": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["image_id"],
+      "properties": {
+        "image_id": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"},
+        "project_id": {"type": "string", "maxLength": 256, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"},
+        "editing_instance_id": {"type": "string", "maxLength": 256, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"},
+        "source_revision": {"type": "integer", "minimum": 0},
+        "preview_ref": {"type": "string", "maxLength": 4096}
+      }
+    },
+    "selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["selection_id"],
+      "properties": {
+        "selection_id": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"},
+        "kind": {"type": "string", "maxLength": 128},
+        "label": {"type": "string", "maxLength": 512}
+      }
+    }
+  }
+}

@@ -41,10 +41,40 @@ struct PixCakeTheme final {
                  font-family: "SF Pro Text", "SF Pro Display", "PingFang SC", "-apple-system", sans-serif;
                  font-size: 12px; }
       QMainWindow, QWidget#shell-root, QWidget#login-page, QWidget#home-page,
+      QWidget#local-projects-page { background: #18181A; }
+      QWidget#local-project-import-page { background: #0F0F11; }
       QWidget#refine-page, QWidget#library-page, QWidget#creative-page { background: #0b0b0b; }
       QWidget#login-panel { background: #0b0b0b; }
       QFrame#workspace-top, QFrame#workspace-tools, QFrame#workspace-thumbs,
       QFrame#workspace-side, QFrame#home-sidebar, QFrame#home-content { background: #141414; }
+      QFrame#local-projects-sidebar { background: #141416; }
+      QFrame#local-projects-content { background: #18181A; }
+      QLabel#local-projects-title { color: #FFFFFF; font-size: 24px; font-weight: 600; }
+      QLabel#local-projects-brand { color: #F4F4F4; font-size: 19px; font-weight: 600; }
+      QPushButton#local-projects-nav-item { text-align: left; padding: 9px 12px; border: none; background: transparent; }
+      QPushButton#local-projects-nav-item:hover, QPushButton#local-projects-nav-item[selected="true"] {
+        background: #3D3D43; border-radius: 6px; }
+      QPushButton#local-projects-membership { min-height: 30px; padding: 3px 12px; border: none; background: #2A2A2F; border-radius: 15px; }
+      QPushButton#local-projects-membership:hover { background: #36363C; }
+      QPushButton#local-projects-avatar { min-height: 32px; max-height: 32px; padding: 0; border: none; border-radius: 16px;
+        background: #5B6E85; color: #FFFFFF; font-weight: 600; }
+      QWidget#local-projects-grid { background: transparent; }
+      QScrollArea#local-projects-scroll { background: transparent; }
+      QFrame#local-project-import-drop { background: #161619; border: 1px dashed #66666E; border-radius: 12px; }
+      QFrame#local-project-import-drop:hover { background: #202024; border-color: #8B8B96; }
+      QLabel#local-project-import-title { color: #FFFFFF; font-size: 20px; font-weight: 600; margin-bottom: 16px; }
+      QLabel#local-project-import-plus { color: #8A8A8F; font-size: 52px; font-weight: 300; }
+      QPushButton#local-project-import-link { background: transparent; border: none; color: #A6A6AF; text-decoration: underline; padding: 5px; }
+      QPushButton#local-project-import-link:hover { color: #FFFFFF; }
+      QDialog#create-project-dialog { background: #38383C; border-radius: 12px; }
+      QLabel#create-project-title { color: #FFFFFF; font-size: 24px; font-weight: 600; }
+      QPushButton#create-project-close { background: transparent; border: none; color: #B8B8BF; font-size: 24px; padding: 0; }
+      QPushButton#create-project-close:hover { color: #FFFFFF; }
+      QLineEdit#create-project-name { background: #28282B; border: 1px solid #49494F; border-radius: 7px; color: #FFFFFF; min-height: 40px; }
+      QLineEdit#create-project-name:focus { border: 1px solid #489CFF; }
+      QLabel#create-project-counter { min-width: 40px; }
+      QPushButton#create-project-save { background: #FFD02E; color: #161616; border: none; border-radius: 8px; font-size: 18px; font-weight: 600; }
+      QPushButton#create-project-save:hover { background: #FFDA57; }
       QDialog#export-dialog, QDialog#export-list-dialog { background: #141414; }
       QDialog#export-dialog QScrollArea, QDialog#export-dialog QScrollArea > QWidget, QWidget#export-form { background: #141414; }
       QDialog#export-dialog QTabBar::tab { background: #1d1d1d; color: #a4a4a4; padding: 8px 28px; border: none; }
@@ -108,6 +138,23 @@ struct PixCakeTheme final {
       QCheckBox::indicator:checked { background: #ffe000; border-color: #ffe000; }
       QFrame#home-feature, QFrame#home-card, QFrame#home-projects { background: #171717; border: 1px solid #2d2d2d; border-radius: 8px; }
       QFrame#home-import { background: #141414; border: 1px dashed #5b5b5b; border-radius: 8px; }
+      QFrame#home-sidebar { background: #0c0c0c; border-right: 1px solid #1c1c1c; }
+      QWidget#home-page QFrame#home-content { background: #070707; }
+      QFrame#home-sidebar QPushButton#home-nav { min-height: 36px; border-radius: 8px; color: #d2d2d2; }
+      QFrame#home-sidebar QPushButton#home-nav:hover { background: #242424; }
+      QFrame#home-sidebar QPushButton#home-nav[selected="true"] { background: #2e2e2e; color: #ffffff; }
+      QWidget#home-page QFrame#home-import { background: #121212; border: 1px solid #2a2a2a; border-radius: 12px; }
+      QWidget#home-page QFrame#home-import:hover { border-color: #5a5a5a; }
+      QWidget#home-page QPushButton#home-card { background: #141414; border: 1px solid #2a2a2a; border-radius: 12px; }
+      QWidget#home-page QPushButton#home-card:hover, QWidget#home-page QPushButton#home-quick:hover { border-color: #5a5a5a; background: #242424; }
+      QWidget#home-page QPushButton#home-quick { background: #1a1a1a; border: 1px solid #1a1a1a; border-radius: 10px; text-align: left; padding-left: 13px; }
+      QWidget#home-page QPushButton#home-project-tab { background: transparent; border: none; color: #8a8a8a; min-height: 26px; padding: 0; }
+      QWidget#home-page QPushButton#home-project-tab:hover { color: #ffffff; }
+      QWidget#home-page QPushButton#home-project-refresh { min-width: 26px; max-width: 26px; padding: 0; }
+      QFrame#home-sidebar QPushButton#home-promo {
+        background: qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #16345c,stop:1 #e6b84a);
+        border: none; border-radius: 12px; text-align: left; padding: 12px;
+      }
       QFrame#feature-icon { background: #303030; border: 1px solid #555555; border-radius: 8px; }
       QFrame#workspace-tool-button { background: transparent; border: none; border-radius: 4px; }
       QFrame#workspace-tool-button:hover { background: #2a2d33; }

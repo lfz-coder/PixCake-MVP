@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PixCake Assistant SSE event payloads",
+  "type": "object",
+  "required": ["type"],
+  "properties": {
+    "type": {
+      "enum": [
+        "message.partial",
+        "message.complete",
+        "task.started",
+        "task.progress",
+        "plan.ready",
+        "card.required",
+        "preview.ready",
+        "approval.required",
+        "completed",
+        "cancelled",
+        "error"
+      ]
+    },
+    "request_id": {"type": "string"},
+    "command_id": {"type": "string"},
+    "payload": {"type": "object"}
+  },
+  "additionalProperties": true
+}

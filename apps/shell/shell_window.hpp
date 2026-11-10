@@ -1,13 +1,16 @@
 #pragma once
 
+#include "assistant_gateway_server.hpp"
 #include "shell_controller.hpp"
 
 #include <QLabel>
 #include <QMainWindow>
+#include <QFrame>
 #include <QTimer>
 #include <QWidget>
 
 #include <optional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -25,13 +28,16 @@ class ShellWindow final : public QMainWindow {
 
  private:
   void render();
-  void setBody(QWidget* page);
+  void setBody(QWidget* page, bool with_navigation);
+  void updateNavigation(Page page);
   bool eventFilter(QObject* watched, QEvent* event) override;
   void flushIconDrop();
 
   ShellController controller_;
+  std::unique_ptr<AssistantGatewayServer> assistant_gateway_server_;
   std::optional<Page> rendered_page_;
   QWidget* body_ = nullptr;
+  QFrame* navigation_ = nullptr;
   QLabel* title_ = nullptr;
   // Files dropped on the app icon arrive one QFileOpenEvent each; a drop is
   // collected for a moment and imported as one batch (one project).

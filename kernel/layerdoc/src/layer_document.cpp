@@ -64,6 +64,9 @@ constexpr std::uint32_t kLayerRecovered = 8;
 constexpr std::uint32_t kLayerDocumentRevision = 9;
 constexpr std::uint32_t kLayerFirstUnknown = 10;
 constexpr std::uint32_t kLayerFormat = 1;
+constexpr std::size_t kMaxContinuationParameters = 32 * 1024;
+constexpr std::size_t kMaxGenerationPath = 4096;
+constexpr std::size_t kMaxGenerationChecksum = 128;
 
 void append_u32(std::vector<std::uint8_t>& out, std::uint32_t value) {
   out.push_back(static_cast<std::uint8_t>(value & 0xffu));
@@ -546,7 +549,28 @@ ResultCode LayerDocument::clear_selection() {
 
 ResultCode LayerDocument::place_result(const std::string& result_id, const std::string& shape,
                                        const std::string& tool_id) {
+  return place_result(result_id, shape, tool_id, {});
+}
+
+ResultCode LayerDocument::place_result(const std::string& result_id, const std::string& shape,
+                                       const std::string& tool_id,
+                                       const std::vector<std::uint8_t>& continuation_parameters) {
+  return place_result(result_id, shape, tool_id, continuation_parameters, {}, {}, 0, 0);
+}
+
+ResultCode LayerDocument::place_result(const std::string& result_id, const std::string& shape,
+                                       const std::string& tool_id,
+                                       const std::vector<std::uint8_t>& continuation_parameters,
+                                       const std::string& pixel_file, const std::string& checksum,
+                                       std::uint32_t width, std::uint32_t height) {
   if (!editable() || !safe_id(result_id) || !safe_name(tool_id)) {
+    return ResultCode::StateConflict;
+  }
+  if (continuation_parameters.size() > kMaxContinuationParameters) return ResultCode::StateConflict;
+  const bool has_pixels = !pixel_file.empty() || !checksum.empty() || width != 0 || height != 0;
+  if (has_pixels && (pixel_file.empty() || checksum.empty() || pixel_file.size() > kMaxGenerationPath ||
+                     checksum.size() > kMaxGenerationChecksum || has_nul(pixel_file) || has_nul(checksum) ||
+                     width == 0 || height == 0)) {
     return ResultCode::StateConflict;
   }
   for (const auto& generation : generations_) {
@@ -566,12 +590,15 @@ ResultCode LayerDocument::place_result(const std::string& result_id, const std::
         return ResultCode::StateConflict;
       }
       current->name = tool_id;
-      generations_.push_back(GenerationView{result_id, shape, tool_id});
+      generations_.push_back(GenerationView{result_id, shape, tool_id, continuation_parameters, pixel_file, checksum,
+                                            width, height, current->id});
       return ResultCode::Ok;
     }
   }
+  std::string generated_layer_id;
   auto adopt = [&](LayerView layer) {
     current_generation_layer_id_ = layer.id;
+    generated_layer_id = layer.id;
     layers_.push_back(std::move(layer));
   };
   if (shape == "细节层加效果层") {
@@ -602,7 +629,11 @@ ResultCode LayerDocument::place_result(const std::string& result_id, const std::
     }
     adopt(std::move(layer));
   }
-  generations_.push_back(GenerationView{result_id, shape, tool_id});
+  // A detail/effect result is represented by the effect child in the phase-one
+  // document.  Groups are metadata containers and intentionally have no
+  // raster payload of their own.
+  generations_.push_back(GenerationView{result_id, shape, tool_id, continuation_parameters, pixel_file, checksum,
+                                        width, height, generated_layer_id});
   return ResultCode::Ok;
 }
 
@@ -641,6 +672,15 @@ std::vector<std::uint8_t> LayerDocument::encode() const {
     append_string(payload, generation.result_id);
     append_string(payload, generation.shape);
     append_string(payload, generation.tool_id);
+    append_u32(payload, static_cast<std::uint32_t>(generation.continuation_parameters.size()));
+    payload.insert(payload.end(), generation.continuation_parameters.begin(), generation.continuation_parameters.end());
+    if (!generation.pixel_file.empty()) {
+      append_string(payload, generation.pixel_file);
+      append_string(payload, generation.checksum);
+      append_u32(payload, generation.width);
+      append_u32(payload, generation.height);
+      append_string(payload, generation.layer_id);
+    }
     append_record(body, kLayerGeneration, payload);
   }
   std::vector<std::uint8_t> current;
@@ -745,10 +785,39 @@ std::optional<LayerDocument> LayerDocument::decode(const std::vector<std::uint8_
       std::size_t cursor = 0;
       GenerationView generation;
       if (!read_string(payload, cursor, generation.result_id) || !read_string(payload, cursor, generation.shape) ||
-          !read_string(payload, cursor, generation.tool_id) || cursor != payload.size() ||
-          !safe_id(generation.result_id) || !known_shape(generation.shape) || !safe_name(generation.tool_id)) {
+          !read_string(payload, cursor, generation.tool_id) || !safe_id(generation.result_id) ||
+          !known_shape(generation.shape) || !safe_name(generation.tool_id)) {
         return std::nullopt;
       }
+      if (cursor < payload.size()) {
+        std::uint32_t continuation_size = 0;
+        if (payload.size() - cursor < 4 || !read_u32(payload, cursor, continuation_size) ||
+            continuation_size > kMaxContinuationParameters) {
+          return std::nullopt;
+        }
+        cursor += 4;
+        if (continuation_size > payload.size() - cursor) return std::nullopt;
+        generation.continuation_parameters.assign(
+            payload.begin() + static_cast<std::ptrdiff_t>(cursor),
+            payload.begin() + static_cast<std::ptrdiff_t>(cursor + continuation_size));
+        cursor += continuation_size;
+      }
+      if (cursor < payload.size()) {
+        if (!read_string(payload, cursor, generation.pixel_file) ||
+            !read_string(payload, cursor, generation.checksum) || payload.size() - cursor < 8 ||
+            !read_u32(payload, cursor, generation.width) || !read_u32(payload, cursor + 4, generation.height)) {
+          return std::nullopt;
+        }
+        cursor += 8;
+        if (!read_string(payload, cursor, generation.layer_id) || generation.pixel_file.empty() ||
+            generation.checksum.empty() || generation.pixel_file.size() > kMaxGenerationPath ||
+            generation.checksum.size() > kMaxGenerationChecksum || has_nul(generation.pixel_file) ||
+            has_nul(generation.checksum) || generation.width == 0 || generation.height == 0 ||
+            generation.layer_id.empty() || !safe_id(generation.layer_id)) {
+          return std::nullopt;
+        }
+      }
+      if (cursor != payload.size()) return std::nullopt;
       for (const auto& existing : document.generations_) {
         if (existing.result_id == generation.result_id) {
           return std::nullopt;

@@ -18,6 +18,10 @@ struct ExportJob {
   std::string batch_id;
   std::uint64_t document_revision = 0;
   std::vector<std::uint8_t> document_snapshot;
+  // Optional creative layer document. It is snapshotted with the edit
+  // document so exportd can reproduce verified generated pixels after a
+  // restart without reaching back into the project database.
+  std::vector<std::uint8_t> layer_document_snapshot;
   std::string destination_path;
   std::string destination_root;
   FileIdentity destination_identity;
@@ -37,6 +41,7 @@ struct ExportEvent {
   std::string batch_id;
   std::uint64_t document_revision = 0;
   std::vector<std::uint8_t> document_snapshot;
+  std::vector<std::uint8_t> layer_document_snapshot;
   std::string destination_path;
   std::string destination_root;
   FileIdentity destination_identity;

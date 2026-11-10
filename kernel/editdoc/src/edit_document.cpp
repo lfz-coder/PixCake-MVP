@@ -1019,6 +1019,16 @@ ResultCode EditDocument::commit_parameters(std::uint64_t expected_revision, cons
   return ResultCode::Ok;
 }
 
+bool EditDocument::restore_preview_value(const std::string& capability_id, const std::string& parameter_id,
+                                        const std::string& expected, const std::optional<std::string>& previous) {
+  const auto key = std::make_pair(capability_id, parameter_id);
+  const auto found = preview_.find(key);
+  if (found == preview_.end() || found->second != expected) return false;
+  if (previous) found->second = *previous;
+  else preview_.erase(found);
+  return true;
+}
+
 void EditDocument::clear_preview_prefix(const std::string& capability_id, const std::string& prefix) {
   for (auto it = preview_.begin(); it != preview_.end();) {
     if (it->first.first == capability_id && in_instance(it->first.second, prefix)) {

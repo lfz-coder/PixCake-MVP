@@ -1,0 +1,8 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "assistant": "./src/pixcake_agent/graphs/assistant_graph.py:assistant_graph"
+  },
+  "env": ".env",
+  "image_distro": "wolfi"
+}

@@ -216,6 +216,18 @@ ResultCode ExportSession::submit(const ExportRequest& request, std::vector<std::
       notices.push_back(photo->file_name + ": " + "参数文件无法读取");
       continue;
     }
+    // Creative results live in a sidecar layer document rather than in the
+    // edit document. Snapshot it with the export job so exportd can render
+    // the same generated layers after the shell or export process restarts.
+    std::vector<std::uint8_t> layer_document;
+    const std::string layer_path = projects_.layer_document_path(photo_id);
+    if (!layer_path.empty() && files_.exists(layer_path)) {
+      const IoResult layer_read = files_.read_file(layer_path, layer_document);
+      if (!layer_read.ok) {
+        notices.push_back(photo->file_name + ": 图层文件无法读取");
+        continue;
+      }
+    }
     if (classify_export(document) == ExportEffect::Refined) {
       const std::string identity = picture_identity(photo_id, charging);
       const bool already = ledger_->ledger().original_charged(identity) ||
@@ -270,6 +282,7 @@ ResultCode ExportSession::submit(const ExportRequest& request, std::vector<std::
       job.original_id = decoded->image_id();
       job.document_revision = decoded->revision();
       job.document_snapshot = document;
+      job.layer_document_snapshot = layer_document;
       job.destination_path = destination;
       job.destination_root = root;
       job.settings_snapshot = free_second ? plain_settings : settings;

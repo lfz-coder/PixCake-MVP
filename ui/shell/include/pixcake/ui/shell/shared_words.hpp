@@ -24,5 +24,6 @@ inline constexpr char kWordOpacity[] = "不透明度";
 inline constexpr char kWordHorizontalPosition[] = "水平位置";
 inline constexpr char kWordVerticalPosition[] = "垂直位置";
 inline constexpr char kWordRestore[] = "还原";
+inline constexpr char kWordAiFaceRedraw[] = "AI面部重绘";
 
 }  // namespace pixcake::ui::shell

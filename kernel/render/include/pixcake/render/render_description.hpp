@@ -57,6 +57,13 @@ struct RenderLayer {
   std::uint32_t mask_feather = 0;
   bool enabled = true;
   std::string disabled_reason;
+  // A generated layer keeps its verified RGBA result outside the edit
+  // document.  The render process receives this metadata and loads the file
+  // only after validating its dimensions and checksum.
+  std::string pixel_file;
+  std::string pixel_checksum;
+  std::uint32_t pixel_width = 0;
+  std::uint32_t pixel_height = 0;
 };
 
 struct RenderSelection {

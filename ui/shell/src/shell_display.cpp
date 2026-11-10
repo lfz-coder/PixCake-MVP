@@ -151,11 +151,11 @@ void ShellDisplay::rebuild_regions() {
     case Page::Home:
       regions_ = {region("home-nav", P::Left, "home-nav"), region("home-import", P::Center),
                   region("home-search", P::Top),          region("home-global", P::Top, "global"),
-                  region("home-common", P::Center),       region("home-quick", P::Center),
-                  region("home-projects", P::Bottom)};
+                  region("home-quick", P::Center, "home-quick"), region("home-projects", P::Bottom)};
       return;
     case Page::LocalProjects:
-      regions_ = {region("local-projects-nav", P::Top, "local-projects-nav"),
+      regions_ = {region("local-projects-nav", P::Left, "home-nav"),
+                  region("local-projects-search", P::Top), region("local-projects-global", P::Top, "global"),
                   region("local-projects-list", P::Center)};
       return;
     case Page::Library:

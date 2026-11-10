@@ -1,10 +1,15 @@
 #include "pixcake/renderd/render_service.hpp"
 #include "pixcake/gpu/geometry.hpp"
+#include "pixcake/support/checksum.hpp"
 
 #include "pixcake/gl/native_backend.hpp"
 
 #include <algorithm>
+#include <cstdio>
+#include <fstream>
 #include <limits>
+#include <string>
+#include <vector>
 
 namespace pixcake::renderd {
 namespace {
@@ -19,6 +24,79 @@ bool same_identity(const PreviewWork& work) {
 
 std::uint32_t copy_stride(std::uint32_t width) {
   return width * 4u;
+}
+
+std::string checksum_hex(std::uint64_t value) {
+  char buffer[17];
+  std::snprintf(buffer, sizeof(buffer), "%016llx", static_cast<unsigned long long>(value));
+  return buffer;
+}
+
+bool read_bytes(const std::string& path, std::vector<std::uint8_t>& out) {
+  out.clear();
+  if (path.empty() || path.find('\0') != std::string::npos) return false;
+  std::ifstream file(path, std::ios::binary);
+  if (!file) return false;
+  file.seekg(0, std::ios::end);
+  const std::streamoff size = file.tellg();
+  if (size <= 0 || static_cast<std::uint64_t>(size) > 512ull * 1024ull * 1024ull) return false;
+  file.seekg(0, std::ios::beg);
+  out.resize(static_cast<std::size_t>(size));
+  return static_cast<bool>(file.read(reinterpret_cast<char*>(out.data()), size));
+}
+
+bool make_layer_image(const render::RenderLayer& source, std::uint32_t width, std::uint32_t height,
+                      gpu::RenderLayer& output, std::string& reason) {
+  if (source.pixel_file.empty() || source.pixel_checksum.empty() || source.pixel_width == 0 ||
+      source.pixel_height == 0) {
+    reason = "生成图层没有完整的像素元数据";
+    return false;
+  }
+  std::vector<std::uint8_t> bytes;
+  if (!read_bytes(source.pixel_file, bytes)) {
+    reason = "生成图层像素文件不存在或不可读";
+    return false;
+  }
+  const std::uint64_t expected = static_cast<std::uint64_t>(source.pixel_width) * source.pixel_height * 4ull;
+  if (expected != bytes.size() || checksum_hex(checksum_fnv1a64(bytes.data(), bytes.size())) != source.pixel_checksum) {
+    reason = "生成图层像素校验失败";
+    return false;
+  }
+  output.image.width = width;
+  output.image.height = height;
+  output.image.row_stride = copy_stride(width);
+  output.image.pixels.resize(static_cast<std::size_t>(output.image.row_stride) * height);
+  // Provider results may be lower resolution than the source.  The phase-one
+  // compositor uses deterministic nearest-neighbour expansion so a fixture
+  // result and a future remote result share the same layer contract.
+  for (std::uint32_t y = 0; y < height; ++y) {
+    const std::uint32_t source_y = std::min(source.pixel_height - 1,
+                                            static_cast<std::uint32_t>((static_cast<std::uint64_t>(y) *
+                                                                        source.pixel_height) /
+                                                                       std::max<std::uint32_t>(1, height)));
+    for (std::uint32_t x = 0; x < width; ++x) {
+      const std::uint32_t source_x = std::min(source.pixel_width - 1,
+                                              static_cast<std::uint32_t>((static_cast<std::uint64_t>(x) *
+                                                                          source.pixel_width) /
+                                                                         std::max<std::uint32_t>(1, width)));
+      const std::size_t from = (static_cast<std::size_t>(source_y) * source.pixel_width + source_x) * 4u;
+      const std::size_t to = static_cast<std::size_t>(y) * output.image.row_stride +
+                               static_cast<std::size_t>(x) * 4u;
+      std::copy(bytes.begin() + static_cast<std::ptrdiff_t>(from),
+                bytes.begin() + static_cast<std::ptrdiff_t>(from + 4), output.image.pixels.begin() +
+                                                                            static_cast<std::ptrdiff_t>(to));
+    }
+  }
+  output.opacity = std::clamp(static_cast<float>(source.opacity) / 100.0F, 0.0F, 1.0F);
+  output.blend_mode = source.blend_mode;
+  output.visible = !source.hidden && source.enabled;
+  output.order = source.order;
+  return true;
+}
+
+bool has_render_layers(const render::RenderDescription& description) {
+  return std::any_of(description.layers.begin(), description.layers.end(),
+                      [](const auto& layer) { return !layer.pixel_file.empty(); });
 }
 
 }  // namespace
@@ -136,7 +214,7 @@ PreviewResult RenderService::render_now(std::uint64_t sequence, const std::strin
     result.diagnostic = "preview resampling backend is not registered";
     return result;
   }
-  if (has_enabled_operations(description) || !gpu::geometry_of(description).identity()) {
+  if (has_enabled_operations(description) || !gpu::geometry_of(description).identity() || has_render_layers(description)) {
     return render_operations(sequence, image_id, description, input, max_edge, std::move(result));
   }
 
@@ -180,6 +258,18 @@ PreviewResult RenderService::render_operations(std::uint64_t sequence, const std
     inputs.pixel_scale = static_cast<float>(frame_long_edge) / static_cast<float>(input.source_long_edge);
   }
 
+  std::vector<gpu::ExecutionDiagnostic> layer_diagnostics;
+  for (const auto& layer : description.layers) {
+    if (layer.pixel_file.empty()) continue;  // background/groups are metadata only
+    gpu::RenderLayer loaded;
+    std::string reason;
+    if (!make_layer_image(layer, input.width, input.height, loaded, reason)) {
+      layer_diagnostics.push_back({layer.id, reason, false});
+      continue;
+    }
+    inputs.layers.push_back(std::move(loaded));
+  }
+
   // 几何（翻转、旋转、拉直、比例裁剪）在颜色绘制之前整张图做完，蒙版同步；缩略图和预览走这里，导出走同一个函数。
   gpu::apply_geometry(gpu::geometry_of(description), image, inputs.masks);
   gpu::add_gradient_masks(description, image.width, image.height, inputs.masks);  // 按几何变换后的画幅生成
@@ -213,6 +303,7 @@ PreviewResult RenderService::render_operations(std::uint64_t sequence, const std
                           rendered.statuses.end());
   if (!gpu_failure.empty()) rendered.diagnostics.push_back({"", gpu_failure, false});
   result.diagnostics = std::move(batch.diagnostics);
+  result.diagnostics.insert(result.diagnostics.end(), layer_diagnostics.begin(), layer_diagnostics.end());
   result.diagnostics.insert(result.diagnostics.end(), rendered.diagnostics.begin(), rendered.diagnostics.end());
   result.statuses = std::move(rendered.statuses);
   if (!ok) {
