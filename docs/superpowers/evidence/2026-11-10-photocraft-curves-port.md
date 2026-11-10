@@ -48,7 +48,7 @@
 
 审查后修复：
 
-- 没有曲线的调色绘制也给单元 4 绑上完整纹理，消除 macOS GL 驱动的 unloadable 警告（`test_gpu_no_driver_warnings`）。
+- 没有曲线的调色绘制，以及整帧阶段的前段绘制，也给单元 4 绑上完整纹理，消除 macOS GL 驱动的 unloadable 警告。`test_gpu_no_driver_warnings` 让每种绘制各起一个新进程验证。
 - 曲线被重置后，预览重绘不再把文本参数发成 "0"（`test_preview_session`）。
 
 变异检查：

@@ -33,7 +33,11 @@
 3. **锐化**：对 Y 做 USM。半径先夹到 0.5..3，再乘 ps。细节滑杆限制光晕：残差截断在 ±(0.03+0.3d)，再乘 (0.5+0.5d)。蒙版是平滑后亮度梯度的 smoothstep。
 4. 由 Y、B−Y、R−Y 还原 RGB。
 
-位置：细节操作排在所有调色操作之后（顺序号 87 起）。同一个细节操作里先跑阶段 8，再在它的浮点结果上加颗粒（阶段 9），最后按覆盖率回混。这与 `develop` 的 8 → 9 顺序一致。
+位置：细节操作排在所有调色操作之后（顺序号 80 起）。锐化/降噪参数和颗粒用同一个绘制阶段 `detail.grain`，所以一份文档只编译出一个细节操作。在这个操作里先跑阶段 8，再在它的浮点结果上加颗粒（阶段 9），最后按覆盖率回混，与 `develop` 的 8 → 9 顺序一致。
+
+最终审查时发现第一版用了单独的阶段 `detail.sharpen`，结果编译出两个操作，颗粒（80）先画，降噪（87）后画，把颗粒抹掉了。已改为同一阶段，并用 `test_document_detail_before_grain` 从文档编译到像素做了验证。
+
+架构管线里另有一个 `detail.denoise` 步骤，位置在 AI 追色之前。这里的锐化与降噪没有放在那里，而是按 PhotoCraft 放在全部调色之后（用户授权“按推荐的来”）。`detail.denoise` 步骤留给 AI 降噪。
 
 GPU：
 - 先用 `kColor`（所有步骤关闭）把当前帧拷进 Rgba32F 平面。
@@ -48,9 +52,10 @@ GPU：
 | `test_camera_raw_detail` | 52 组 PhotoCraft develop 向量（`tools/photocraft_vectors detail`）：13 组参数，在 detail、grey、block、strip 四种帧上。参数覆盖锐化默认值、150/半径 3/细节 100、半径 0.5/细节 0、半径超出被夹住、蒙版 50/100、明亮度降噪 60 和 100/细节 0、颜色降噪 50 和 100/细节 100、全开、ps 0.5 和 0.25 | 单线程、多线程都逐位一致（最大差 0） |
 | `test_camera_raw_gl` `test_detail_gl` | GPU 阶段对 CPU，6 组参数 × 6 种帧 | 最大差 1.43e-6（容差 1/4096） |
 | `test_capability_registry` / `test_capability_modules` | 范围、默认值、禁用规则；`detail` 的参数从 7 个变为 14 个 | 通过 |
-| `test_reference_spatial` `test_detail_then_grain` | executor 对比 CPU 移植的“先细节、后颗粒”；只开锐化时也会绘制 | 0 级 |
+| `test_reference_spatial` `test_detail_then_grain` | 一个同时含细节和颗粒的操作：executor 与 CPU 移植“先细节、后颗粒”一致；只开锐化时也会绘制 | 0 级 |
+| `test_reference_color_groups` `test_document_detail_before_grain` | 真实文档（颗粒 + 降噪 + 锐化）只编译出一个细节操作；在平坦灰图上颗粒与只开颗粒时逐字节相同（降噪不抹掉颗粒） | 通过 |
 | `test_gpu_backend_native` | 锐化 + 降噪 ≤1；调色之后接细节 + 颗粒 0；32 px 分块回退，差 0 | ≤1 级 |
-| `test_gpu_no_driver_warnings` | 细节绘制不引起 GL 驱动警告 | 通过 |
+| `test_gpu_no_driver_warnings` | 每种绘制各起一个新进程：调色、蒙版、整帧阶段、颗粒、细节 + 颗粒、图层、曲线都不引起 GL 驱动警告 | 通过 |
 
 变异检查（都会让测试失败）：
 - 降噪 eps 系数 0.06 → 0.07
