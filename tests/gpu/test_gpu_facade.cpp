@@ -83,7 +83,7 @@ class ReferenceContext final : public pixcake::gl::detail::ContextImpl {
   void done_current() override {}
   bool set_viewport(std::uint32_t, std::uint32_t, std::string&) override { return true; }
   bool draw_triangles(std::uint32_t, std::string&) override { return true; }
-  bool read_pixels(std::uint32_t, std::uint32_t, std::vector<std::byte>&, std::string&) override { return false; }
+  bool read_pixels(std::uint32_t, std::uint32_t, pixcake::gl::PixelFormat, std::vector<std::byte>&, std::string&) override { return false; }
   std::shared_ptr<pixcake::gl::detail::ShaderImpl> create_shader() override { return {}; }
   std::shared_ptr<pixcake::gl::detail::ProgramImpl> create_program() override { return {}; }
   std::shared_ptr<pixcake::gl::detail::Texture2DImpl> create_texture() override { return {}; }

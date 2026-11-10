@@ -56,6 +56,21 @@ std::string program_log(GLuint program) {
   return log;
 }
 
+// Internal format, pixel format and type of each PixelFormat.  Float textures are sampled
+// with NEAREST: the shaders read them with texelFetch.
+struct GlFormat {
+  GLint internal;
+  GLenum format, type, filter;
+};
+GlFormat gl_format(PixelFormat format) {
+  switch (format) {
+    case PixelFormat::R32F: return {GL_R32F, GL_RED, GL_FLOAT, GL_NEAREST};
+    case PixelFormat::Rgba32F: return {GL_RGBA32F, GL_RGBA, GL_FLOAT, GL_NEAREST};
+    case PixelFormat::Rgba8: break;
+  }
+  return {GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, GL_LINEAR};
+}
+
 class ContextImpl final : public detail::ContextImpl {
  public:
   ContextImpl() {
@@ -121,13 +136,13 @@ class ContextImpl final : public detail::ContextImpl {
     if (glGetError() != GL_NO_ERROR) { error = "glDrawArrays failed"; return false; }
     return true;
   }
-  bool read_pixels(std::uint32_t width, std::uint32_t height, std::vector<std::byte>& data,
+  bool read_pixels(std::uint32_t width, std::uint32_t height, PixelFormat format, std::vector<std::byte>& data,
                    std::string& error) override {
     if (!require_context(error)) return false;
-    data.resize(static_cast<std::size_t>(width) * height * 4);
+    const GlFormat f = gl_format(format);
+    data.resize(static_cast<std::size_t>(width) * height * bytesPerPixel(format));
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glReadPixels(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height), GL_RGBA,
-                 GL_UNSIGNED_BYTE, data.data());
+    glReadPixels(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height), f.format, f.type, data.data());
     if (glGetError() != GL_NO_ERROR) { error = "glReadPixels failed"; return false; }
     return true;
   }
@@ -279,40 +294,45 @@ class VertexArrayImpl final : public detail::VertexArrayImpl {
 class TextureImpl final : public detail::Texture2DImpl {
  public:
   ~TextureImpl() override { if (handle_ != 0 && CGLGetCurrentContext() != nullptr) glDeleteTextures(1, &handle_); }
-  bool allocate(std::uint32_t width, std::uint32_t height, PixelFormat, std::string& error) override {
+  bool allocate(std::uint32_t width, std::uint32_t height, PixelFormat format, std::string& error) override {
     if (!require_context(error)) return false;
     if (width == 0 || height == 0) { error = "texture size is zero"; return false; }
+    const GlFormat f = gl_format(format);
     if (handle_ == 0) glGenTextures(1, &handle_);
     glBindTexture(GL_TEXTURE_2D, handle_);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, static_cast<GLint>(f.filter));
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, static_cast<GLint>(f.filter));
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, static_cast<GLsizei>(width), static_cast<GLsizei>(height), 0,
-                 GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexImage2D(GL_TEXTURE_2D, 0, f.internal, static_cast<GLsizei>(width), static_cast<GLsizei>(height), 0,
+                 f.format, f.type, nullptr);
+    if (glGetError() != GL_NO_ERROR) { error = "glTexImage2D failed"; return false; }
     width_ = width;
     height_ = height;
+    format_ = format;
     return true;
   }
   bool upload(const ImageView& image, std::string& error) override {
     if (image.data == nullptr || image.width == 0 || image.height == 0) { error = "image view is empty"; return false; }
-    const std::uint32_t stride = image.row_stride == 0 ? image.width * 4 : image.row_stride;
-    if (stride < image.width * 4 || stride % 4 != 0 ||
+    const auto bpp = static_cast<std::uint32_t>(bytesPerPixel(image.format));
+    const std::uint32_t stride = image.row_stride == 0 ? image.width * bpp : image.row_stride;
+    if (stride < image.width * bpp || stride % bpp != 0 ||
         // The last row needs only its own pixels, not a whole stride: a tile
         // cut from a larger image ends inside the image's last row.
-        image.bytes < static_cast<std::size_t>(stride) * (image.height - 1) + static_cast<std::size_t>(image.width) * 4) {
+        image.bytes < static_cast<std::size_t>(stride) * (image.height - 1) + static_cast<std::size_t>(image.width) * bpp) {
       error = "image view row stride or size is invalid";
       return false;
     }
-    if (handle_ == 0 || width_ != image.width || height_ != image.height) {
+    if (handle_ == 0 || width_ != image.width || height_ != image.height || format_ != image.format) {
       if (!allocate(image.width, image.height, image.format, error)) return false;
     }
     if (!require_context(error)) return false;
+    const GlFormat f = gl_format(image.format);
     glBindTexture(GL_TEXTURE_2D, handle_);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(stride / 4));
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(stride / bpp));
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, static_cast<GLsizei>(image.width), static_cast<GLsizei>(image.height),
-                    GL_RGBA, GL_UNSIGNED_BYTE, image.data);
+                    f.format, f.type, image.data);
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
     return true;
   }
@@ -329,6 +349,7 @@ class TextureImpl final : public detail::Texture2DImpl {
   GLuint handle_ = 0;
   std::uint32_t width_ = 0;
   std::uint32_t height_ = 0;
+  PixelFormat format_ = PixelFormat::Rgba8;
 };
 
 class FramebufferImpl final : public detail::FramebufferImpl {
@@ -401,7 +422,7 @@ class ContextImpl final : public detail::ContextImpl {
   void done_current() override {}
   bool set_viewport(std::uint32_t, std::uint32_t, std::string& error) override { error = kUnsupported; return false; }
   bool draw_triangles(std::uint32_t, std::string& error) override { error = kUnsupported; return false; }
-  bool read_pixels(std::uint32_t, std::uint32_t, std::vector<std::byte>&, std::string& error) override { error = kUnsupported; return false; }
+  bool read_pixels(std::uint32_t, std::uint32_t, PixelFormat, std::vector<std::byte>&, std::string& error) override { error = kUnsupported; return false; }
   std::shared_ptr<detail::ShaderImpl> create_shader() override { return nullptr; }
   std::shared_ptr<detail::ProgramImpl> create_program() override { return nullptr; }
   std::shared_ptr<detail::Texture2DImpl> create_texture() override { return nullptr; }

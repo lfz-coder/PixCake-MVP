@@ -11,7 +11,10 @@
 namespace pixcake::gl {
 
 enum class ShaderStage { Vertex, Fragment };
-enum class PixelFormat { Rgba8 };
+// Rgba8: 8-bit normalised RGBA.  R32F / Rgba32F: 32-bit float, sampled with NEAREST (shaders use
+// texelFetch); their framebuffers keep unclipped values.
+enum class PixelFormat { Rgba8, R32F, Rgba32F };
+inline std::size_t bytesPerPixel(PixelFormat format) { return format == PixelFormat::Rgba32F ? 16 : 4; }
 
 struct ImageView {
   std::uint32_t width = 0;
@@ -27,7 +30,7 @@ class ShaderImpl;
 class ProgramImpl;
 class Texture2DImpl;
 class FramebufferImpl;
-class ContextImpl { public: virtual ~ContextImpl() = default; virtual bool make_current(std::string&) = 0; virtual void done_current() = 0; virtual bool set_viewport(std::uint32_t, std::uint32_t, std::string&) = 0; virtual bool draw_triangles(std::uint32_t, std::string&) = 0; virtual bool read_pixels(std::uint32_t, std::uint32_t, std::vector<std::byte>&, std::string&) = 0; virtual std::shared_ptr<ShaderImpl> create_shader() = 0; virtual std::shared_ptr<ProgramImpl> create_program() = 0; virtual std::shared_ptr<Texture2DImpl> create_texture() = 0; virtual std::shared_ptr<FramebufferImpl> create_framebuffer() = 0; virtual std::string last_error() const = 0; };
+class ContextImpl { public: virtual ~ContextImpl() = default; virtual bool make_current(std::string&) = 0; virtual void done_current() = 0; virtual bool set_viewport(std::uint32_t, std::uint32_t, std::string&) = 0; virtual bool draw_triangles(std::uint32_t, std::string&) = 0; virtual bool read_pixels(std::uint32_t, std::uint32_t, PixelFormat, std::vector<std::byte>&, std::string&) = 0; virtual std::shared_ptr<ShaderImpl> create_shader() = 0; virtual std::shared_ptr<ProgramImpl> create_program() = 0; virtual std::shared_ptr<Texture2DImpl> create_texture() = 0; virtual std::shared_ptr<FramebufferImpl> create_framebuffer() = 0; virtual std::string last_error() const = 0; };
 class ShaderImpl { public: virtual ~ShaderImpl() = default; virtual bool compile(ShaderStage, std::string_view, std::string&) = 0; };
 class ProgramImpl { public: virtual ~ProgramImpl() = default; virtual bool link(const ShaderImpl&, const ShaderImpl&, std::string&) = 0; virtual bool use(std::string&) = 0; virtual bool set_float(std::string_view, float, std::string&) = 0; virtual bool set_int(std::string_view, std::int32_t, std::string&) = 0; virtual bool set_vec4(std::string_view, const std::array<float, 4>&, std::string&) = 0; virtual bool set_mat4(std::string_view, const std::array<float, 16>&, std::string&) = 0; virtual bool set_texture_unit(std::string_view, std::uint32_t, std::string&) = 0; };
 class BufferImpl { public: virtual ~BufferImpl() = default; virtual bool allocate(std::size_t, const void*, std::string&) = 0; virtual bool write(std::size_t, std::size_t, const void*, std::string&) = 0; };
@@ -41,7 +44,7 @@ class Shader;
 class Program;
 class Texture2D;
 class Framebuffer;
-class Context { public: Context(); explicit Context(std::shared_ptr<detail::ContextImpl>); static Context create(); bool makeCurrent(); void doneCurrent(); bool setViewport(std::uint32_t width, std::uint32_t height, std::string& error); bool drawTriangles(std::uint32_t count, std::string& error); bool readPixels(std::uint32_t width, std::uint32_t height, std::vector<std::byte>& data, std::string& error); Shader createShader() const; Program createProgram() const; Texture2D createTexture2D() const; Framebuffer createFramebuffer() const; std::string lastError() const; bool valid() const; /* Same address for copies of one context: lets a cache tell contexts apart. */ const void* identity() const; private: std::shared_ptr<detail::ContextImpl> impl_; };
+class Context { public: Context(); explicit Context(std::shared_ptr<detail::ContextImpl>); static Context create(); bool makeCurrent(); void doneCurrent(); bool setViewport(std::uint32_t width, std::uint32_t height, std::string& error); bool drawTriangles(std::uint32_t count, std::string& error); bool readPixels(std::uint32_t width, std::uint32_t height, std::vector<std::byte>& data, std::string& error); /* RGBA8 */ bool readPixels(std::uint32_t width, std::uint32_t height, PixelFormat format, std::vector<std::byte>& data, std::string& error); Shader createShader() const; Program createProgram() const; Texture2D createTexture2D() const; Framebuffer createFramebuffer() const; std::string lastError() const; bool valid() const; /* Same address for copies of one context: lets a cache tell contexts apart. */ const void* identity() const; private: std::shared_ptr<detail::ContextImpl> impl_; };
 class Shader { public: Shader(); explicit Shader(std::shared_ptr<detail::ShaderImpl>); static Shader create(); bool compile(ShaderStage, std::string_view, std::string&); bool valid() const; const detail::ShaderImpl* implementation() const; private: std::shared_ptr<detail::ShaderImpl> impl_; };
 class Program { public: Program(); explicit Program(std::shared_ptr<detail::ProgramImpl>); static Program create(); bool link(const Shader&, const Shader&, std::string&); bool use(std::string&); bool setFloat(std::string_view, float, std::string&); bool setInt(std::string_view, std::int32_t, std::string&); bool setVec4(std::string_view, const std::array<float, 4>&, std::string&); bool setMat4(std::string_view, const std::array<float, 16>&, std::string&); bool setTextureUnit(std::string_view, std::uint32_t, std::string&); bool valid() const; private: std::shared_ptr<detail::ProgramImpl> impl_; };
 class Buffer { public: Buffer(); explicit Buffer(std::shared_ptr<detail::BufferImpl>); static Buffer create(); bool allocate(std::size_t, const void*, std::string&); bool write(std::size_t, std::size_t, const void*, std::string&); bool valid() const; private: std::shared_ptr<detail::BufferImpl> impl_; };

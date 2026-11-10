@@ -377,6 +377,9 @@ endif()
 add_executable(test_gpu_backend_native gpu/test_gpu_backend_native.cpp)
 target_link_libraries(test_gpu_backend_native PRIVATE pixcake_gpu_render pixcake_gpu_backend_native pixcake_warnings)
 add_test(NAME test_gpu_backend_C57_C60 COMMAND test_gpu_backend_native)
+add_executable(test_gl_float_textures gpu/test_gl_float_textures.cpp)
+target_link_libraries(test_gl_float_textures PRIVATE pixcake_gpu_backend_native pixcake_warnings)
+add_test(NAME test_gl_float_textures COMMAND test_gl_float_textures)
 
 add_test(
   NAME arch_dependencies

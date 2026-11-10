@@ -35,6 +35,29 @@ bool check_gl(QOpenGLFunctions* gl, const char* operation, std::string& error) {
   return false;
 }
 
+// Internal format, pixel format and type of each PixelFormat (same table as the native backend).
+#ifndef GL_R32F
+#define GL_R32F 0x822E
+#endif
+#ifndef GL_RGBA32F
+#define GL_RGBA32F 0x8814
+#endif
+#ifndef GL_RED
+#define GL_RED 0x1903
+#endif
+struct GlFormat {
+  GLint internal;
+  GLenum format, type, filter;
+};
+GlFormat gl_format(PixelFormat format) {
+  switch (format) {
+    case PixelFormat::R32F: return {GL_R32F, GL_RED, GL_FLOAT, GL_NEAREST};
+    case PixelFormat::Rgba32F: return {GL_RGBA32F, GL_RGBA, GL_FLOAT, GL_NEAREST};
+    case PixelFormat::Rgba8: break;
+  }
+  return {GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, GL_LINEAR};
+}
+
 class ContextImpl final : public detail::ContextImpl {
  public:
   ContextImpl() {
@@ -71,11 +94,12 @@ class ContextImpl final : public detail::ContextImpl {
     auto* gl = current(error); if (gl == nullptr) return false;
     gl->glViewport(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height)); return true;
   }
-  bool read_pixels(std::uint32_t width, std::uint32_t height, std::vector<std::byte>& data, std::string& error) override {
+  bool read_pixels(std::uint32_t width, std::uint32_t height, PixelFormat format, std::vector<std::byte>& data, std::string& error) override {
     auto* gl = current(error); if (gl == nullptr) return false;
-    data.resize(static_cast<std::size_t>(width) * height * 4);
+    const GlFormat f = gl_format(format);
+    data.resize(static_cast<std::size_t>(width) * height * bytesPerPixel(format));
     gl->glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    gl->glReadPixels(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height), GL_RGBA, GL_UNSIGNED_BYTE, data.data());
+    gl->glReadPixels(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height), f.format, f.type, data.data());
     return check_gl(gl, "readback", error);
   }
   std::shared_ptr<detail::ShaderImpl> create_shader() override;
@@ -127,30 +151,32 @@ class ProgramImpl final : public detail::ProgramImpl {
 class TextureImpl final : public detail::Texture2DImpl {
  public:
   ~TextureImpl() override { std::string e; if (handle_ != 0) if (auto* gl = current(e)) gl->glDeleteTextures(1, &handle_); }
-  bool allocate(std::uint32_t width, std::uint32_t height, PixelFormat, std::string& error) override { auto* gl = current(error); if (gl == nullptr) return false; if (handle_ == 0) gl->glGenTextures(1, &handle_); gl->glBindTexture(GL_TEXTURE_2D, handle_); gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR); gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE); gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE); gl->glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, static_cast<GLsizei>(width), static_cast<GLsizei>(height), 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr); width_ = width; height_ = height; return true; }
+  bool allocate(std::uint32_t width, std::uint32_t height, PixelFormat format, std::string& error) override { auto* gl = current(error); if (gl == nullptr) return false; const GlFormat f = gl_format(format); format_ = format; if (handle_ == 0) gl->glGenTextures(1, &handle_); gl->glBindTexture(GL_TEXTURE_2D, handle_); gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, static_cast<GLint>(f.filter)); gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, static_cast<GLint>(f.filter)); gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE); gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE); gl->glTexImage2D(GL_TEXTURE_2D, 0, f.internal, static_cast<GLsizei>(width), static_cast<GLsizei>(height), 0, f.format, f.type, nullptr); width_ = width; height_ = height; return true; }
   bool upload(const ImageView& image, std::string& error) override {
     if (image.data == nullptr || image.width == 0 || image.height == 0) { error = "image view is empty"; return false; }
     // Rows keep the view's stride (a tile cut from a larger image); the last
     // row needs only its own pixels.  Same rule as the native backend.
-    const std::uint32_t stride = image.row_stride == 0 ? image.width * 4 : image.row_stride;
-    if (stride < image.width * 4 || stride % 4 != 0 ||
-        image.bytes < static_cast<std::size_t>(stride) * (image.height - 1) + static_cast<std::size_t>(image.width) * 4) {
+    const auto bpp = static_cast<std::uint32_t>(bytesPerPixel(image.format));
+    const std::uint32_t stride = image.row_stride == 0 ? image.width * bpp : image.row_stride;
+    if (stride < image.width * bpp || stride % bpp != 0 ||
+        image.bytes < static_cast<std::size_t>(stride) * (image.height - 1) + static_cast<std::size_t>(image.width) * bpp) {
       error = "image view row stride or size is invalid";
       return false;
     }
-    if (handle_ == 0 || width_ != image.width || height_ != image.height) if (!allocate(image.width, image.height, image.format, error)) return false;
+    if (handle_ == 0 || width_ != image.width || height_ != image.height || format_ != image.format) if (!allocate(image.width, image.height, image.format, error)) return false;
     auto* gl = current(error);
     if (gl == nullptr) return false;
     gl->glBindTexture(GL_TEXTURE_2D, handle_);
     gl->glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    gl->glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(stride / 4));
-    gl->glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, static_cast<GLsizei>(image.width), static_cast<GLsizei>(image.height), GL_RGBA, GL_UNSIGNED_BYTE, image.data);
+    const GlFormat f = gl_format(image.format);
+    gl->glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(stride / bpp));
+    gl->glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, static_cast<GLsizei>(image.width), static_cast<GLsizei>(image.height), f.format, f.type, image.data);
     gl->glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
     return true;
   }
   bool bind(std::uint32_t unit, std::string& error) override { auto* gl = current(error); if (gl == nullptr || handle_ == 0) return false; gl->glActiveTexture(GL_TEXTURE0 + unit); gl->glBindTexture(GL_TEXTURE_2D, handle_); return true; }
   GLuint handle() const { return handle_; }
- private: GLuint handle_ = 0; std::uint32_t width_ = 0; std::uint32_t height_ = 0;
+ private: GLuint handle_ = 0; std::uint32_t width_ = 0; std::uint32_t height_ = 0; PixelFormat format_ = PixelFormat::Rgba8;
 };
 
 class FramebufferImpl final : public detail::FramebufferImpl {
