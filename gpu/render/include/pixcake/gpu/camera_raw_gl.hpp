@@ -11,6 +11,7 @@
 // says which) and leaves its outputs unspecified then.
 
 #include <pixcake/gl/gl.hpp>
+#include <pixcake/gpu/camera_raw_spatial.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -56,5 +57,14 @@ bool gauss(Gl&, const Plane& in, float sigma, Plane& out);
 bool guided(Gl&, const Plane& i, const Plane& p, std::size_t r, float eps, Plane& out);
 bool guidedFast(Gl&, const Plane& i, const Plane& p, std::size_t r, float eps, Plane& out);
 bool rankFilter(Gl&, const Plane& in, std::size_t r, bool take_max, Plane& out);
+
+// A frame as one Rgba32F plane (unclipped).
+bool uploadFrame(Gl&, const camera_raw::Frame& frame, Plane& rgba);
+bool downloadFrame(Gl&, const Plane& rgba, camera_raw::Frame& out);
+
+// The stages of camera_raw_spatial.hpp on an Rgba32F frame, in place.  Image statistics
+// (dehaze's atmospheric light and means) are read back and computed on the CPU.
+bool dehaze(Gl&, Plane& rgba, float amount);
+bool toneDetail(Gl&, Plane& rgba, float contrast, float texture, float clarity, float pixel_scale);
 
 }  // namespace pixcake::gpu::camera_raw_gl

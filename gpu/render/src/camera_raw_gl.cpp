@@ -10,6 +10,8 @@
 #include <pixcake/gpu/camera_raw_spatial.hpp>
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstring>
 #include <functional>
 #include <map>
@@ -180,18 +182,38 @@ bool guided_from_packed(Gl::Impl& g, const Plane& packed, const Plane& guide, st
   return true;
 }
 
-bool block_mean(Gl::Impl& g, const Plane& in, std::uint32_t block, PixelFormat format, Plane& out) {
+bool block_mean(Gl::Impl& g, const Plane& in, std::uint32_t block, PixelFormat format, Plane& out, bool clamp_in = false) {
   Plane small;
   const std::uint32_t w = (in.w + block - 1) / block, h = (in.h + block - 1) / block;
   if (!g.acquire(w, h, format, small) ||
-      !g.draw(shaders::kBlockMean, small, {&in}, [block](gl::Program& p, std::string& e) {
-        return p.setInt("block", static_cast<std::int32_t>(block), e);
+      !g.draw(shaders::kBlockMean, small, {&in}, [block, clamp_in](gl::Program& p, std::string& e) {
+        return p.setInt("block", static_cast<std::int32_t>(block), e) && p.setInt("clamp_in", clamp_in ? 1 : 0, e);
       })) {
     return false;
   }
   out = small;
   return true;
 }
+
+bool luma(Gl::Impl& g, const Plane& rgba, bool clipped, Plane& out) {
+  Plane l;
+  if (!same_size_plane(g, rgba, PixelFormat::R32F, l) ||
+      !g.draw(shaders::kLuma, l, {&rgba}, [clipped](gl::Program& p, std::string& e) { return p.setInt("clipped", clipped ? 1 : 0, e); })) {
+    return false;
+  }
+  out = l;
+  return true;
+}
+
+bool read_rgba(Gl::Impl& g, const Plane& p, std::vector<std::array<float, 4>>& out) {
+  std::vector<std::byte> bytes;
+  if (!g.read(p, PixelFormat::Rgba32F, bytes)) return false;
+  out.resize(std::size_t{p.w} * p.h);
+  std::memcpy(out.data(), bytes.data(), out.size() * sizeof(out[0]));
+  return true;
+}
+
+std::size_t div_ceil(std::size_t a, std::size_t b) { return (a + b - 1) / b; }
 
 }  // namespace
 
@@ -268,6 +290,102 @@ bool rankFilter(Gl& gl_, const Plane& in, std::size_t r, bool take_max, Plane& o
     return false;
   }
   out = cols;
+  return true;
+}
+
+bool uploadFrame(Gl& gl_, const camera_raw::Frame& frame, Plane& rgba) {
+  auto& g = gl_.impl();
+  if (frame.px.size() != std::size_t{frame.width} * frame.height) return g.fail("uploadFrame: size mismatch");
+  Plane p;
+  if (!g.acquire(frame.width, frame.height, PixelFormat::Rgba32F, p)) return false;
+  const gl::ImageView view{frame.width, frame.height, frame.width * 16, PixelFormat::Rgba32F,
+                           reinterpret_cast<const std::byte*>(frame.px.data()), frame.px.size() * sizeof(frame.px[0])};
+  std::string e;
+  if (!p.slot->tex.upload(view, e)) return g.fail("uploadFrame: " + e);
+  rgba = p;
+  return true;
+}
+
+bool downloadFrame(Gl& gl_, const Plane& rgba, camera_raw::Frame& out) {
+  out.width = rgba.w;
+  out.height = rgba.h;
+  return read_rgba(gl_.impl(), rgba, out.px);
+}
+
+bool dehaze(Gl& gl_, Plane& rgba, float amount) {
+  auto& g = gl_.impl();
+  const std::size_t w = rgba.w, h = rgba.h;
+  // Transmission on a <= 768 px proxy (camera_raw::dehaze, same steps).
+  const std::size_t k = std::max<std::size_t>(div_ceil(std::max(w, h), 768), 1);
+  Plane small, cmin, dark;
+  if (!block_mean(g, rgba, static_cast<std::uint32_t>(k), PixelFormat::Rgba32F, small, true)) return false;
+  const std::size_t sw = small.w, sh = small.h, n = sw * sh;
+  const std::size_t r = std::max<std::size_t>(std::max(sw, sh) / 60, 2);
+  if (!same_size_plane(g, small, PixelFormat::R32F, cmin) || !g.draw(shaders::kChannelMin, cmin, {&small}) ||
+      !rankFilter(gl_, cmin, r, false, dark)) {
+    return false;
+  }
+  // Atmospheric light on the CPU: the mean colour of the brightest 0.1 % of the dark channel.
+  std::vector<float> dark_v;
+  std::vector<std::array<float, 4>> small_v;
+  if (!download(gl_, dark, dark_v) || !read_rgba(g, small, small_v)) return false;
+  std::vector<std::size_t> idx(n);
+  for (std::size_t i = 0; i < n; ++i) idx[i] = i;
+  std::stable_sort(idx.begin(), idx.end(), [&](std::size_t a, std::size_t b) { return dark_v[b] < dark_v[a]; });
+  const std::size_t top = std::max<std::size_t>(n / 1000, 1);
+  std::array<float, 3> air{0.0F, 0.0F, 0.0F};
+  for (std::size_t t = 0; t < top; ++t)
+    for (int c = 0; c < 3; ++c) air[c] += small_v[idx[t]][c] / static_cast<float>(top);
+  for (float& a : air) a = std::fmax(a, 0.2F);
+  const std::array<float, 4> air4{air[0], air[1], air[2], 1.0F};
+  Plane normalised, norm_dark, opened;
+  if (!same_size_plane(g, small, PixelFormat::R32F, normalised) ||
+      !g.draw(shaders::kNormalised, normalised, {&small}, [&](gl::Program& p, std::string& e) { return p.setVec4("air", air4, e); }) ||
+      !rankFilter(gl_, normalised, r, false, norm_dark) || !rankFilter(gl_, norm_dark, r, true, opened)) {
+    return false;
+  }
+  std::vector<float> norm_dark_v, opened_v;
+  if (!download(gl_, norm_dark, norm_dark_v) || !download(gl_, opened, opened_v)) return false;
+  const auto mean = [](const std::vector<float>& v) {
+    float sum = -0.0F;
+    for (const float x : v) sum += x;
+    return sum / static_cast<float>(std::max<std::size_t>(v.size(), 1));
+  };
+  const float weight = 0.95F * mean(norm_dark_v) / std::fmax(mean(opened_v), 1e-6F);
+  Plane t_raw, guide, t, out;
+  if (!same_size_plane(g, small, PixelFormat::R32F, t_raw) ||
+      !g.draw(shaders::kTransmission, t_raw, {&opened}, [weight](gl::Program& p, std::string& e) { return p.setFloat("weight", weight, e); }) ||
+      !luma(g, small, false, guide) || !guided(gl_, guide, t_raw, r * 2, 1e-3F, t) ||
+      !same_size_plane(g, rgba, PixelFormat::Rgba32F, out) ||
+      !g.draw(shaders::kDehazeApply, out, {&rgba, &t}, [&](gl::Program& p, std::string& e) {
+        return p.setFloat("k", static_cast<float>(k), e) && p.setFloat("amount", amount, e) && p.setVec4("air", air4, e);
+      })) {
+    return false;
+  }
+  rgba = out;
+  return true;
+}
+
+bool toneDetail(Gl& gl_, Plane& rgba, float contrast, float texture, float clarity, float pixel_scale) {
+  if (contrast == 0.0F && texture == 0.0F && clarity == 0.0F) return true;
+  auto& g = gl_.impl();
+  const float ps = std::clamp(pixel_scale, 0.01F, 1.0F);
+  const auto longest = static_cast<float>(std::max(rgba.w, rgba.h));
+  Plane lc, clar, tex, out;
+  if (!luma(g, rgba, true, lc)) return false;
+  if (clarity != 0.0F && !guidedFast(gl_, lc, lc, std::max<std::size_t>(static_cast<std::size_t>(longest * 0.02F), 3), 0.005F, clar)) return false;
+  if (texture != 0.0F && !gauss(gl_, lc, std::fmax(longest * 0.002F, 1.5F * ps), tex)) return false;
+  const Plane& c = clar.valid() ? clar : lc;
+  const Plane& t = tex.valid() ? tex : lc;
+  const float k_con = contrast / 100.0F * 0.6F;
+  if (!same_size_plane(g, rgba, PixelFormat::Rgba32F, out) ||
+      !g.draw(shaders::kToneDetail, out, {&rgba, &lc, &c, &t}, [&](gl::Program& p, std::string& e) {
+        return p.setFloat("clarity", clarity, e) && p.setFloat("texture_amount", texture, e) && p.setFloat("k_con", k_con, e) &&
+               p.setInt("has_clarity", clar.valid() ? 1 : 0, e) && p.setInt("has_texture", tex.valid() ? 1 : 0, e);
+      })) {
+    return false;
+  }
+  rgba = out;
   return true;
 }
 

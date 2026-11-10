@@ -100,20 +100,112 @@ void main() {
 }
 )";
 
-// The mean of each `block` x `block` cell (cut to t0), rows then columns as the CPU adds them.
+// The mean of each `block` x `block` cell (cut to t0), rows then columns as the CPU adds them;
+// clamp_in clamps each sample to 0..1 first (dehaze's proxy).
 inline constexpr const char* kBlockMean = R"(
 uniform int block;
+uniform int clamp_in;
 void main() {
   ivec2 p = here(), n = size0();
   vec4 sum = vec4(0.0);
   float count = 0.0;
   for (int y = p.y * block; y < min(p.y * block + block, n.y); ++y) {
     for (int x = p.x * block; x < min(p.x * block + block, n.x); ++x) {
-      sum += texelFetch(t0, ivec2(x, y), 0);
+      vec4 v = texelFetch(t0, ivec2(x, y), 0);
+      sum += clamp_in != 0 ? clamp(v, 0.0, 1.0) : v;
       count += 1.0;
     }
   }
   color = sum / max(count, 1.0);
+}
+)";
+
+inline constexpr const char* kLuma = R"(
+float luma3(vec3 c) { return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b; }
+uniform int clipped;  // 1: min(max(luma, 0), 1) (stage 3's lc)
+void main() {
+  float l = luma3(texelFetch(t0, here(), 0).rgb);
+  color = vec4(clipped != 0 ? min(max(l, 0.0), 1.0) : l);
+}
+)";
+
+// ---- Dehaze (camera_raw.rs stage 2)
+inline constexpr const char* kChannelMin = R"(
+void main() {
+  vec3 c = texelFetch(t0, here(), 0).rgb;
+  color = vec4(min(min(c.r, c.g), c.b));
+}
+)";
+inline constexpr const char* kNormalised = R"(
+uniform vec4 air;
+void main() {
+  vec3 c = texelFetch(t0, here(), 0).rgb;
+  color = vec4(min(min(c.r / air.r, c.g / air.g), c.b / air.b));
+}
+)";
+inline constexpr const char* kTransmission = R"(
+uniform float weight;
+void main() { color = vec4(1.0 - weight * texelFetch(t0, here(), 0).r); }
+)";
+// t0 = frame, t1 = refined transmission on the proxy (k times smaller).
+inline constexpr const char* kDehazeApply = R"(
+uniform float k;
+uniform float amount;
+uniform vec4 air;
+float bilinear_t(vec2 at) {
+  ivec2 n = textureSize(t1, 0);
+  float x = clamp(at.x, 0.0, float(n.x - 1)), y = clamp(at.y, 0.0, float(n.y - 1));
+  int x0 = int(floor(x)), y0 = int(floor(y));
+  int x1 = min(x0 + 1, n.x - 1), y1 = min(y0 + 1, n.y - 1);
+  float tx = x - float(x0), ty = y - float(y0);
+  float p00 = texelFetch(t1, ivec2(x0, y0), 0).r, p10 = texelFetch(t1, ivec2(x1, y0), 0).r;
+  float p01 = texelFetch(t1, ivec2(x0, y1), 0).r, p11 = texelFetch(t1, ivec2(x1, y1), 0).r;
+  float top = p00 + (p10 - p00) * tx, bot = p01 + (p11 - p01) * tx;
+  return top + (bot - top) * ty;
+}
+void main() {
+  ivec2 p = here();
+  vec4 q = texelFetch(t0, p, 0);
+  float tv = clamp(bilinear_t((vec2(p) + 0.5) / k - 0.5), 0.1, 1.0);
+  for (int c = 0; c < 3; ++c) {
+    float i = q[c];
+    float j = (i - air[c]) / tv + air[c];
+    q[c] = amount >= 0.0 ? i + (j - i) * amount : i + (air[c] - i) * (-amount) * 0.5 * (1.0 - tv * 0.5);
+  }
+  color = q;
+}
+)";
+
+// ---- Stage 3: Contrast, Texture, Clarity and tone() (camera_raw.rs)
+// t0 = frame, t1 = lc, t2 = guided lc (clarity), t3 = blurred lc (texture).
+inline constexpr const char* kToneDetail = R"(
+const float TAU = 6.28318530717958647692;
+uniform float clarity;
+uniform float texture_amount;
+uniform float k_con;
+uniform int has_clarity;
+uniform int has_texture;
+float luma3(vec3 c) { return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b; }
+void main() {
+  ivec2 p = here();
+  vec4 q = texelFetch(t0, p, 0);
+  float l0 = max(luma3(q.rgb), 0.0);
+  float lc = texelFetch(t1, p, 0).r;
+  float lv = lc;
+  if (has_clarity != 0) {
+    float m = 2.0 * clamp(lv, 0.0, 1.0) - 1.0;
+    float mw = 1.0 - m * m;
+    lv += clarity / 100.0 * 0.8 * (lc - texelFetch(t2, p, 0).r) * mw;
+  }
+  if (has_texture != 0) lv += texture_amount / 100.0 * 0.9 * clamp(lc - texelFetch(t3, p, 0).r, -0.1, 0.1);
+  if (k_con != 0.0) {
+    float xx = clamp(lv, 0.0, 1.0);
+    lv += -k_con * sin(TAU * xx) / TAU;
+  }
+  lv = max(lv, 0.0) + (l0 - lc);
+  float ratio = l0 > 1e-5 ? lv / l0 : 1.0;
+  q.rgb = l0 > 1e-5 ? q.rgb * ratio : q.rgb + (lv - l0);
+  color = q;
 }
 )";
 

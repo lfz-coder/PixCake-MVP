@@ -2,6 +2,8 @@
 // PhotoCraft's own develop on the frames of tools/photocraft_vectors/src/spatial.rs.
 #include <pixcake/gpu/camera_raw_spatial.hpp>
 
+#include "spatial_frames.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -24,27 +26,7 @@ namespace {
 namespace cr = pixcake::gpu::camera_raw;
 #include "data/spatial_vectors.inc"
 
-std::array<float, 4> detail(std::size_t x, std::size_t y, std::size_t w, std::size_t h) {
-  const float edge = x * 2 > w ? 0.35F : 0.0F;
-  const float check = (x / 3 + y / 3) % 2 == 0 ? 0.08F : -0.08F;
-  return {0.1F + 0.5F * static_cast<float>(x) / static_cast<float>(w - 1) + edge,
-          0.15F + 0.6F * static_cast<float>(y) / static_cast<float>(h - 1) + check, 0.3F + edge * 0.5F - check, 1.0F};
-}
-std::array<float, 4> pixel(const std::string& frame, std::size_t x, std::size_t y, std::size_t w, std::size_t h) {
-  if (frame == "grey") return {0.5F, 0.5F, 0.5F, 1.0F};
-  if (frame == "block") {
-    return x >= 8 && x < 17 && y >= 4 && y < 11 ? std::array<float, 4>{0.97F, 0.95F, 0.9F, 1.0F}
-                                                 : std::array<float, 4>{0.25F, 0.3F, 0.35F, 1.0F};
-  }
-  return detail(x, y, w, h);
-}
-cr::Frame frame_of(const std::string& name) {
-  cr::Frame f;
-  f.width = name == "strip" ? 840 : name == "long" ? 1700 : 24;
-  f.height = name == "strip" ? 6 : name == "long" ? 12 : 16;
-  for (std::size_t i = 0; i < std::size_t{f.width} * f.height; ++i) f.px.push_back(pixel(name, i % f.width, i / f.width, f.width, f.height));
-  return f;
-}
+using spatial_frames::frame_of;
 
 // develop's whole-frame stages in its order, with what this build has ported.
 bool develop(const SpatialCase& c, cr::Frame& f) {

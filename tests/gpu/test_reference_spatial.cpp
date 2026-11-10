@@ -5,6 +5,8 @@
 #include <pixcake/gpu/render_executor.hpp>
 #include <pixcake/render/render_description.hpp>
 
+#include "spatial_frames.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -50,24 +52,7 @@ RenderDescription op(const char* capability, const char* program, std::initializ
 }
 RenderDescription global(std::initializer_list<RenderValue> values) { return op("color.global", "pixcake.color.global", values); }
 
-// A frame with smooth gradients, a hard edge, a bright block and fine detail.
-RgbaImage scene(std::uint32_t w, std::uint32_t h) {
-  RgbaImage image;
-  image.width = w;
-  image.height = h;
-  image.row_stride = w * 4;
-  for (std::uint32_t y = 0; y < h; ++y) {
-    for (std::uint32_t x = 0; x < w; ++x) {
-      const float fx = static_cast<float>(x) / static_cast<float>(w), fy = static_cast<float>(y) / static_cast<float>(h);
-      float r = 0.1F + 0.6F * fx, g = 0.15F + 0.5F * fy, b = 0.3F;
-      if (fx > 0.55F) r += 0.25F, b += 0.2F;
-      if (fx > 0.2F && fx < 0.45F && fy > 0.2F && fy < 0.5F) r = g = b = 0.95F;
-      const auto q = [](float v) { return static_cast<std::uint8_t>(std::lround(std::clamp(v, 0.0F, 1.0F) * 255.0F)); };
-      image.pixels.insert(image.pixels.end(), {q(r), q(g), q(b), 255});
-    }
-  }
-  return image;
-}
+using spatial_frames::scene;
 RenderResult run(const RenderDescription& d, const RgbaImage& input, const RenderInputs& inputs = {}) {
   RenderResult result;
   const bool ok = RenderExecutor{}.renderReference(d, input, inputs, result);

@@ -5,6 +5,8 @@
 #include <pixcake/gpu/camera_raw_gl.hpp>
 #include <pixcake/gpu/camera_raw_spatial.hpp>
 
+#include "spatial_frames.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -130,6 +132,64 @@ void test_rank_filter_gl(crgl::Gl& g) {
   }
 }
 
+// ---- Whole frames
+
+const char* const kFrames[] = {"detail", "grey", "block", "strip", "scene", "scaled"};
+cr::Frame frame_named(const std::string& name) {
+  return name == "scene" ? spatial_frames::frame_of_image(spatial_frames::scene(400, 300)) : spatial_frames::frame_of(name);
+}
+
+// Runs `on_gpu` on the uploaded frame and `on_cpu` on a copy; compares every colour channel.
+template <class Gpu, class Cpu>
+void expect_frame(crgl::Gl& g, const char* what, const std::string& frame, const Gpu& on_gpu, const Cpu& on_cpu) {
+  cr::Frame cpu = frame_named(frame), got;
+  crgl::Plane rgba;
+  CHECK(crgl::uploadFrame(g, cpu, rgba));
+  CHECK(on_gpu(rgba));
+  CHECK(crgl::downloadFrame(g, rgba, got));
+  on_cpu(cpu);
+  CHECK(got.width == cpu.width && got.height == cpu.height && got.px.size() == cpu.px.size());
+  float worst = 0.0F;
+  std::size_t at = 0;
+  for (std::size_t i = 0; i < cpu.px.size(); ++i) {
+    for (int c = 0; c < 4; ++c) {
+      const float d = std::fabs(got.px[i][c] - cpu.px[i][c]);
+      if (std::isnan(d) || d > worst) {
+        worst = std::isnan(d) ? 1e30F : d;
+        at = i;
+      }
+    }
+  }
+  std::printf("%-28s %-7s worst %.3g (pixel %zu)\n", what, frame.c_str(), worst, at);
+  CHECK(worst <= kTolerance);
+}
+
+void test_dehaze_gl(crgl::Gl& g) {
+  for (const char* frame : kFrames) {
+    for (const float amount : {0.3F, -0.3F, 1.0F, -1.0F}) {
+      char name[48];
+      std::snprintf(name, sizeof name, "dehaze %+.0f", amount * 100.0F);
+      expect_frame(g, name, frame, [&](crgl::Plane& p) { return crgl::dehaze(g, p, amount); },
+                   [&](cr::Frame& f) { cr::dehaze(f, amount); });
+    }
+  }
+}
+
+void test_tone_detail_gl(crgl::Gl& g) {
+  struct Case {
+    const char* name;
+    float contrast, texture, clarity, pixel_scale;
+  };
+  const Case cases[] = {{"texture 100", 0, 100, 0, 1}, {"clarity 100", 0, 0, 100, 1}, {"texture -50 ps 0.5", 0, -50, 0, 0.5F},
+                        {"contrast 40", 40, 0, 0, 1}, {"clarity -50 contrast 40 texture -30", 40, -30, -50, 1}};
+  for (const char* frame : kFrames) {
+    for (const auto& c : cases) {
+      expect_frame(g, c.name, frame, [&](crgl::Plane& p) { return crgl::toneDetail(g, p, c.contrast, c.texture, c.clarity, c.pixel_scale); },
+                   [&](cr::Frame& f) { cr::toneDetail(f, c.contrast, c.texture, c.clarity, c.pixel_scale); });
+    }
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -150,6 +210,8 @@ int main() {
     test_guided_gl(g, false);
     test_guided_gl(g, true);
     test_rank_filter_gl(g);
+    test_dehaze_gl(g);
+    test_tone_detail_gl(g);
     if (!g.ok()) std::fprintf(stderr, "GL error: %s\n", g.error().c_str());
     CHECK(g.ok());
   }
