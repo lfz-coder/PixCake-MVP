@@ -412,6 +412,78 @@ void toneDetail(Frame& frame, float contrast, float texture, float clarity, floa
   });
 }
 
+// ---- Detail (camera_raw.rs detail, stage 8)
+bool detailNeutral(const DetailSettings& s) {
+  return !(s.noise_luminance > 0.0F || s.noise_color > 0.0F || s.sharpen_amount > 0.0F);
+}
+
+void detail(Frame& frame, const DetailSettings& s, float pixel_scale) {
+  if (detailNeutral(s)) return;
+  const std::size_t w = frame.width, h = frame.height, n = w * h;
+  const float ps = std::clamp(pixel_scale, 0.01F, 1.0F);
+  // Y + chroma: BT.709 luma, B - Y, R - Y.
+  std::vector<float> y(n), cb(n), cr(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    const auto& q = frame.px[i];
+    y[i] = luma3(q[0], q[1], q[2]);
+    cb[i] = q[2] - y[i];
+    cr[i] = q[0] - y[i];
+  }
+  if (s.noise_luminance > 0.0F) {
+    const float k = s.noise_luminance / 100.0F;
+    const auto r = static_cast<std::size_t>(std::fmax(std::round((1.0F + 3.0F * k) * ps), 1.0F));
+    const float e = k * 0.06F;
+    const std::vector<float> smooth = guided(y, y, w, h, r, e * e + 1e-6F);
+    const float keep = s.noise_luminance_detail / 100.0F * 0.5F;
+    for (std::size_t i = 0; i < n; ++i) y[i] = smooth[i] + (y[i] - smooth[i]) * keep;
+  }
+  if (s.noise_color > 0.0F) {
+    const float sigma = std::fmax(s.noise_color / 100.0F * 6.0F * ps, 0.3F);
+    const std::vector<float> bcb = gauss(cb, w, h, sigma), bcr = gauss(cr, w, h, sigma);
+    const float keep = s.noise_color_detail / 100.0F * 0.3F;
+    for (std::size_t i = 0; i < n; ++i) {
+      cb[i] = bcb[i] + (cb[i] - bcb[i]) * keep;
+      cr[i] = bcr[i] + (cr[i] - bcr[i]) * keep;
+    }
+  }
+  if (s.sharpen_amount > 0.0F) {
+    const float sigma = std::fmax(std::clamp(s.sharpen_radius, 0.5F, 3.0F) * ps, 0.3F);
+    const std::vector<float> blur = gauss(y, w, h, sigma);
+    // Masking: an edge mask from the gradient of a smoothed luminance.
+    std::vector<float> mask;
+    if (s.sharpen_masking > 0.0F) {
+      const std::vector<float> sm = gauss(y, w, h, 1.0F * std::fmax(ps, 0.5F));
+      const float t = s.sharpen_masking / 100.0F * 0.08F;
+      mask.resize(n);
+      par(h, n, [&](std::size_t first, std::size_t end) {
+        for (std::size_t i = first * w; i < end * w; ++i) {
+          const std::size_t x = i % w, yy = i / w;
+          const float gx = sm[yy * w + std::min(x + 1, w - 1)] - sm[yy * w + (x == 0 ? 0 : x - 1)];
+          const float gy = sm[std::min(yy + 1, h - 1) * w + x] - sm[(yy == 0 ? 0 : yy - 1) * w + x];
+          const float e0 = t * 0.5F, e1 = t + 1e-4F;
+          const float u = std::clamp((std::hypot(gx, gy) - e0) / (e1 - e0), 0.0F, 1.0F);
+          mask[i] = u * u * (3.0F - 2.0F * u);
+        }
+      });
+    }
+    const float amt = s.sharpen_amount / 100.0F * 1.2F, det = s.sharpen_detail / 100.0F;
+    const float limit = 0.03F + det * 0.3F;
+    for (std::size_t i = 0; i < n; ++i) {
+      // Low Detail damps large (halo-producing) differences.
+      const float hp = std::clamp(y[i] - blur[i], -limit, limit) * (0.5F + 0.5F * det);
+      const float m = mask.empty() ? 1.0F : mask[i];
+      y[i] += amt * hp * m;
+    }
+  }
+  for (std::size_t i = 0; i < n; ++i) {
+    const float l = y[i], rr = cr[i] + l, bb = cb[i] + l;
+    const float g = (l - 0.2126F * rr - 0.0722F * bb) / 0.7152F;
+    frame.px[i][0] = rr;
+    frame.px[i][1] = g;
+    frame.px[i][2] = bb;
+  }
+}
+
 // ---- Highlights and Shadows (camera_raw/local_tone.rs)
 namespace {
 

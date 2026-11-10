@@ -35,6 +35,18 @@ std::array<float, 2> luminancePoints(const Frame& frame);
 // Stage 3b: Whites and Blacks (-100..100), adapted to the frame's black and white points.
 void whitesBlacks(Frame& frame, float whites, float blacks);
 
+// Stage 8, Detail (camera_raw.rs detail): luminance noise reduction (a guided filter of BT.709
+// luma), colour noise reduction (Gaussian of B-Y and R-Y) and sharpening (unsharp mask of the
+// luma, Detail limiting halos, Masking an edge mask), in Camera Raw's slider units.  A stage
+// runs only when its amount is above 0.
+struct DetailSettings {
+  float sharpen_amount = 0.0F, sharpen_radius = 1.0F, sharpen_detail = 25.0F, sharpen_masking = 0.0F;
+  float noise_luminance = 0.0F, noise_luminance_detail = 50.0F;
+  float noise_color = 0.0F, noise_color_detail = 50.0F;
+};
+bool detailNeutral(const DetailSettings& s);
+void detail(Frame& frame, const DetailSettings& s, float pixel_scale);
+
 // Planes of at least this many samples run their rows (or columns) on a pool of worker threads,
 // as PhotoCraft's par_rows does (PAR_MIN 1 << 15); each output sample is computed exactly as on
 // one thread, so the result is the same bits.  Returns the previous value; for tests.

@@ -257,6 +257,11 @@ add_executable(test_camera_raw_calibration gpu/test_camera_raw_calibration.cpp)
 target_include_directories(test_camera_raw_calibration PRIVATE ${CMAKE_SOURCE_DIR}/tests/gpu)
 target_link_libraries(test_camera_raw_calibration PRIVATE pixcake_gpu_render pixcake_warnings)
 add_test(NAME test_camera_raw_calibration COMMAND test_camera_raw_calibration)
+
+add_executable(test_camera_raw_detail gpu/test_camera_raw_detail.cpp)
+target_include_directories(test_camera_raw_detail PRIVATE ${CMAKE_SOURCE_DIR}/tests/gpu)
+target_link_libraries(test_camera_raw_detail PRIVATE pixcake_gpu_render pixcake_warnings)
+add_test(NAME test_camera_raw_detail COMMAND test_camera_raw_detail)
 add_test(NAME check_photocraft_license
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P ${CMAKE_SOURCE_DIR}/tests/gpu/check_photocraft_license.cmake)
 # Not a test: frame time of the reference renderer at the preview's maximum size (run the Release build).
