@@ -6,9 +6,11 @@
 //! With `spatial`: dehaze, Highlights/Shadows, Contrast/Texture/Clarity, Whites/Blacks (`tests/gpu/data/spatial_vectors.inc`).
 //! With `grain`: Camera Raw grain (`tests/gpu/data/grain_vectors.inc`).
 //! With `adjust`: Levels, Selective Color, 3D LUT and composite (`tests/gpu/data/adjust_vectors.inc`).
+//! With `calibration`: the Calibration primaries (`tests/gpu/data/calibration_vectors.inc`).
 //! With `curves`: the parametric tone curve and point curves (`tests/gpu/data/curve_vectors.inc`).
 
 mod adjust;
+mod calibration;
 mod curves;
 mod grain;
 mod spatial;
@@ -148,6 +150,10 @@ fn main() {
     }
     if std::env::args().nth(1).as_deref() == Some("grain") {
         grain::run();
+        return;
+    }
+    if std::env::args().nth(1).as_deref() == Some("calibration") {
+        calibration::run();
         return;
     }
     if std::env::args().nth(1).as_deref() == Some("curves") {

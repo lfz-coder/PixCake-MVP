@@ -53,6 +53,12 @@ Rgb hsvToRgb(float h, float s, float v);
 // applyBalance encodes(max(decode(v) * gain, 0)).  Skip it when all three sliders are 0.
 Rgb balanceGains(float temperature, float tint, float exposure);
 Rgb applyBalance(const Rgb& encoded, const Rgb& gains);
+// Stage 1b, Calibration primaries: the red, green and blue primaries' Hue (+-100 turns +-30
+// degrees towards the next primary) and Saturation (-100 greys), in linear light, luminance
+// kept.  Order: red, green, blue.  Skip when calibrationNeutral.
+std::array<float, 3> calibrationWeights(float hue);
+bool calibrationNeutral(const std::array<float, 3>& hue, const std::array<float, 3>& sat);
+Rgb applyCalibration(const Rgb& encoded, const std::array<float, 3>& hue, const std::array<float, 3>& sat);
 // Stage 3 with Contrast as its only control (slider -100..100; skip at 0).
 Rgb applyContrast(const Rgb& c, float contrast);
 // Stage 4, Presence (sliders -100..100; skip when both are 0).

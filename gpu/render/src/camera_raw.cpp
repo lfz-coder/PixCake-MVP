@@ -81,6 +81,48 @@ Rgb applyContrast(const Rgb& in, float contrast) {
 }
 
 // Vibrance weighted towards less saturated, non-skin colours.
+// calibration_weights: triangular weights around 0, 120 and 240 degrees, summing to one.
+std::array<float, 3> calibrationWeights(float hue) {
+  const float h = remEuclid(hue, 360.0F);
+  std::array<float, 3> w{};
+  const float centres[3] = {0.0F, 120.0F, 240.0F};
+  for (int i = 0; i < 3; ++i) {
+    const float d = std::fmin(std::abs(h - centres[i]), 360.0F - std::abs(h - centres[i]));
+    w[i] = std::fmax(1.0F - d / 120.0F, 0.0F);
+  }
+  const float sum = w[0] + w[1] + w[2];
+  if (sum > 1e-6F) return {w[0] / sum, w[1] / sum, w[2] / sum};
+  return {1.0F, 0.0F, 0.0F};
+}
+
+bool calibrationNeutral(const std::array<float, 3>& hue, const std::array<float, 3>& sat) {
+  for (int i = 0; i < 3; ++i) {
+    if (hue[i] != 0.0F || sat[i] != 0.0F) return false;
+  }
+  return true;
+}
+
+// develop stage 1b (shadow tint is not registered): decode, calibrate, encode(max(v, 0)).
+Rgb applyCalibration(const Rgb& encoded, const std::array<float, 3>& hue, const std::array<float, 3>& sat) {
+  const Rgb c{srgbToLinear(encoded[0]), srgbToLinear(encoded[1]), srgbToLinear(encoded[2])};
+  Rgb o = c;
+  const Rgb hsv = rgbToHsv({std::fmax(c[0], 0.0F), std::fmax(c[1], 0.0F), std::fmax(c[2], 0.0F)});
+  if (!(hsv[1] <= 1e-5F || hsv[2] <= 1e-6F)) {
+    const auto w = calibrationWeights(hsv[0]);
+    float dh = 0.0F, ds = 0.0F;
+    for (int i = 0; i < 3; ++i) {
+      dh += w[i] * std::clamp(hue[i], -100.0F, 100.0F);
+      ds += w[i] * std::clamp(sat[i], -100.0F, 100.0F);
+    }
+    const float nh = hsv[0] + dh / 100.0F * 30.0F;
+    const float ns = std::clamp(hsv[1] * (1.0F + ds / 100.0F), 0.0F, 1.0F);
+    o = hsvToRgb(nh, ns, hsv[2]);
+    const float l0 = luma(c), l1 = luma(o);
+    if (l1 > 1e-6F) o = {o[0] * l0 / l1, o[1] * l0 / l1, o[2] * l0 / l1};
+  }
+  return {linearToSrgb(std::fmax(o[0], 0.0F)), linearToSrgb(std::fmax(o[1], 0.0F)), linearToSrgb(std::fmax(o[2], 0.0F))};
+}
+
 bool isLinearCurve(const CurvePoints& points) {
   if (points.size() < 2) return true;
   for (const auto& p : points) {
