@@ -412,6 +412,10 @@ void toneDetail(Frame& frame, float contrast, float texture, float clarity, floa
   });
 }
 
+void parallelRows(std::size_t rows, std::size_t samples, const std::function<void(std::size_t, std::size_t)>& body) {
+  par(rows, samples, body);
+}
+
 // ---- Detail (camera_raw.rs detail, stage 8)
 bool detailNeutral(const DetailSettings& s) {
   return !(s.noise_luminance > 0.0F || s.noise_color > 0.0F || s.sharpen_amount > 0.0F);

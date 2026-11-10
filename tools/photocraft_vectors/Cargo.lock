@@ -247,6 +247,8 @@ dependencies = [
  "photocraft-color",
  "photocraft-compose",
  "photocraft-doc",
+ "photocraft-geom",
+ "photocraft-raster",
 ]
 
 [[package]]

@@ -11,6 +11,7 @@
 // A Frame holds sRGB-encoded samples (Camera Raw's encoding_gamma 0), unclipped between stages.
 
 #include <array>
+#include <functional>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -46,6 +47,10 @@ struct DetailSettings {
 };
 bool detailNeutral(const DetailSettings& s);
 void detail(Frame& frame, const DetailSettings& s, float pixel_scale);
+
+// Rows [0, rows) split into bands on the worker pool (as the stages above) when samples reaches
+// the parallel minimum; body(first, end) runs each band.  For other whole-frame ports.
+void parallelRows(std::size_t rows, std::size_t samples, const std::function<void(std::size_t, std::size_t)>& body);
 
 // Planes of at least this many samples run their rows (or columns) on a pool of worker threads,
 // as PhotoCraft's par_rows does (PAR_MIN 1 << 15); each output sample is computed exactly as on

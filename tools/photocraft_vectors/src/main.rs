@@ -8,6 +8,7 @@
 //! With `adjust`: Levels, Selective Color, 3D LUT and composite (`tests/gpu/data/adjust_vectors.inc`).
 //! With `calibration`: the Calibration primaries (`tests/gpu/data/calibration_vectors.inc`).
 //! With `detail`: sharpening and noise reduction (`tests/gpu/data/detail_vectors.inc`).
+//! With `lens`: the Lens Correction filter (`tests/gpu/data/lens_vectors.inc`).
 //! With `curves`: the parametric tone curve and point curves (`tests/gpu/data/curve_vectors.inc`).
 
 mod adjust;
@@ -15,6 +16,7 @@ mod calibration;
 mod curves;
 mod detail;
 mod grain;
+mod lens;
 mod spatial;
 
 use photocraft_algo::camera_raw::{CameraRaw, Wheel, develop};
@@ -160,6 +162,10 @@ fn main() {
     }
     if std::env::args().nth(1).as_deref() == Some("detail") {
         detail::run();
+        return;
+    }
+    if std::env::args().nth(1).as_deref() == Some("lens") {
+        lens::run();
         return;
     }
     if std::env::args().nth(1).as_deref() == Some("curves") {

@@ -13,3 +13,5 @@ photocraft-algo = { path = "../../third_party/photocraft/crates/algo" }
 photocraft-compose = { path = "../../third_party/photocraft/crates/compose" }
 photocraft-color = { path = "../../third_party/photocraft/crates/color" }
 photocraft-doc = { path = "../../third_party/photocraft/crates/doc" }
+photocraft-geom = { path = "../../third_party/photocraft/crates/geom" }
+photocraft-raster = { path = "../../third_party/photocraft/crates/raster" }
