@@ -72,6 +72,10 @@ class EditDocument {
   std::vector<std::uint8_t> encode() const;
   static std::optional<EditDocument> decode(const std::vector<std::uint8_t>& bytes);
 
+  // Clone committed content for a newly admitted original. Opaque records and
+  // revisions survive; preview values and the old editing-instance path do not.
+  std::optional<EditDocument> copy_for_image(const std::string& image_id) const;
+
   // 不增加修订号。预览副本不会被这次写入带走。
   ResultCode write_snapshot(FileSystem& files, const std::string& path,
                             const FastExportLatch* latch = nullptr) const;

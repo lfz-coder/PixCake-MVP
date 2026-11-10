@@ -1,0 +1,3 @@
+add_library(pixcake_http_curl src/curl_http_transport.cpp)
+target_include_directories(pixcake_http_curl PUBLIC include)
+target_link_libraries(pixcake_http_curl PUBLIC pixcake_net pixcake_support pixcake_warnings PRIVATE CURL::libcurl)

@@ -1,5 +1,8 @@
 #pragma once
 
+#include "cloud_client.hpp"
+#include "cloud_transfer_client.hpp"
+#include "auth_client.hpp"
 #include "page_kit.hpp"
 #include "histogram_refresh_gate.hpp"
 
@@ -32,6 +35,23 @@ class ShellController final : public PageActions {
   void on_changed(std::function<void()> callback) { changed_ = std::move(callback); }
 
   void request_page(Page target) override;
+
+  void attach_cloud(account::AccountSession& account, CloudOptions options, LogSink* log = nullptr);
+  bool restore_cloud_session(std::string token);
+  void attach_auth(account::AccountSession& account, CloudOptions options, bool development,
+                   std::shared_ptr<account::CredentialStore> credentials, std::function<void()> authenticated);
+  ui::shell::AuthView auth_view() const override;
+  void request_auth(account::AuthRequest request, bool remember) override;
+  void request_auth_configure() override;
+  void request_logout() override;
+  ui::shell::CloudView cloud_view() const override;
+  void request_cloud_refresh(const std::string& space_id = {}) override;
+  ui::shell::CloudTransferView cloud_transfer_view() const override;
+  void request_cloud_upload(std::int64_t local_id, const std::string& space_id) override;
+  void request_cloud_download(const std::string& project_id) override;
+  void request_cloud_transfer_retry(bool keep_both = false) override;
+  void request_cloud_transfer_pause() override;
+  void request_cloud_transfer_discard() override;
 
   // 打开一张照片：启动 renderd、发送预览源并请求第一帧。失败时 diagnostic 说明原因。
   ResultCode open_photo(const std::string& photo_path, const preview_channel::PreviewSessionOptions& options,
@@ -154,6 +174,9 @@ class ShellController final : public PageActions {
   void exports_changed();
 
   ShellDisplay display_;
+  std::unique_ptr<CloudClient> cloud_client_;
+  std::unique_ptr<CloudTransferClient> cloud_transfer_;
+  std::unique_ptr<AuthClient> auth_client_;
   std::function<void()> changed_;
   std::unique_ptr<preview_channel::PreviewSession> session_;
   std::unique_ptr<QSocketNotifier> notifier_;

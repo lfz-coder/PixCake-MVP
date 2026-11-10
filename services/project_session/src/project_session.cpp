@@ -146,6 +146,25 @@ ProjectSession::ImportOutcome ProjectSession::import_new_project(const std::vect
   return import_paths(created.id, files, std::move(outcome));
 }
 
+ProjectSession::ImportOutcome ProjectSession::import_new_project(const std::vector<std::string>& paths,
+                                                                 const std::string& project_name) {
+  ImportOutcome outcome;
+  const auto files = expand_import_paths(paths);
+  if (files.empty()) {
+    outcome.code = ResultCode::UnsupportedFormat;
+    outcome.notices.push_back("no image files were chosen");
+    return outcome;
+  }
+  outcome.project_name = project_name.empty() ? project_name_for(paths) : project_name;
+  const ProjectResult created = commands_.create_project(*library_, outcome.project_name, kOriginLocal, false);
+  if (created.code != ResultCode::Ok) {
+    outcome.code = created.code;
+    if (!created.notice.empty()) outcome.notices.push_back(created.notice);
+    return outcome;
+  }
+  return import_paths(created.id, files, std::move(outcome));
+}
+
 ProjectSession::ImportOutcome ProjectSession::import_into(std::int64_t project_id,
                                                           const std::vector<std::string>& paths) {
   return import_paths(project_id, expand_import_paths(paths), ImportOutcome{});
@@ -637,6 +656,10 @@ ResultCode ProjectSession::document_bytes(std::int64_t photo_id, std::vector<std
   if (loaded.code && *loaded.code != ResultCode::Ok) return *loaded.code;
   out = document->encode();
   return ResultCode::Ok;
+}
+
+std::string ProjectSession::layer_document_path(std::int64_t photo_id) const {
+  return document_directory_ + "/" + document_name(photo_id) + ".pxlayer";
 }
 
 // One line: "library <photo id>" or "refine <photo id>"; the id is 0 for none.

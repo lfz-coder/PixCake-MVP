@@ -91,6 +91,7 @@ CacheLoadResult AccountSession::load(std::optional<AccountSnapshot> cached) {
   if (!cached.has_value()) {
     snapshot_ = {};
     state_ = account::SessionState::SignedOut;
+    ++generation_;
     return {ResultCode::Ok, false};
   }
   if (validate(*cached) != ResultCode::Ok) {
@@ -98,6 +99,7 @@ CacheLoadResult AccountSession::load(std::optional<AccountSnapshot> cached) {
   }
   snapshot_ = std::move(*cached);
   state_ = account::SessionState::SignedIn;
+  ++generation_;
   return {ResultCode::Ok, true};
 }
 
@@ -107,10 +109,13 @@ ResultCode AccountSession::sign_in(AccountSnapshot snapshot) {
   }
   snapshot_ = std::move(snapshot);
   state_ = account::SessionState::SignedIn;
+  ++generation_;
   return ResultCode::Ok;
 }
 
 ResultCode AccountSession::sign_out() {
+  // An explicit logout also invalidates authentication still being restored.
+  ++generation_;
   if (state_ != account::SessionState::SignedIn) {
     return ResultCode::StateConflict;
   }
@@ -168,5 +173,7 @@ account::SessionState AccountSession::state() const { return state_; }
 bool AccountSession::signed_in() const { return state_ == account::SessionState::SignedIn; }
 
 const AccountSnapshot& AccountSession::snapshot() const { return snapshot_; }
+
+std::uint64_t AccountSession::generation() const { return generation_; }
 
 }  // namespace pixcake::account

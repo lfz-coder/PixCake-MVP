@@ -1,0 +1,6 @@
+add_library(pixcake_net INTERFACE)
+target_include_directories(pixcake_net INTERFACE include)
+target_link_libraries(pixcake_net INTERFACE pixcake_support pixcake_warnings)
+if(PIXCAKE_ENABLE_CLOUD_HTTP)
+  add_subdirectory(curl)
+endif()

@@ -11,6 +11,9 @@
 #include "pixcake/ui/panels/slider_spec.hpp"
 #include "pixcake/ui/shell/page_copy.hpp"
 #include "pixcake/ui/shell/shell_display.hpp"
+#include "pixcake/ui/shell/cloud_display.hpp"
+#include "pixcake/ui/shell/cloud_transfer_view.hpp"
+#include "pixcake/ui/shell/auth_display.hpp"
 
 #include <QAbstractButton>
 #include <QFrame>
@@ -114,6 +117,19 @@ class PageActions {
  public:
   virtual ~PageActions() = default;
   virtual void request_page(Page target) = 0;
+
+  virtual ui::shell::CloudView cloud_view() const { return {}; }
+  virtual ui::shell::CloudTransferView cloud_transfer_view() const { return {}; }
+  virtual void request_cloud_upload(std::int64_t, const std::string&) {}
+  virtual void request_cloud_download(const std::string&) {}
+  virtual void request_cloud_transfer_retry(bool = false) {}
+  virtual void request_cloud_transfer_pause() {}
+  virtual void request_cloud_transfer_discard() {}
+  virtual void request_cloud_refresh(const std::string& = {}) {}
+  virtual ui::shell::AuthView auth_view() const { return {}; }
+  virtual void request_auth(account::AuthRequest, bool) {}
+  virtual void request_auth_configure() {}
+  virtual void request_logout() {}
 
   // 预览：有打开的照片时为真；否则精修页的滑杆保持禁用。
   virtual bool has_photo() const { return false; }

@@ -1,0 +1,10 @@
+add_library(pixcake_cloud_sync INTERFACE)
+target_include_directories(pixcake_cloud_sync INTERFACE include)
+target_link_libraries(pixcake_cloud_sync INTERFACE pixcake_project_session pixcake_net)
+if(PIXCAKE_ENABLE_CLOUD_HTTP)
+  add_library(pixcake_cloud_sync_impl src/sync_engine.cpp src/snapshot_codec.cpp src/sync_files.cpp)
+  target_include_directories(pixcake_cloud_sync_impl PUBLIC include)
+  target_link_libraries(pixcake_cloud_sync_impl PUBLIC pixcake_project_session pixcake_net pixcake_warnings
+    PRIVATE pixcake_platform_digest nlohmann_json::nlohmann_json)
+  target_link_libraries(pixcake_cloud_sync INTERFACE pixcake_cloud_sync_impl)
+endif()

@@ -6,6 +6,10 @@ namespace pixcake {
 
 BusinessCommands::BusinessCommands(const SessionState& session) : session_(session) {}
 
+ResultCode BusinessCommands::mark_project_origin(ProjectLibrary& library, std::int64_t project_id, const std::string& origin) {
+  return session_.signed_in() ? library.mark_project_origin(project_id, origin) : ResultCode::StateConflict;
+}
+
 ProjectResult BusinessCommands::create_project(ProjectLibrary& library, std::string name, std::string origin,
                                                bool cloud_marked) {
   if (!session_.signed_in()) {

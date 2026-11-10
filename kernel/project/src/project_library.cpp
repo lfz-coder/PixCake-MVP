@@ -631,6 +631,15 @@ ProjectResult ProjectLibrary::create_project(std::string name, std::string origi
   return result;
 }
 
+ResultCode ProjectLibrary::mark_project_origin(std::int64_t project_id, const std::string& origin) {
+  if (origin != kOriginCloudUploaded && origin != kOriginCloudDownloaded) return ResultCode::StateConflict;
+  std::optional<ProjectRow> project;
+  const auto loaded = store_.load_project(project_id, project);
+  if (loaded != ResultCode::Ok) return loaded;
+  if (!project || project->deleted_at) return ResultCode::StateConflict;
+  return store_.update_project_origin(project_id, origin);
+}
+
 ProjectResult ProjectLibrary::add_photo(std::int64_t project_id, const AdmittedSource& source,
                                         std::string file_name, std::vector<std::uint8_t> access_credential) {
   if (!absolute_posix_path(source.absolute_path()) || file_name.empty() || !source.identity().valid) {

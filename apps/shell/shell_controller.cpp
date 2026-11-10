@@ -12,6 +12,9 @@
 namespace pixcake::shell {
 
 ShellController::~ShellController() {
+  cloud_transfer_.reset();
+  auth_client_.reset();
+  cloud_client_.reset();
   notifier_.reset();
   session_.reset();  // closes the connection; renderd exits
 }
@@ -23,7 +26,32 @@ void ShellController::request_page(Page target) {
   if (target == Page::Library) display_.set_library_view("grid");
   if (target == Page::Refine) show_selected_photo();
   remember_place();
+  if (target == Page::Cloud && cloud_view().state == ui::shell::CloudState::Idle) request_cloud_refresh();
   if (changed_) changed_();
+}
+
+void ShellController::attach_cloud(account::AccountSession& account, CloudOptions options, LogSink* log) {
+  cloud_transfer_ = std::make_unique<CloudTransferClient>(account, options, log);
+  cloud_transfer_->on_changed([this] {
+    if (cloud_transfer_->view().phase == cloud_sync::Phase::Complete && cloud_client_) {
+      cloud_client_->refresh(cloud_view().selected_space);
+    }
+    if (display_.page() == Page::Cloud && changed_) changed_();
+  });
+  if (projects_) cloud_transfer_->set_directory(projects_->data_directory());
+  cloud_client_ = std::make_unique<CloudClient>(account, std::move(options), CloudClient::Fetch{}, log);
+  cloud_client_->on_changed([this] { if (display_.page() == Page::Cloud && changed_) changed_(); });
+  if (display_.page() == Page::Cloud && account.signed_in()) cloud_client_->refresh();
+  if (changed_) changed_();
+}
+bool ShellController::restore_cloud_session(std::string token) {
+  return cloud_client_ && cloud_client_->restore(std::move(token));
+}
+ui::shell::CloudView ShellController::cloud_view() const {
+  return cloud_client_ ? cloud_client_->view() : ui::shell::CloudView{};
+}
+void ShellController::request_cloud_refresh(const std::string& space_id) {
+  if (cloud_client_) cloud_client_->refresh(space_id);
 }
 
 void ShellController::remember_place() {
@@ -217,6 +245,7 @@ void ShellController::show_notices(const std::vector<std::string>& notices, Noti
 void ShellController::attach_projects(std::unique_ptr<project_session::ProjectSession> projects,
                                       preview_channel::PreviewSessionOptions preview) {
   projects_ = std::move(projects);
+  if (cloud_transfer_ && projects_) cloud_transfer_->set_directory(projects_->data_directory());
   preview_options_ = std::move(preview);
   if (preview_options_.max_edge == 2000 || preview_options_.max_edge == 3000 || preview_options_.max_edge == 4000) {
     preview_max_edge_ = preview_options_.max_edge;
@@ -267,6 +296,7 @@ std::vector<ProjectEntry> ShellController::projects() const {
 }
 
 void ShellController::request_open_project(std::int64_t project_id) {
+  if (cloud_transfer_view().phase == cloud_sync::Phase::Preparing && cloud_transfer_view().busy) return;
   // A project opens where it was left: the library (grid) or refine with the
   // selected photo; refine when nothing was remembered (requirement 5.3).
   // Evidence 2026-11-06-project-entry-observation.md.

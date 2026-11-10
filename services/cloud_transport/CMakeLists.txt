@@ -1,0 +1,7 @@
+add_library(pixcake_cloud_transport src/http_cloud_gateway.cpp)
+target_include_directories(pixcake_cloud_transport PUBLIC include)
+target_link_libraries(pixcake_cloud_transport PUBLIC pixcake_cloud pixcake_account pixcake_net pixcake_support pixcake_warnings)
+if(PIXCAKE_ENABLE_CLOUD_HTTP)
+  target_sources(pixcake_cloud_transport PRIVATE src/backend_v1_codec.cpp src/cloud_directory_query.cpp)
+  target_link_libraries(pixcake_cloud_transport PRIVATE nlohmann_json::nlohmann_json)
+endif()

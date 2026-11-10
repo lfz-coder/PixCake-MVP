@@ -18,6 +18,9 @@ class ProjectStore {
   virtual ResultCode load_project(std::int64_t id, std::optional<ProjectRow>& out) = 0;
   virtual ResultCode list_projects(std::vector<ProjectRow>& out) = 0;
   virtual ResultCode erase_project_index(std::int64_t project_id) = 0;
+  virtual ResultCode update_project_origin(std::int64_t, const std::string&) { return ResultCode::StateConflict; }
+  virtual ResultCode load_import_receipt(const std::string&, std::int64_t& id) { id = 0; return ResultCode::Ok; }
+  virtual ResultCode insert_import_receipt(const std::string&, std::int64_t) { return ResultCode::StateConflict; }
 
   virtual ResultCode insert_photo(const PhotoDraft& draft, std::int64_t& id) = 0;
   virtual ResultCode update_photo_presence(std::int64_t id, const std::string& presence) = 0;

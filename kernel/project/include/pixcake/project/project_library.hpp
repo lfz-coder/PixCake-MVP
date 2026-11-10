@@ -25,6 +25,7 @@ class ProjectLibrary {
                  LogSink* log);
 
   ProjectResult create_project(std::string name, std::string origin, bool cloud_marked);
+  ResultCode mark_project_origin(std::int64_t project_id, const std::string& origin);
   // 只接受导入准入签发的凭证。访问凭证（书签或安全范围）为空返回权限不足（S-10）。写入前重新识别文件：文件已不存在返回原文件缺失，
   // 身份（设备、inode、大小）与准入时不同返回状态冲突，均不写入。
   ProjectResult add_photo(std::int64_t project_id, const AdmittedSource& source, std::string file_name,

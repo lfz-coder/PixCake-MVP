@@ -29,6 +29,11 @@ if(PIXCAKE_ENABLE_INFERENCE)
             "${_pixcake_contents}/Resources/third_party_notices/models"
   )
 endif()
+if(PIXCAKE_ENABLE_CLOUD_HTTP AND NOT PIXCAKE_ENABLE_INFERENCE)
+  list(APPEND _pixcake_bundle_commands
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/third_party_notices"
+            "${_pixcake_contents}/Resources/third_party_notices")
+endif()
 add_custom_target(pixcake_app_bundle ALL ${_pixcake_bundle_commands}
   COMMENT "Assembling pixcake_app_shell.app (helper processes, runtime library, models, notices)"
   VERBATIM)

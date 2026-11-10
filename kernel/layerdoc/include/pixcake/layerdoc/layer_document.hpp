@@ -5,6 +5,7 @@
 #include "pixcake/support/fast_export_latch.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <utility>
@@ -38,9 +39,19 @@ struct GenerationView {
   std::string result_id;
   std::string shape;
   std::string tool_id;
+  std::vector<std::uint8_t> continuation_parameters;
+  // Verified result metadata.  Keeping the pixel path here lets renderd
+  // compose a generated layer after a restart without asking the provider
+  // for the result again.  Empty metadata is retained for old documents and
+  // for metadata-only layer records created by callers of the legacy API.
+  std::string pixel_file;
+  std::string checksum;
+  std::uint32_t width = 0;
+  std::uint32_t height = 0;
+  std::string layer_id;
 };
 
-// 图层文档不保存精修滑杆，也不保存像素。
+// 图层文档不保存精修滑杆，也不内嵌像素本体；生成结果只保存已校验像素文件的引用和形状元数据。
 class LayerDocument {
  public:
   static std::optional<LayerDocument> create(std::string source_image_id, std::uint64_t source_revision);
@@ -73,6 +84,12 @@ class LayerDocument {
   ResultCode set_selection(bool inverted, int feather);
   ResultCode clear_selection();
   ResultCode place_result(const std::string& result_id, const std::string& shape, const std::string& tool_id);
+  ResultCode place_result(const std::string& result_id, const std::string& shape, const std::string& tool_id,
+                          const std::vector<std::uint8_t>& continuation_parameters);
+  ResultCode place_result(const std::string& result_id, const std::string& shape, const std::string& tool_id,
+                          const std::vector<std::uint8_t>& continuation_parameters,
+                          const std::string& pixel_file, const std::string& checksum,
+                          std::uint32_t width, std::uint32_t height);
 
   static std::optional<LayerDocument> decode(const std::vector<std::uint8_t>& bytes);
   static LoadResult load(LayerDocument& destination, FileSystem& files, const std::string& path);
@@ -84,6 +101,10 @@ class LayerDocument {
   ResultCode save(FileSystem& files, const std::string& path, const FastExportLatch* latch = nullptr);
   ResultCode append_unknown_record(std::uint32_t type, std::vector<std::uint8_t> payload);
   std::vector<std::pair<std::uint32_t, std::vector<std::uint8_t>>> unknown_records() const;
+  // Generic copy/relocation operation. Every nonempty pixel reference must be
+  // mapped successfully; partial relocation is never exposed to the caller.
+  std::optional<LayerDocument> relocated(const std::string& image_id,
+      const std::function<std::string(const std::string&)>& map_pixel) const;
 
  private:
   LayerView* find(const std::string& id);

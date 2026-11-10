@@ -221,4 +221,9 @@ foreach(root "${SOURCE_DIR}/kernel" "${SOURCE_DIR}/ui" "${SOURCE_DIR}/apps" "${S
   scan("${root}" "rule 19" "<CoreFoundation/" "<Foundation/" "<AppKit/" "<Security/")
 endforeach()
 
+# 20. Cloud directory services stay outside the kernel and rendering/storage.
+include("${SOURCE_DIR}/tests/arch/check_cloud_dependencies.cmake")
+scan("${SOURCE_DIR}/kernel" "rule 20" "pixcake/cloud/" "pixcake/cloud_transport/" "pixcake/cloud_sync/" "pixcake_cloud")
+scan("${SOURCE_DIR}/kernel" "rule 20" "pixcake/net/" "pixcake_net" "pixcake_http_curl" "curl/" "CURL::" "nlohmann")
+
 message(STATUS "arch dependencies ok")

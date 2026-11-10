@@ -52,6 +52,10 @@ ResultCode validate(const AccountSnapshot& snapshot);
 class AccountSession final : public ::pixcake::SessionState {
  public:
   AccountSession();
+  // Live identity owner: use sign_in/load to change it so dependent sessions
+  // always observe a new generation instead of a copied lifecycle counter.
+  AccountSession(const AccountSession&) = delete;
+  AccountSession& operator=(const AccountSession&) = delete;
 
   CacheLoadResult load(std::optional<AccountSnapshot> cached);
   ResultCode sign_in(AccountSnapshot snapshot);
@@ -64,10 +68,16 @@ class AccountSession final : public ::pixcake::SessionState {
   account::SessionState state() const;
   bool signed_in() const override;
   const AccountSnapshot& snapshot() const;
+  // Changes after successful login/cache load and every explicit logout,
+  // including logout while restoration is pending and identical re-login.
+  // Dependent sessions reject stale permissions/results; UI preferences do
+  // not advance it. Already-signed-out logout still returns StateConflict.
+  std::uint64_t generation() const;
 
  private:
   AccountSnapshot snapshot_;
   account::SessionState state_ = account::SessionState::SignedOut;
+  std::uint64_t generation_ = 0;
 };
 
 }  // namespace pixcake::account

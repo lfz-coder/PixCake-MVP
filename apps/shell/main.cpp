@@ -2,7 +2,9 @@
 #include "pixcake/instance/single_instance.hpp"
 #include "pixcake/mask/brush_mask.hpp"
 #include "pixcake/logging/file_log_sink.hpp"
+#include "pixcake/logging/process_log.hpp"
 #include "pixcake/platform/mac_source_access.hpp"
+#include "pixcake/platform/mac_credential_store.hpp"
 #include "pixcake/project_session/project_session.hpp"
 #include "pixcake/ui/panels/slider_spec.hpp"
 #include "pixcake/ui/shell/page_copy.hpp"
@@ -14,6 +16,7 @@
 #include "sync_dialog.hpp"
 #include "trash_dialog.hpp"
 #include "shell_window.hpp"
+#include "auth_smoke.hpp"
 
 #include <QApplication>
 #include <QFrame>
@@ -58,6 +61,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#ifdef PIXCAKE_DEV_PAGES
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -70,6 +78,7 @@ namespace panels = pixcake::ui::panels;
 Page parse_page(const QString& value) {
   if (value == QStringLiteral("home")) return Page::Home;
   if (value == QStringLiteral("local-projects")) return Page::LocalProjects;
+  if (value == QStringLiteral("cloud")) return Page::Cloud;
   if (value == QStringLiteral("library")) return Page::Library;
   if (value == QStringLiteral("refine")) return Page::Refine;
   if (value == QStringLiteral("creative")) return Page::Creative;
@@ -356,7 +365,7 @@ int check_refine_sliders(const QWidget& window) {
 
 // Q-12：页签点击经 ShellController 改显示模型并重画；旧页面删除，新页面出现。
 int check_tab_navigation(QWidget& window, Page first_page) {
-  if (first_page == Page::Login || first_page == Page::Home || first_page == Page::LocalProjects) return 0;
+  if (first_page == Page::Login || first_page == Page::Home || first_page == Page::LocalProjects || first_page == Page::Cloud) return 0;
   const bool to_refine = first_page == Page::Library;
   const auto& target = pixcake::ui::shell::page_item("page-switch", to_refine ? "refine" : "library");
   const QString before = first_page == Page::Library ? QStringLiteral("library-page")
@@ -389,6 +398,20 @@ int smoke(QWidget& window, Page first_page) {
     if (const int tracks = check_track_sliders(window); tracks != 0) return tracks;
   }
   if (const int chrome = check_icon_hover_chrome(window); chrome != 0) return chrome;
+  if (first_page == Page::Cloud) {
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    if (!window.findChild<QWidget*>(QStringLiteral("cloud-page")) ||
+        !window.findChild<QListWidget*>(QStringLiteral("cloud-spaces")) ||
+        !window.findChild<QTableWidget*>(QStringLiteral("cloud-projects")) ||
+        !window.findChild<QLabel*>(QStringLiteral("cloud-status"))) return 7;
+#ifdef PIXCAKE_DEV_PAGES
+    if (const char* shot = std::getenv("PIXCAKE_SMOKE_SCREENSHOT"); shot && *shot) {
+      window.resize(1386, 800);
+      QCoreApplication::processEvents();
+      if (!window.grab().save(QString::fromLocal8Bit(shot))) return 7;
+    }
+#endif
+  }
   if (first_page == Page::LocalProjects) {
     const auto* page = window.findChild<QWidget*>(QStringLiteral("local-projects-page"));
     const auto* list = window.findChild<QListWidget*>(QStringLiteral("local-projects-list"));
@@ -527,6 +550,57 @@ pixcake::account::AccountSnapshot dev_account() {
   snapshot.session_handle = "dev-session";
   snapshot.remaining_sheets = 100;  // 开发用：够导几张精修图
   return snapshot;
+}
+
+// Development-only credential input: no symlinks, other users, broad file
+// permissions, unbounded reads or caller-supplied account IDs.
+std::optional<std::string> dev_cloud_token(const QString& path) {
+  const auto bytes = QFile::encodeName(path);
+  const int fd = ::open(bytes.constData(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+  if (fd < 0) return std::nullopt;
+  struct stat info {};
+  if (::fstat(fd, &info) != 0 || !S_ISREG(info.st_mode) || info.st_uid != ::geteuid() ||
+      (info.st_mode & 077) != 0 || info.st_size < 43 || info.st_size > 45) {
+    ::close(fd); return std::nullopt;
+  }
+  char buffer[46]{};
+  const auto count = ::read(fd, buffer, sizeof(buffer));
+  ::close(fd);
+  if (count != info.st_size) return std::nullopt;
+  std::string token(buffer, static_cast<std::size_t>(count));
+  if (!token.empty() && token.back() == '\n') token.pop_back();
+  if (!token.empty() && token.back() == '\r') token.pop_back();
+  if (token.size() != 43) return std::nullopt;
+  return token;
+}
+
+bool smoke_cloud_directory(pixcake::shell::ShellWindow& window) {
+  auto& controller = window.controller();
+  const auto wait = [&] {
+    QElapsedTimer elapsed; elapsed.start();
+    while (controller.cloud_view().busy && elapsed.elapsed() < 7000) {
+      QCoreApplication::processEvents(); QThread::msleep(5);
+    }
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    return !controller.cloud_view().busy && controller.cloud_view().state == pixcake::ui::shell::CloudState::Ready;
+  };
+  if (!wait()) return false;
+  const auto view = controller.cloud_view();
+  std::string selected;
+  for (const auto& space : view.spaces) {
+    if (std::find(space.permissions.begin(), space.permissions.end(), pixcake::cloud::Permission::Read) == space.permissions.end()) continue;
+    if (selected.empty() || space.kind == pixcake::cloud::SpaceKind::Team) selected = space.id;
+  }
+  if (!selected.empty()) { controller.request_cloud_refresh(selected); if (!wait()) return false; }
+  auto* refresh = window.findChild<QPushButton*>(QStringLiteral("cloud-refresh"));
+  if (!refresh || !refresh->isEnabled()) return false;
+  refresh->click();
+  if (!controller.cloud_view().busy || !wait() || controller.cloud_view().selected_space != selected) return false;
+  const auto* table = window.findChild<QTableWidget*>(QStringLiteral("cloud-projects"));
+  const auto* spaces = window.findChild<QListWidget*>(QStringLiteral("cloud-spaces"));
+  const auto loaded = controller.cloud_view();
+  return table && spaces && table->rowCount() == static_cast<int>(loaded.projects.size()) &&
+         spaces->count() == static_cast<int>(loaded.spaces.size());
 }
 
 QListWidget* library_photos(QWidget& window) {
@@ -2536,18 +2610,24 @@ int main(int argc, char** argv) {
 #ifdef PIXCAKE_DEV_PAGES
   QString default_page = QStringLiteral("login");
   const auto executable = QFileInfo(QString::fromLocal8Bit(argv[0])).baseName();
-  for (const auto& page : {QStringLiteral("home"), QStringLiteral("local-projects"), QStringLiteral("library"),
+  for (const auto& page : {QStringLiteral("home"), QStringLiteral("local-projects"), QStringLiteral("cloud"), QStringLiteral("library"),
                            QStringLiteral("refine"), QStringLiteral("creative")}) {
     if (executable.endsWith(QStringLiteral("-") + page)) default_page = page;
   }
   QCommandLineOption page_option(QStringList() << QStringLiteral("page"),
                                  QStringLiteral("Development build only: display a read-only shell page: login, "
-                                                "home, local-projects, library, refine, creative."),
+                                                "home, local-projects, cloud, library, refine, creative."),
                                  QStringLiteral("page"), default_page);
   parser.addOption(page_option);
   QCommandLineOption dev_sign_in_option(QStringList() << QStringLiteral("dev-sign-in"),
                                        QStringLiteral("Development build only: treat the session as signed in."));
   parser.addOption(dev_sign_in_option);
+  QCommandLineOption cloud_token_option(QStringLiteral("dev-cloud-session-file"),
+      QStringLiteral("Development only: verify a private test token file with the configured cloud backend."), QStringLiteral("file"));
+  parser.addOption(cloud_token_option);
+  QCommandLineOption auth_smoke_option(QStringList() << QStringLiteral("smoke-auth"),
+                                       QStringLiteral("Development only: exercise account UI against an isolated mock SMS backend."));
+  parser.addOption(auth_smoke_option);
   QCommandLineOption data_option(QStringList() << QStringLiteral("data-dir"),
                                  QStringLiteral("Development build only: project library directory."),
                                  QStringLiteral("dir"));
@@ -2597,6 +2677,11 @@ int main(int argc, char** argv) {
 
   // 发布构建：首屏由账号会话决定（需求第 79、103 行，安全清单 S-25）。本机会话缓存接入之前，
   // 账号会话是未登录，首屏是登录页。
+  std::unique_ptr<pixcake::logging::ProcessLog> shell_log;
+  if (!parser.isSet(smoke_option)) {
+    shell_log = std::make_unique<pixcake::logging::ProcessLog>(pixcake::logging::default_log_directory(), "pixcake_app_shell");
+    if (shell_log->code() != pixcake::ResultCode::Ok) qWarning("shell process log unavailable");
+  }
   pixcake::account::AccountSession account;
   pixcake::platform::MacSourceAccess source_access;
   QString data_directory = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
@@ -2607,7 +2692,8 @@ int main(int argc, char** argv) {
   }
   if (parser.isSet(data_option)) data_directory = QFileInfo(parser.value(data_option)).absoluteFilePath();
   const bool open_photo = parser.isSet(open_option);
-  const Page first_page = open_photo ? Page::Refine : parse_page(parser.value(page_option));
+  const Page first_page = parser.isSet(cloud_token_option) ? Page::Cloud :
+                          open_photo ? Page::Refine : parse_page(parser.value(page_option));
   pixcake::shell::ShellWindow window(first_page == Page::Login ? ShellDisplay::for_session(account)
                                                                : ShellDisplay::dev_preview(first_page));
   if (open_photo) {
@@ -2640,6 +2726,37 @@ int main(int argc, char** argv) {
   const Page first_page = Page::Login;
   pixcake::shell::ShellWindow window(ShellDisplay::for_session(account));
   if (!parser.isSet(smoke_option)) attach_projects(window, account, source_access, data_directory);
+#endif
+  pixcake::shell::CloudOptions cloud_options;
+  cloud_options.origin = qEnvironmentVariable("PIXCAKE_CLOUD_URL").toStdString();
+  cloud_options.ca_file = qEnvironmentVariable("PIXCAKE_CLOUD_CA_FILE").toStdString();
+  window.controller().attach_cloud(account, cloud_options, shell_log ? shell_log->sink() : nullptr);
+  if (first_page == Page::Login) {
+    bool allow_mock = false;
+#ifdef PIXCAKE_DEV_PAGES
+    allow_mock = true;
+#endif
+    std::shared_ptr<pixcake::account::CredentialStore> credentials;
+    if (!parser.isSet(smoke_option)) credentials = std::make_shared<pixcake::platform::MacCredentialStore>();
+    window.controller().attach_auth(account, cloud_options, allow_mock, std::move(credentials), [&] {
+      if (!parser.isSet(smoke_option)) {
+        const auto profile = data_directory + QStringLiteral("/accounts/") + QString::fromStdString(account.snapshot().account_id);
+        attach_projects(window, account, source_access, profile);
+      }
+    });
+  }
+#ifdef PIXCAKE_DEV_PAGES
+  if (parser.isSet(auth_smoke_option)) {
+    if (!parser.isSet(smoke_option) || first_page != Page::Login || !pixcake::shell::smoke_auth_flow(window)) return 11;
+  }
+  if (parser.isSet(cloud_token_option)) {
+    auto token = dev_cloud_token(parser.value(cloud_token_option));
+    if (!token || !window.controller().restore_cloud_session(std::move(*token))) {
+      std::fprintf(stderr, "Development cloud session could not start; check configuration and private token file.\n");
+      return 9;
+    }
+    if (parser.isSet(smoke_option) && !smoke_cloud_directory(window)) return 10;
+  }
 #endif
   if (parser.isSet(smoke_option)) return smoke(window, first_page);
   window.show();

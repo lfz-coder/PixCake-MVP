@@ -12,7 +12,7 @@ namespace pixcake::ui::shell {
 
 // These are page identities only. Rendering and business actions stay outside
 // this contract; the shell only describes what the window should expose.
-enum class Page { Login, Home, LocalProjects, Library, Refine, Creative };
+enum class Page { Login, Home, LocalProjects, Cloud, Library, Refine, Creative };
 enum class RegionPlacement { Top, Left, Center, Right, Bottom };
 
 const char* page_label(Page page);

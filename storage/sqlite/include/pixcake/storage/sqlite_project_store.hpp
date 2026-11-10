@@ -19,6 +19,9 @@ class SqliteProjectStore : public ProjectStore {
   ResultCode load_project(std::int64_t id, std::optional<ProjectRow>& out) override;
   ResultCode list_projects(std::vector<ProjectRow>& out) override;
   ResultCode erase_project_index(std::int64_t project_id) override;
+  ResultCode update_project_origin(std::int64_t project_id, const std::string& origin) override;
+  ResultCode load_import_receipt(const std::string& key, std::int64_t& id) override;
+  ResultCode insert_import_receipt(const std::string& key, std::int64_t id) override;
 
   ResultCode insert_photo(const PhotoDraft& draft, std::int64_t& id) override;
   ResultCode update_photo_presence(std::int64_t id, const std::string& presence) override;

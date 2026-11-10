@@ -410,6 +410,20 @@ std::string EditDocument::image_id() const {
   return "";
 }
 
+std::optional<EditDocument> EditDocument::copy_for_image(const std::string& image_id) const {
+  if (image_id.empty() || image_id.size() > 512 || image_id.find_first_of("/\\") != std::string::npos ||
+      std::any_of(image_id.begin(), image_id.end(), [](unsigned char c) { return c < 32 || c == 127; }) || recovered_empty())
+    return std::nullopt;
+  auto copy = *this;
+  copy.preview_.clear();
+  copy.log_ = nullptr;
+  copy.editing_instance_id_ = image_id;
+  for (auto& record : copy.records_) {
+    if (record.type == kRecordImageId || record.type == kRecordEditingInstance) record.payload = bytes_of(image_id);
+  }
+  return copy;
+}
+
 std::string EditDocument::editing_instance_id() const {
   if (!editing_instance_id_.empty()) return editing_instance_id_;
   for (const auto& record : records_) {

@@ -33,6 +33,8 @@ const char* page_label(Page page) {
       return page_text("page.home").c_str();
     case Page::LocalProjects:
       return page_text("page.local-projects").c_str();
+    case Page::Cloud:
+      return page_text("page.cloud").c_str();
     case Page::Library:
       return page_text("page.library").c_str();
     case Page::Refine:
@@ -59,8 +61,8 @@ ShellDisplay ShellDisplay::for_session(const SessionState& session) {
 ShellDisplay ShellDisplay::dev_preview(Page page) {
   ShellDisplay display;
   display.page_ = page == Page::Login ? Page::Login : Page::Home;
-  if (page == Page::LocalProjects) {
-    display.page_ = Page::LocalProjects;
+  if (page == Page::LocalProjects || page == Page::Cloud) {
+    display.page_ = page;
   } else if (page != Page::Login && page != Page::Home) {
     display.page_ = page;
     display.in_project_ = true;
@@ -101,7 +103,8 @@ WindowContract ShellDisplay::contract() const {
 }
 
 ResultCode ShellDisplay::open_project(Page landing) {
-  if (page_ != Page::Home || in_project_ || (landing != Page::Library && landing != Page::Refine)) {
+  if ((page_ != Page::Home && page_ != Page::LocalProjects) || in_project_ ||
+      (landing != Page::Library && landing != Page::Refine)) {
     return ResultCode::StateConflict;
   }
   page_ = landing;
@@ -115,7 +118,7 @@ ResultCode ShellDisplay::navigate(Page target) {
     return ResultCode::StateConflict;
   }
   if (target == Page::Home) {
-    if (!in_project_ && page_ != Page::LocalProjects) {
+    if (!in_project_ && page_ != Page::LocalProjects && page_ != Page::Cloud) {
       return ResultCode::StateConflict;
     }
     page_ = Page::Home;
@@ -123,11 +126,11 @@ ResultCode ShellDisplay::navigate(Page target) {
     rebuild_regions();
     return ResultCode::Ok;
   }
-  if (target == Page::LocalProjects) {
-    if (in_project_ || (page_ != Page::Home && page_ != Page::LocalProjects)) {
+  if (target == Page::LocalProjects || target == Page::Cloud) {
+    if (in_project_ || (page_ != Page::Home && page_ != Page::LocalProjects && page_ != Page::Cloud)) {
       return ResultCode::StateConflict;
     }
-    page_ = Page::LocalProjects;
+    page_ = target;
     notices_.clear();
     rebuild_regions();
     return ResultCode::Ok;
@@ -157,6 +160,10 @@ void ShellDisplay::rebuild_regions() {
     case Page::LocalProjects:
       regions_ = {region("local-projects-nav", P::Top, "local-projects-nav"),
                   region("local-projects-list", P::Center)};
+      return;
+    case Page::Cloud:
+      regions_ = {region("cloud-nav", P::Left, "home-nav"), region("cloud-spaces", P::Left),
+                  region("cloud-status", P::Top), region("cloud-projects", P::Center)};
       return;
     case Page::Library:
       regions_ = {region("library-nav", P::Top, "library-nav"),

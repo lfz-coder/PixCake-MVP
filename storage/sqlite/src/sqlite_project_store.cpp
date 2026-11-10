@@ -46,7 +46,9 @@ constexpr const char* kSchema =
     "CREATE INDEX IF NOT EXISTS idx_photo_rating ON photo(rating);"
     "CREATE INDEX IF NOT EXISTS idx_photo_flag ON photo(flag);"
     "CREATE INDEX IF NOT EXISTS idx_photo_color ON photo(color_label);"
-    "CREATE INDEX IF NOT EXISTS idx_trash_subject ON trash(subject, subject_id);";
+    "CREATE INDEX IF NOT EXISTS idx_trash_subject ON trash(subject, subject_id);"
+    "CREATE TABLE IF NOT EXISTS project_import_receipt ("
+    "receipt_key TEXT PRIMARY KEY, project_id INTEGER NOT NULL REFERENCES project(id) ON DELETE CASCADE);";
 
 // 图库筛选和排序（需求 §6.2、§6.3，性能清单 P-12）：按项目取数据，再按排序列走索引，
 // 同值按编号，避免临时排序。
@@ -458,7 +460,9 @@ ResultCode SqliteProjectStore::in_transaction(const std::function<ResultCode()>&
     }
   }
   ++impl_->tx_depth;
-  const ResultCode code = body();
+  ResultCode code = ResultCode::IoFailed;
+  try { code = body(); }
+  catch (...) { code = ResultCode::IoFailed; }
   --impl_->tx_depth;
   if (!outer) {
     return code;
@@ -498,6 +502,35 @@ ResultCode SqliteProjectStore::insert_project(const ProjectDraft& draft, std::in
   }
   id = sqlite3_last_insert_rowid(impl_->db);
   return ResultCode::Ok;
+}
+
+ResultCode SqliteProjectStore::update_project_origin(std::int64_t id, const std::string& origin) {
+  Statement statement;
+  auto code = statement.prepare(impl_->db, "UPDATE project SET origin=?,cloud_marked=1 WHERE id=?;");
+  if (code != ResultCode::Ok) return code;
+  sqlite3_bind_text(statement.get(), 1, origin.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_int64(statement.get(), 2, id);
+  return map_sqlite(sqlite3_step(statement.get()));
+}
+
+ResultCode SqliteProjectStore::load_import_receipt(const std::string& key, std::int64_t& id) {
+  id = 0;
+  Statement statement;
+  auto code = statement.prepare(impl_->db, "SELECT project_id FROM project_import_receipt WHERE receipt_key=?;");
+  if (code != ResultCode::Ok) return code;
+  sqlite3_bind_text(statement.get(), 1, key.c_str(), -1, SQLITE_TRANSIENT);
+  const int result = sqlite3_step(statement.get());
+  if (result == SQLITE_ROW) id = sqlite3_column_int64(statement.get(), 0);
+  return map_sqlite(result);
+}
+
+ResultCode SqliteProjectStore::insert_import_receipt(const std::string& key, std::int64_t id) {
+  Statement statement;
+  auto code = statement.prepare(impl_->db, "INSERT INTO project_import_receipt VALUES(?,?);");
+  if (code != ResultCode::Ok) return code;
+  sqlite3_bind_text(statement.get(), 1, key.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_int64(statement.get(), 2, id);
+  return map_sqlite(sqlite3_step(statement.get()));
 }
 
 ResultCode SqliteProjectStore::update_project_deleted_at(std::int64_t id,

@@ -4,6 +4,7 @@
 
 #include <cstdio>
 #include <string>
+#include <type_traits>
 
 namespace {
 
@@ -169,7 +170,38 @@ void test_o16_notices_do_not_share_text() {
   EXPECT(pixcake::notice_for(NoticeScene::Edit, ResultCode::Ok).text.empty());
 }
 
+// Cloud permissions must not survive logout/login, even with the same handle.
+void test_s25_authentication_generation() {
+  static_assert(!std::is_copy_assignable_v<pixcake::account::AccountSession>);
+  static_assert(!std::is_move_assignable_v<pixcake::account::AccountSession>);
+  using pixcake::ResultCode;
+  pixcake::account::AccountSession session;
+  const auto initial = session.generation();
+  EXPECT(session.sign_in(snapshot()) == ResultCode::Ok);
+  const auto signed_in = session.generation();
+  EXPECT(signed_in > initial);
+  EXPECT(session.add_favorite_color("test-color") == ResultCode::Ok);
+  EXPECT(session.generation() == signed_in);
+  auto invalid = snapshot();
+  invalid.session_handle.clear();
+  EXPECT(session.sign_in(invalid) == ResultCode::StateConflict);
+  EXPECT(session.load(invalid).code == ResultCode::StateConflict);
+  EXPECT(session.generation() == signed_in);
+  EXPECT(session.sign_out() == ResultCode::Ok);
+  const auto signed_out = session.generation();
+  EXPECT(signed_out > signed_in);
+  EXPECT(session.sign_out() == ResultCode::StateConflict);
+  const auto cancelled_restore = session.generation();
+  EXPECT(cancelled_restore > signed_out);
+  EXPECT(session.load(snapshot()).code == ResultCode::Ok);
+  const auto restored = session.generation();
+  EXPECT(restored > cancelled_restore);
+  EXPECT(session.load(std::nullopt).code == ResultCode::Ok);
+  EXPECT(session.generation() > restored);
+}
+
 int main() {
+  test_s25_authentication_generation();
   test_o13_b06_b50_b82_login_failures_are_distinct_and_stay_on_login();
   test_o16_notices_do_not_share_text();
   test_s25_account_session_is_the_session_state();

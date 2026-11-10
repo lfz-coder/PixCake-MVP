@@ -71,6 +71,7 @@ void test_contract() {
   EXPECT(login.contract().single_instance);
   EXPECT(login.contract().title == "像素蛋糕");
   EXPECT(login.navigate(Page::Home) == pixcake::ResultCode::StateConflict);
+  EXPECT(login.navigate(Page::Cloud) == pixcake::ResultCode::StateConflict);
   EXPECT(find_region(login.regions(), "登录方式切换") != nullptr);
   const auto* login_help = find_region_by_id(login.regions(), "login-help");
   EXPECT(login_help != nullptr);
@@ -110,6 +111,16 @@ void test_contract() {
   EXPECT(shell.navigate(Page::Home) == pixcake::ResultCode::Ok);
   const auto local_preview = ShellDisplay::dev_preview(Page::LocalProjects);
   EXPECT(local_preview.page() == Page::LocalProjects && !local_preview.in_project());
+  EXPECT(shell.navigate(Page::Cloud) == pixcake::ResultCode::Ok);
+  EXPECT(shell.page() == Page::Cloud && !shell.in_project());
+  EXPECT(shell.open_project() == pixcake::ResultCode::StateConflict);
+  EXPECT(shell.navigate(Page::LocalProjects) == pixcake::ResultCode::Ok);
+  EXPECT(shell.navigate(Page::Cloud) == pixcake::ResultCode::Ok);
+  EXPECT(shell.navigate(Page::Home) == pixcake::ResultCode::Ok);
+  EXPECT(shell.open_project() == pixcake::ResultCode::Ok);
+  EXPECT(shell.navigate(Page::Cloud) == pixcake::ResultCode::StateConflict);
+  const auto cloud_preview = ShellDisplay::dev_preview(Page::Cloud);
+  EXPECT(!cloud_preview.in_project() && cloud_preview.page() == Page::Cloud);
 }
 }  // namespace
 

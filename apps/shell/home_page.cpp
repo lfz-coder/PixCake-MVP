@@ -8,9 +8,14 @@
 #include <QIcon>
 #include <QListWidget>
 #include <QMenu>
+#include <QToolTip>
 #include <QLineEdit>
 
 namespace pixcake::shell {
+void pending(QWidget* widget) {
+  QToolTip::showText(widget->mapToGlobal(QPoint(widget->width() / 2, widget->height())), qtext("common.pending"), widget);
+}
+
 namespace {
 
 QFrame* sectionCard(QWidget* parent, const QString& empty_text, bool row) {
@@ -92,39 +97,6 @@ QWidget* buildHomePage(const PageContext& context) {
   auto* outer = new QHBoxLayout(page);
   outer->setContentsMargins(0, 0, 0, 0);
   outer->setSpacing(0);
-
-  auto* nav = new QFrame(page);
-  nav->setObjectName(QStringLiteral("home-sidebar"));
-  nav->setFixedWidth(220);
-  auto* nav_layout = new QVBoxLayout(nav);
-  nav_layout->setContentsMargins(18, 20, 18, 18);
-  nav_layout->setSpacing(6);
-  auto* brand_row = new QWidget(nav);
-  auto* brand_layout = new QHBoxLayout(brand_row);
-  brand_layout->setContentsMargins(0, 0, 0, 0);
-  brand_layout->setSpacing(8);
-  brand_layout->addWidget(assetIcon(QStringLiteral("pixcake-logo.svg"), 24, qtext("app.title"), brand_row));
-  auto* brand = text(qtext("app.title"));
-  brand->setObjectName(QStringLiteral("home-brand"));
-  brand_layout->addWidget(brand);
-  brand_layout->addStretch();
-  nav_layout->addWidget(brand_row);
-  nav_layout->addSpacing(18);
-  for (const auto& entry : ui::shell::page_list("home-nav")) {
-    auto* button = itemAction("home-nav", entry, nav,
-                              entry.id == "home" || entry.id == "local" || entry.id == "trash");
-    button->setObjectName(QStringLiteral("home-nav"));
-    if (entry.id == "trash") {
-      QObject::connect(button, &QPushButton::clicked, button, [button, actions] { openTrashDialog(button, actions); });
-    } else if (entry.id == "local") {
-      QObject::connect(button, &QPushButton::clicked, button, [actions] { actions->request_page(Page::LocalProjects); });
-    }
-    button->setProperty("selected", entry.id == "home");
-    nav_layout->addWidget(button);
-  }
-  nav_layout->addStretch();
-  nav_layout->addWidget(action(qtext("home.more_versions"), nav));
-  outer->addWidget(nav);
 
   auto* content = new QFrame(page);
   content->setObjectName(QStringLiteral("home-content"));

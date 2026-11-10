@@ -3,15 +3,28 @@ find_package(Qt6Svg REQUIRED PATHS
   /opt/homebrew/opt/qtsvg/lib/cmake/Qt6Svg
   /usr/local/opt/qtsvg/lib/cmake/Qt6Svg)
 
+add_library(pixcake_shell_cloud cloud_client.cpp auth_client.cpp cloud_transfer_client.cpp)
+target_include_directories(pixcake_shell_cloud PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(pixcake_shell_cloud PUBLIC pixcake_cloud_sync PRIVATE pixcake_platform_macos)
+target_link_libraries(pixcake_shell_cloud PUBLIC pixcake_cloud_transport pixcake_ui_shell Qt6::Core pixcake_warnings PRIVATE Threads::Threads)
+if(PIXCAKE_ENABLE_CLOUD_HTTP)
+  target_compile_definitions(pixcake_shell_cloud PRIVATE PIXCAKE_ENABLE_CLOUD_HTTP=1)
+  target_link_libraries(pixcake_shell_cloud PRIVATE pixcake_http_curl)
+endif()
+
 add_executable(pixcake_app_shell
   main.cpp
   shell_window.cpp
   shell_controller.cpp
+  auth_controller.cpp
+  cloud_transfer_controller.cpp
+  auth_smoke.cpp
   page_kit.cpp
   shell_icons.cpp
   login_page.cpp
   home_page.cpp
   local_projects_page.cpp
+  cloud_page.cpp
   library_page.cpp
   refine_page.cpp
   export_dialog.cpp
@@ -48,6 +61,8 @@ set_target_properties(pixcake_app_shell PROPERTIES
   MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in
 )
 target_link_libraries(pixcake_app_shell PRIVATE
+  pixcake_platform_credentials
+  pixcake_shell_cloud
   pixcake_instance
   pixcake_ui_shell
   pixcake_ui_panels
@@ -67,7 +82,6 @@ target_compile_definitions(pixcake_app_shell PRIVATE PIXCAKE_RENDERD_DEV_PATH="$
 # Exports go to exportd (architecture 10: the shell does not export at full resolution).
 add_dependencies(pixcake_app_shell pixcake_app_exportd)
 target_compile_definitions(pixcake_app_shell PRIVATE PIXCAKE_EXPORTD_DEV_PATH="$<TARGET_FILE:pixcake_app_exportd>")
-
 # --page 直达业务页只在开发构建里有（安全清单 S-25）。发布构建由账号会话决定首屏。
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
   set(PIXCAKE_DEV_PAGES_DEFAULT OFF)
@@ -97,7 +111,7 @@ if(PIXCAKE_DEV_PAGES)
                    -DWORK=${CMAKE_CURRENT_BINARY_DIR}/import-flow
                    -P ${CMAKE_SOURCE_DIR}/tests/apps/check_shell_import_flow.cmake)
   set_tests_properties(test_shell_app_import_flow PROPERTIES TIMEOUT 180)
-  foreach(shell_page IN ITEMS login home local-projects library refine creative)
+  foreach(shell_page IN ITEMS login home local-projects cloud library refine creative)
     add_test(NAME test_shell_app_smoke_${shell_page}
              COMMAND pixcake_app_shell --page ${shell_page} --smoke)
     set_tests_properties(test_shell_app_smoke_${shell_page}
@@ -109,6 +123,13 @@ else()
   # S-25：发布构建不认 --page，进不了业务页。
   add_test(NAME test_s25_release_shell_rejects_page COMMAND pixcake_app_shell --page home --smoke)
   set_tests_properties(test_s25_release_shell_rejects_page
+                       PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" WILL_FAIL TRUE)
+  add_test(NAME test_s25_release_shell_rejects_cloud_token
+           COMMAND pixcake_app_shell --dev-cloud-session-file unused --smoke)
+  set_tests_properties(test_s25_release_shell_rejects_cloud_token
+                       PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" WILL_FAIL TRUE)
+  add_test(NAME test_s25_release_shell_rejects_auth_smoke COMMAND pixcake_app_shell --smoke --smoke-auth)
+  set_tests_properties(test_s25_release_shell_rejects_auth_smoke
                        PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" WILL_FAIL TRUE)
 endif()
 
