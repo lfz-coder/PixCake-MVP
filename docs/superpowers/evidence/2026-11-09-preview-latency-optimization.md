@@ -37,6 +37,7 @@ build/tests/bench_reference_render
 ## 实现
 
 - `gpu/render/src/render_executor.cpp` 对只包含曝光、亮度、对比度和正向色温的通道独立影调建立 256 项 byte LUT；同一 LUT 也覆盖 RGB 复合色阶，再按原 reference 的顺序执行、最后使用相同的 clamp 和 `lround`。
+- **2026-11-09 接入 PhotoCraft 公式后**：快速路径只保留曝光、亮度和 RGB 复合色阶（Camera Raw 曝光增益、现代亮度曲线和色阶都逐通道独立）；对比度改为作用于亮度的 Camera Raw S 曲线，不再逐通道独立，因此退出快速路径；色温/色调的线性光增益虽然逐通道独立，当前仍走通用路径（以后可以加入快速路径）。表由通用路径的同一组函数在灰阶上生成，逐字节相同。
 - HSL/黑白直接计算相邻色相带，选择性颜色只遍历实际启用的目标，颗粒复用每个像素的晶格坐标，单蒙版和不透明普通混合走专门分支；这些都是执行层优化，原公式和执行顺序没有改动。
 - 只有需要跨通道处理的负向色温、色调、复杂蒙版和图层仍走通用路径，但也受益于最新帧合并和专门的蒙版分支。
 - `apps/shell/shell_controller.cpp` 在一次 socket 可读事件中先排空帧，只复制最新帧的 QImage；直方图则由 `HistogramRefreshGate` 只接受高清帧，拖动中的过期帧不再触发整张图的统计和 UI 工作。
@@ -49,7 +50,11 @@ build/tests/bench_reference_render
 
 ## 正确性检查
 
-`tests/gpu/test_reference_color_groups.cpp` 新增了快速路径与强制走通用路径的逐字节比较，覆盖影调、色阶和正向色温；最终选定的 11 项 renderer/preview 测试全部通过。
+`tests/gpu/test_reference_color_groups.cpp` 新增了快速路径与强制走通用路径的逐字节比较，覆盖影调、色阶和正向色温；最终选定的 11 项 renderer/preview 测试全部通过。2026-11-09 接入 PhotoCraft 公式后，该测试改为覆盖亮度单独、曝光+亮度+色阶组合，不透明与半透明图各一次。
+
+## 2026-11-09 接入 PhotoCraft 公式后的复测
+
+上面的数字测的是旧公式。接入后在负载较高的同一台机器上交替运行改动前（`095e3fe`）与改动后各两次：曝光快速路径 123–135 → 151–199 ms，全部颜色组 812–920 → 1508–1556 ms，600 px 拖动预览 24–31 → 42–45 ms（约 23 fps）；GPU 列约 650 ms 不变。慢下来的主要是 CPU reference 的 Camera Raw Color Mixer。完整表和说明见[逐像素移植证据](2026-11-09-camera-raw-per-pixel-port.md)“性能”。
 
 直方图交互状态由 `tests/ui/test_histogram_refresh_gate.cpp` 覆盖：交互帧被冻结、松手高清帧解冻，以及新拖动抢在上一张高清帧到达前开始时的时序。
 
