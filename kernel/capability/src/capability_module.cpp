@@ -1,4 +1,5 @@
 #include "pixcake/capability/capability_module.hpp"
+#include "pixcake/capability/curve_points.hpp"
 #include "pixcake/mask/combined_mask.hpp"
 #include "pixcake/mask/brush_mask.hpp"
 #include "pixcake/mask/gradient_mask.hpp"
@@ -272,7 +273,9 @@ ModuleCompile ParameterBackedModule::compile_modes(const ParameterReader& reader
   std::set<std::string> channels;
   for (const auto* mode : modes) {
     if (!only.empty() && mode->parameter_id != only) continue;
-    if (mode->text) continue;  // 文本参数（蒙版名称）不是绘制通道
+    // 文本参数（蒙版名称、笔触）不是绘制通道；点曲线是，带着文本值进入绘制描述。
+    const bool curve_points = is_curve_points_parameter(mode->parameter_id);
+    if (mode->text && !curve_points) continue;
     const auto value = reader.value(descriptor_.id, prefix + mode->parameter_id);
     if (!value) continue;
     double numeric = 0.0;
@@ -282,6 +285,8 @@ ModuleCompile ParameterBackedModule::compile_modes(const ParameterReader& reader
       const auto found = std::find(mode->choices.begin(), mode->choices.end(), *value);
       numeric_ok = found != mode->choices.end();
       numeric = static_cast<double>(found - mode->choices.begin());
+    } else if (curve_points) {
+      numeric_ok = true;  // 数值不用，形状在显示值里
     } else {
       numeric_ok = parse_number(*value, numeric);
     }

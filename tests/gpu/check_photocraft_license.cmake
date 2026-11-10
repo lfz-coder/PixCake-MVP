@@ -16,7 +16,8 @@ foreach(ported gpu/render/src/camera_raw.cpp gpu/render/include/pixcake/gpu/came
                gpu/render/src/adjust.cpp gpu/render/include/pixcake/gpu/adjust.hpp
                gpu/render/src/camera_raw_spatial.cpp gpu/render/include/pixcake/gpu/camera_raw_spatial.hpp
                gpu/render/src/whites_blacks_tables.inc
-               gpu/render/src/camera_raw_gl.cpp gpu/render/include/pixcake/gpu/camera_raw_gl.hpp)
+               gpu/render/src/camera_raw_gl.cpp gpu/render/include/pixcake/gpu/camera_raw_gl.hpp
+               kernel/capability/src/curve_points.cpp kernel/capability/include/pixcake/capability/curve_points.hpp)
   file(READ "${SOURCE_DIR}/${ported}" body)
   string(FIND "${body}" "third_party/photocraft-LICENSES/LICENSE-MIT" at)
   if(at EQUAL -1)

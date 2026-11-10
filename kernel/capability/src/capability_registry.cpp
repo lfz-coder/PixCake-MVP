@@ -1,4 +1,5 @@
 #include "pixcake/capability/capability_registry.hpp"
+#include "pixcake/capability/curve_points.hpp"
 #include "pixcake/mask/brush_mask.hpp"
 #include "pixcake/mask/semantic_parts.hpp"
 
@@ -178,6 +179,19 @@ std::vector<ParameterMode> make_parameter_modes() {
       ParameterMode& hsl = add_global(std::string("hsl_") + channel + "_" + color, -100.0, 100.0, 1.0, 0.0);
       hsl.disable_rules.push_back({"color.global", "profile", "monochrome", "黑白配置文件下 HSL 换成黑白组"});
     }
+  }
+  // 曲线：PhotoCraft Camera Raw 第 5 阶段（camera_raw.rs parametric_lut、curve_lut）。官方面板有参数曲线
+  // （高光、亮调、暗调、阴影）和 RGB、红、绿、蓝通道曲线（2026-11-06 读到入口和控件，范围未实测），
+  // 这里按 PhotoCraft 的范围登记：参数曲线 -100 到 100、默认 0，步进待确认；分割点不登记，固定为
+  // PhotoCraft 默认 25/50/75（官方面板没有分割点控件）。点曲线是文本 "x,y;..."，按 validate_curve 校验
+  // （curve_points.hpp）。官方的“亮度通道曲线”在 Camera Raw 里没有对应，不登记。
+  for (const char* region : {"highlights", "lights", "darks", "shadows"}) {
+    add_global(std::string("curve_") + region, -100.0, 100.0, 1.0, 0.0).step_confirmed = false;
+  }
+  for (const char* channel : {"rgb", "red", "green", "blue"}) {
+    ParameterMode& points = add_global(std::string("curve_points_") + channel, 0.0, 0.0, 1.0, 0.0);
+    points.text = true;
+    points.max_length = 512;
   }
   // 可选颜色：九个目标色，每个目标四个滑杆，-100 到 100，步长 1，默认 0（2026-11-05 用户给出）。
   // 目标色和滑杆名取自 test 版画面；调整方式默认「相对」。
@@ -556,6 +570,10 @@ bool validate_parameter_display_value(std::string_view capability_id, std::strin
       if ((byte & 0xC0) != 0x80) ++characters;
     }
     if (characters < 1 || characters > mode->max_length) return false;
+    if (is_curve_points_parameter(mode->parameter_id)) {
+      std::vector<std::array<float, 2>> points;
+      return decode_curve_points(display_value, points);
+    }
     if (mode->parameter_id == "strokes") {
       std::vector<mask::BrushStroke> parsed;
       return mask::decode_brush_strokes(display_value, parsed) && !parsed.empty();

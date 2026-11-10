@@ -1,4 +1,5 @@
 #include "pixcake/capability/capability_registry.hpp"
+#include "pixcake/capability/curve_points.hpp"
 
 #include <cstdio>
 #include <optional>
@@ -391,7 +392,45 @@ void test_q02_grain_sub_parameters_need_nonzero_amount() {
   EXPECT(!pixcake::parameter_disabled_reason("detail", "grain_amount", lookup).has_value());
 }
 
+// 曲线（PhotoCraft Camera Raw 第 5 阶段）：参数曲线四个滑杆 -100..100；RGB/红/绿/蓝点曲线是文本，
+// "x,y;x,y;..."（0..255），按 PhotoCraft validate_curve 校验：2 到 16 个点，输入至少递增 1 级。
+void test_curves_registered_as_photocraft_stage5() {
+  for (const char* id : {"curve_highlights", "curve_lights", "curve_darks", "curve_shadows"}) {
+    const auto* mode = pixcake::find_parameter_mode("color.global", id);
+    EXPECT(mode != nullptr && mode->minimum == -100.0 && mode->maximum == 100.0 && mode->default_value == 0.0 && !mode->text);
+    EXPECT(pixcake::validate_parameter_display_value("color.global", id, "-100"));
+    EXPECT(!pixcake::validate_parameter_display_value("color.global", id, "101"));
+  }
+  EXPECT(pixcake::find_parameter_mode("color.global", "curve_split_shadows") == nullptr);  // 分割点固定 25/50/75
+  for (const char* id : {"curve_points_rgb", "curve_points_red", "curve_points_green", "curve_points_blue"}) {
+    const auto* mode = pixcake::find_parameter_mode("color.global", id);
+    EXPECT(mode != nullptr && mode->text);
+    EXPECT(pixcake::validate_parameter_display_value("color.global", id, "0,0;64,40;192,220;255,255"));
+    EXPECT(pixcake::validate_parameter_display_value("color.global", id, "0,30;255,255"));
+    EXPECT(pixcake::validate_parameter_display_value("color.global", id, "0.5,0;127.5,128.25;255,255"));
+    EXPECT(!pixcake::validate_parameter_display_value("color.global", id, "0,0"));                // 只有一个点
+    EXPECT(!pixcake::validate_parameter_display_value("color.global", id, "0,0;0.5,10;255,255"));  // 输入间隔不到 1 级
+    EXPECT(!pixcake::validate_parameter_display_value("color.global", id, "64,40;0,0;255,255"));   // 没有按输入排序
+    EXPECT(!pixcake::validate_parameter_display_value("color.global", id, "0,0;255,256"));         // 超出 0..255
+    EXPECT(!pixcake::validate_parameter_display_value("color.global", id, "0,0;nan,1;255,255"));
+    EXPECT(!pixcake::validate_parameter_display_value("color.global", id, "0,0;255"));
+    EXPECT(!pixcake::validate_parameter_display_value("color.global", id, "0,0;255,255;"));
+    EXPECT(!pixcake::validate_parameter_display_value("color.global", id, "0,0; 255,255"));
+    std::string seventeen;
+    for (int i = 0; i < 17; ++i) seventeen += (i ? ";" : "") + std::to_string(i * 15) + "," + std::to_string(i * 15);
+    EXPECT(!pixcake::validate_parameter_display_value("color.global", id, seventeen));
+    std::string sixteen;
+    for (int i = 0; i < 16; ++i) sixteen += (i ? ";" : "") + std::to_string(i * 17) + "," + std::to_string(255 - i * 17);
+    EXPECT(pixcake::validate_parameter_display_value("color.global", id, sixteen));
+  }
+  std::vector<std::array<float, 2>> points;
+  EXPECT(pixcake::decode_curve_points("0,0;64,40;255,255", points) && points.size() == 3 && points[1][0] == 64.0F &&
+         points[1][1] == 40.0F);
+  EXPECT(pixcake::encode_curve_points(points) == "0,0;64,40;255,255");
+}
+
 int main() {
+  test_curves_registered_as_photocraft_stage5();
   test_q02_grain_sub_parameters_need_nonzero_amount();
   test_q06_layer_ranges_come_from_parameter_modes();
   test_q06_layer_mask_modes_match_measurement();

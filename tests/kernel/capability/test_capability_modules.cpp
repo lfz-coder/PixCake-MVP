@@ -336,6 +336,26 @@ void test_c31_color_global_draws_by_profile() {
   }
 }
 
+// 曲线：参数曲线是数值通道，点曲线带着文本值进入绘制描述；不合格的点曲线让整步停用。
+void test_curves_compile_into_draw_values() {
+  const auto& global = module("color.global");
+  MapReader reader;
+  reader.values[{"color.global", "curve_lights"}] = "30";
+  reader.values[{"color.global", "curve_points_rgb"}] = "0,0;64,40;255,255";
+  auto compiled = global.compile(reader);
+  EXPECT(compiled.steps.size() == 1);
+  if (compiled.steps.size() == 1) {
+    const auto& step = compiled.steps[0];
+    EXPECT(step.enabled && has(value_ids(step), "curve_lights") && has(value_ids(step), "curve_points_rgb"));
+    for (const auto& value : step.values) {
+      if (value.parameter_id == "curve_points_rgb") EXPECT(value.channel == "curve_points_rgb" && value.display_value == "0,0;64,40;255,255");
+    }
+  }
+  reader.values[{"color.global", "curve_points_rgb"}] = "0,0";
+  compiled = global.compile(reader);
+  EXPECT(compiled.steps.size() == 1 && !compiled.steps[0].enabled);
+}
+
 void test_c31_interactive_compile_carries_only_the_changed_value() {
   const auto& global = module("color.global");
   MapReader reader;
@@ -450,6 +470,7 @@ void test_c33_match_writeback_keeps_user_records() {
 }
 
 int main() {
+  test_curves_compile_into_draw_values();
   test_c33_precise_on_suspends_amount_channel();
   test_c33_match_writeback_keeps_user_records();
   test_c31_transfer_replaces_with_validated_source();
