@@ -193,6 +193,24 @@ int main() {
   assert(PreviewSession::open(photo, broken, none, diagnostic) == ResultCode::SourceMissing);
   assert(!none);
 
+  // A point curve is a text parameter: after it is reset, the redraw must not send a number for
+  // it (that would fail the whole colour step) -- the frame comes back as the original.
+  {
+    const std::string photo3 = base + "-c.bmp";
+    write_grey_bmp(photo3, 40, 20, 90);
+    std::unique_ptr<PreviewSession> session;
+    assert(PreviewSession::open(photo3, options, session, diagnostic) == ResultCode::Ok);
+    assert(session->commit("color.global", "curve_points_rgb", "0,0;90,160;255,255", diagnostic) == ResultCode::Ok);
+    assert(session->wait_latest_frame(frame, 15'000, diagnostic) == ResultCode::Ok);
+    assert(frame.result.code == ResultCode::Ok && frame.rgba[0] > 140);
+    const ResultCode reset = session->reset_effects({"color.global"}, "重置", diagnostic);
+    std::printf("reset after a curve: %d %s\n", static_cast<int>(reset), diagnostic.c_str());
+    assert(reset == ResultCode::Ok);
+    assert(session->wait_latest_frame(frame, 15'000, diagnostic) == ResultCode::Ok);
+    std::printf("frame after reset: code %d, %zu bytes\n", static_cast<int>(frame.result.code), frame.rgba.size());
+    assert(frame.result.code == ResultCode::Ok && !frame.rgba.empty() && frame.rgba[0] == 90);
+    std::remove(photo3.c_str());
+  }
   // RenderdProcess on its own: exits when the client goes away.
   {
     std::unique_ptr<RenderdProcess> process;

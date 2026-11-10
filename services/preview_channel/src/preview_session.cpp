@@ -267,7 +267,7 @@ namespace {
 // 参数的默认值写成显示值（小数位由步进推出，与滑杆一致）；枚举参数取默认选项。
 std::string default_display(const std::string& capability, const std::string& parameter) {
   const ParameterMode* mode = find_parameter_mode(capability, parameter);
-  if (mode == nullptr) return {};
+  if (mode == nullptr || mode->text) return {};  // 文本参数（点曲线、笔触）没有默认显示值：不写就是没有
   if (!mode->choices.empty()) return mode->default_choice;
   int decimals = 0;
   for (double step = mode->step; step > 0 && step < 1 - 1e-9 && decimals < 6; step *= 10) ++decimals;
@@ -320,7 +320,9 @@ ResultCode PreviewSession::redraw(const std::vector<std::pair<std::string, std::
   std::string capability = "color.global";
   std::string parameter = "exposure";
   for (const auto& [candidate, name] : prefer) {
-    if (!candidate.empty() && find_parameter_mode(candidate, name) != nullptr) {
+    const ParameterMode* mode = candidate.empty() ? nullptr : find_parameter_mode(candidate, name);
+    // A text parameter with no value (a reset curve) has no display value to send.
+    if (mode != nullptr && (!mode->text || document_.effective_parameter(candidate, name))) {
       capability = candidate;
       parameter = name;
       break;
