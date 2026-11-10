@@ -463,9 +463,49 @@ void test_document_to_pixels() {
   assert(near(render(compiled.description, input), {54, 54, 54}));
 }
 
+// A real document with grain and noise reduction compiles into one detail operation, so stage 8
+// runs before the grain (PhotoCraft develop 8 -> 9): on a flat grey frame, which noise reduction
+// leaves alone, the grain comes out as with grain alone.
+void test_document_detail_before_grain() {
+  const auto compiled_with = [](bool nr) {
+    auto document = *pixcake::EditDocument::create("photo-1");
+    assert(document.set_preview("detail", "grain_amount", "50") == pixcake::ResultCode::Ok);
+    if (nr) {
+      assert(document.set_preview("detail", "noise_luminance", "100") == pixcake::ResultCode::Ok);
+      assert(document.set_preview("detail", "noise_luminance_detail", "0") == pixcake::ResultCode::Ok);
+      assert(document.set_preview("detail", "sharpen_amount", "100") == pixcake::ResultCode::Ok);
+    }
+    auto compiled = pixcake::render::compile(document);
+    assert(compiled.code == pixcake::ResultCode::Ok);
+    return compiled.description;
+  };
+  const auto both = compiled_with(true);
+  int detail_ops = 0;
+  bool grain = false, noise = false;
+  for (const auto& operation : both.operations) {
+    if (operation.capability_id != "detail") continue;
+    ++detail_ops;
+    for (const auto& item : operation.values) {
+      grain = grain || item.channel == "grain_amount";
+      noise = noise || item.channel == "noise_luminance";
+    }
+  }
+  std::printf("detail operations compiled: %d (grain %d, noise %d)\n", detail_ops, grain, noise);
+  assert(detail_ops == 1 && grain && noise);
+  RgbaImage input = image(128, 128, 128, 48);
+  RenderResult with_nr, grain_only;
+  input.revision = both.document_revision;
+  assert(RenderExecutor{}.renderReference(both, input, RenderInputs{}, with_nr));
+  const auto alone = compiled_with(false);
+  input.revision = alone.document_revision;
+  assert(RenderExecutor{}.renderReference(alone, input, RenderInputs{}, grain_only));
+  assert(with_nr.image.pixels == grain_only.image.pixels);
+}
+
 }  // namespace
 
 int main() {
+  test_document_detail_before_grain();
   test_calibration();
   test_curves();
   test_document_to_pixels();

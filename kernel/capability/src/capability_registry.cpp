@@ -269,7 +269,9 @@ std::vector<ParameterMode> make_parameter_modes() {
   };
   std::uint32_t detail_order = 87;
   for (const auto& m : detail_modes) {
-    ParameterMode& mode = add("detail", m.id, m.minimum, m.maximum, m.step, m.default_value, "detail.sharpen",
+    // 与颗粒同一绘制阶段：细节模块按阶段出操作，同一阶段才编译成一个操作，executor 才能在同一个操作里
+    // 先做阶段 8、再加颗粒（PhotoCraft develop 8 -> 9）。分开的话颗粒操作（order 80）会先画。
+    ParameterMode& mode = add("detail", m.id, m.minimum, m.maximum, m.step, m.default_value, "detail.grain",
                               "pixcake.detail", m.id, detail_order++);
     mode.step_confirmed = false;
     mode.default_confirmed = m.default_value == 0.0;
