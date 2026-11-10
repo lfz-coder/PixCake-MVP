@@ -1168,7 +1168,10 @@ bool RenderExecutor::execute(gl::Context& context, const pixcake::render::Render
         const bool curves = !grain && draw.has_groups && draw.groups.curves;
         ok = ok && (!curves || upload_curves(cache, context, draw.groups.curve_tables, error)) &&
              (draw.masks.empty() || upload_masks(cache, context, draw.masks, input.width, tile, error)) &&
-             (draw.masks.empty() || cache.masks.bind(1, error)) && (!curves || cache.curves.bind(4, error));
+             (draw.masks.empty() || cache.masks.bind(1, error)) &&
+             // Without curves the sampler still needs a complete texture (the driver warns about an
+             // unloadable unit otherwise); the frame read on unit 0 serves, never sampled there.
+             (grain || (curves ? cache.curves.bind(4, error) : cache.textures[current].bind(4, error)));
         pass(program, !draw.masks.empty(), [&] {
           return program.setTextureUnit("masks", 1, error) &&
                  program.setVec4("blend0", {masks, static_cast<float>(draw.blend), 0.0F, 0.0F}, error) &&
