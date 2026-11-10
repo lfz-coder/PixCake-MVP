@@ -33,12 +33,12 @@ PhotoCraft 参考副本当前提交为 `885a6ddf27cc58c07faf1722e5c327cd38953657
 3. Photoshop 现代亮度（PhotoCraft 移植；按 2026-11-09 用户裁决放在阶段 1 之后）
 4. Camera Raw 阶段 3 Contrast（PhotoCraft 移植）
 5. Camera Raw 阶段 4 Presence：vibrance、saturation（PhotoCraft 移植）
-6. 全局工具的分组：旧色阶 → 黑白配置文件时旧黑白混合，否则 Camera Raw Color Mixer → 旧可选颜色 → Camera Raw Color Grading（Balance 固定 0）
+6. 全局工具的分组：色阶 → Camera Raw 阶段 5 曲线（参数曲线 → master → 红/绿/蓝，[曲线移植证据](2026-11-10-photocraft-curves-port.md)）→ 黑白配置文件时黑白混合，否则 Camera Raw Color Mixer → 可选颜色 → Camera Raw Color Grading（Balance 固定 0）
 7. 颗粒，最后按蒙版/不透明度合成并写回（裁剪到 0..1 再量化）
 
 含任一整帧参数（dehaze、highlights、shadows、texture、clarity、whites、blacks）的操作改走 PhotoCraft `develop` 的分段顺序（reference：`draw_spatial`；GPU：`kColor` 前段写 Rgba32F 帧 → `camera_raw_gl` 各阶段 → `kColor` 后段，帧须 ≥32 万像素且不超过一个 GPU 分块）：第 1–3 步逐像素 → 整帧去雾 → 整帧高光/阴影 → 整帧对比度 + 纹理 + 清晰度（PhotoCraft `tone()`）→ 整帧白色/黑色 → 第 5–6 步逐像素 → 按覆盖率回混。整帧阶段之间保持浮点、不裁剪；蒙版只决定在哪里显示。
 
-只含 exposure、brightness 和 RGB 色阶的全局操作走 256 级逐通道查表快速路径；表由上面同一组函数在灰阶上生成，与通用路径逐字节相同（`test_scalar_tone_fast_path_matches_general_reference`，含半透明像素）。contrast 作用于亮度，不走快速路径。
+只含 exposure、brightness、RGB 色阶和曲线的全局操作走 256 级逐通道查表快速路径；表由上面同一组函数在灰阶上生成，与通用路径逐字节相同（`test_scalar_tone_fast_path_matches_general_reference`，含半透明像素）。contrast 作用于亮度，不走快速路径。
 
 ## 1. 全局色彩和影调
 
@@ -232,7 +232,7 @@ colour > 0：通道 k 的 n_k = n + (n'_k − n)·colour，n'_k 用 seed k+1（k
 
 ## 10. 这次审查确认的缺口
 
-1. **已完成来源迁移：** Camera Raw 逐像素阶段与现代亮度（[逐像素移植证据](2026-11-09-camera-raw-per-pixel-port.md)），以及色阶、可选颜色、混合、3D LUT 采样和颗粒基础三项（[调整图层与颗粒移植证据](2026-11-09-photocraft-adjustments-and-grain-port.md)），均为 `photocraft-ported`（8 位 sRGB 输入）。高光/阴影/白色/黑色、纹理/清晰度/去雾也是 `photocraft-ported`（[整帧阶段移植证据](2026-11-09-photocraft-spatial-stages-port.md)：C++ 与 PhotoCraft 逐位一致，GLSL 与 C++ 端到端差 ≤1）；曲线未实现。八色带黑白、颗粒扩展子参数和 AI 业务是 PixCake-specific；色彩编辑器是 no-equivalent。
+1. **已完成来源迁移：** Camera Raw 逐像素阶段与现代亮度（[逐像素移植证据](2026-11-09-camera-raw-per-pixel-port.md)），以及色阶、可选颜色、混合、3D LUT 采样和颗粒基础三项（[调整图层与颗粒移植证据](2026-11-09-photocraft-adjustments-and-grain-port.md)），均为 `photocraft-ported`（8 位 sRGB 输入）。高光/阴影/白色/黑色、纹理/清晰度/去雾也是 `photocraft-ported`（[整帧阶段移植证据](2026-11-09-photocraft-spatial-stages-port.md)：C++ 与 PhotoCraft 逐位一致，GLSL 与 C++ 端到端差 ≤1）；曲线（参数曲线与 RGB/红/绿/蓝点曲线）也是 `photocraft-ported`（[曲线移植证据](2026-11-10-photocraft-curves-port.md)），官方“亮度通道曲线”没有 Camera Raw 对应，未登记。八色带黑白、颗粒扩展子参数和 AI 业务是 PixCake-specific；色彩编辑器是 no-equivalent。
 2. **色阶不是红绿蓝独立色阶。** 当前只有一套 RGB 复合黑/灰/白参数，代码对 R/G/B 复用同一映射；用户所说的红、绿、蓝独立黑场/灰场/白场目前没有实现。
 3. **黑白混合的 Rec.709 来源链接没有在登记中固定。** 代码和测试都写了权重，但来源登记仍不完整。
 4. **GPU readback 证明的是与 CPU reference 对齐。** 已移植的各项靠 CPU reference 与 PhotoCraft 对照向量（`test_camera_raw_port`、`test_brightness_port`、`test_adjust_port`）加 GPU 与 reference 差 ≤1 两段证明 PhotoCraft parity；仍为旧公式的项，GPU 证据不能证明 PhotoCraft parity。任何一项都没有官方 PixCake 逐像素证明。
