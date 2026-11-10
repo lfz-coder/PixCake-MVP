@@ -2,11 +2,15 @@
 // tiles or the reference renderer, ImageIO encode) and the queue transaction
 // that publishes the product.
 #include "pixcake/exportd/export_service.hpp"
+#include "pixcake/exportd/export_server.hpp"
+#include "pixcake/editdoc/edit_document.hpp"
+#include "pixcake/layerdoc/layer_document.hpp"
 
 #include "pixcake/gl/native_backend.hpp"
 #include "pixcake/persist/file_system.hpp"
 #include "pixcake/platform/mac_image_decoder.hpp"
 #include "pixcake/platform/mac_image_encoder.hpp"
+#include "pixcake/support/checksum.hpp"
 #include "support/temp_dir.hpp"
 
 #include <ImageIO/ImageIO.h>
@@ -108,6 +112,13 @@ double mean_red(const std::vector<std::uint8_t>& rgba) {
   double sum = 0;
   for (std::size_t i = 0; i < rgba.size(); i += 4) sum += rgba[i];
   return sum / static_cast<double>(rgba.size() / 4);
+}
+
+std::string checksum_hex(const std::vector<std::uint8_t>& bytes) {
+  char buffer[17];
+  std::snprintf(buffer, sizeof(buffer), "%016llx",
+                static_cast<unsigned long long>(pixcake::checksum_fnv1a64(bytes.data(), bytes.size())));
+  return buffer;
 }
 
 pixcake::render::RenderOperation operation(const char* capability, const char* program,
@@ -224,6 +235,29 @@ int main() {
     assert(bits_per_sample(product.product) == 16);
   }
 
+  // The export boundary compiles the persisted creative sidecar together with
+  // the edit snapshot, so a restarted exportd receives the same generated
+  // layer metadata as renderd.
+  {
+    auto document = pixcake::EditDocument::create("image-1");
+    auto layers = pixcake::LayerDocument::create("image-1", document->revision());
+    assert(document && layers);
+    const std::vector<std::uint8_t> pixels = {255, 0, 0, 255};
+    assert(layers->place_result("result-1", "新图层", "creative.fixture", {}, "/tmp/result-1.result",
+                                checksum_hex(pixels), 1, 1) == ResultCode::Ok);
+    auto job = work("server-layer", source, dir.path() + "/server.jpg", dir.path());
+    job.job.document_snapshot = document->encode();
+    job.job.layer_document_snapshot = layers->encode();
+    job.job.document_revision = document->revision();
+    std::string why;
+    ExportWork compiled;
+    assert(pixcake::exportd::work_from_job(job.job, source, compiled, why) == ResultCode::Ok);
+    const auto generated_layer = std::find_if(compiled.description.layers.begin(), compiled.description.layers.end(),
+                                              [](const auto& layer) { return !layer.pixel_file.empty(); });
+    assert(generated_layer != compiled.description.layers.end() &&
+           generated_layer->pixel_file == "/tmp/result-1.result");
+  }
+
   // Without a queue: the product comes back, full size, one EV brighter; the
   // task stays pending.
   {
@@ -246,6 +280,38 @@ int main() {
     // Camera Raw exposure doubles linear light; on sRGB-encoded midtones that is about x1.4
     // (79.6 -> 111.1 here, through a JPEG round trip).  The former byte-linear gain doubled it.
     assert(after > before * 1.25 && after < before * 1.6);
+  }
+
+  // A verified creative result is part of the full-resolution export, not
+  // just the preview.  The provider result is deliberately tiny here; the
+  // export compositor expands it deterministically to the source dimensions.
+  {
+    const std::vector<std::uint8_t> layer_pixels = {
+        230, 20, 30, 255, 230, 20, 30, 255,
+        230, 20, 30, 255, 230, 20, 30, 255,
+    };
+    const std::string layer_path = dir.path() + "/creative.result";
+    pixcake::PosixFileSystem files;
+    assert(files.write_new(layer_path, layer_pixels).ok);
+    auto encoder = std::make_shared<CapturingEncoder>();
+    ExportService service(nullptr, encoder);
+    auto generated = work("export-generated", source, dir.path() + "/unused.jpg", dir.path());
+    pixcake::render::RenderLayer layer;
+    layer.id = "generated-1";
+    layer.pixel_file = layer_path;
+    layer.pixel_checksum = checksum_hex(layer_pixels);
+    layer.pixel_width = 2;
+    layer.pixel_height = 2;
+    layer.opacity = 100;
+    layer.enabled = true;
+    layer.order = 0;
+    generated.description.layers.push_back(std::move(layer));
+    assert(service.submit(std::move(generated), diagnostic) == ResultCode::Ok);
+    const auto result = service.process_next();
+    assert(result.code == ResultCode::Ok && result.width == 320 && result.height == 200);
+    assert(encoder->captured.width == 320 && encoder->captured.height == 200);
+    const auto* first = encoder->captured.rgba.data();
+    assert(first[0] > 220 && first[1] < 40 && first[2] < 50 && first[3] == 255);
   }
 
   // Geometry (requirement 12.6): the export is drawn on the rotated, flipped, straightened and cropped frame.

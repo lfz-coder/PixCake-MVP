@@ -407,6 +407,11 @@ int smoke(QWidget& window, Page first_page) {
     if (const int sliders = check_refine_sliders(window); sliders != 0) return sliders;
     // 色彩调节、局部调色的直方图卡片和 AI 校准固定在滚动区外（官方 9.3.0）：两块，都不在任何 QScrollArea 里。
     {
+      // Attaching the project/session can rebuild the page once while the
+      // previous widget is waiting for DeferredDelete.  Drain that queue
+      // before counting the pinned tops so the smoke check observes the live
+      // page tree rather than the transition frame.
+      QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
       const auto tops = window.findChildren<QWidget*>(QStringLiteral("refine-color-top"));
       bool pinned = tops.size() == 2;
       for (const auto* top : tops) {
@@ -485,6 +490,19 @@ std::string exportd_executable() {
 #endif
 }
 
+// generated 与 renderd、exportd 一样作为同一 bundle 的子进程；开发构建退回构建目录里的 fixture boundary。
+#ifdef PIXCAKE_DEV_PAGES
+std::string generated_executable() {
+  const QString bundled = QCoreApplication::applicationDirPath() + QStringLiteral("/pixcake_app_generated");
+  if (QFileInfo(bundled).isExecutable()) return bundled.toStdString();
+#ifdef PIXCAKE_GENERATED_DEV_PATH
+  return PIXCAKE_GENERATED_DEV_PATH;
+#else
+  return bundled.toStdString();
+#endif
+}
+#endif
+
 pixcake::preview_channel::PreviewSessionOptions preview_options() {
   pixcake::preview_channel::PreviewSessionOptions options;
   options.renderd_executable = renderd_executable();
@@ -509,6 +527,18 @@ void attach_projects(pixcake::shell::ShellWindow& window, const pixcake::account
     return;
   }
   window.controller().attach_projects(std::move(projects), preview_options());
+#ifdef PIXCAKE_DEV_PAGES
+  // The local fixture is explicit and development-only.  Release builds wait
+  // for the official provider contract instead of guessing an endpoint.
+  pixcake::generation_session::GenerationSessionOptions generation;
+  generation.process.executable = generated_executable();
+  generation.process.log_directory = pixcake::logging::default_log_directory();
+  generation.process.data_directory = data_directory.toStdString();
+  generation.process.fixture = true;
+  generation.process.connect_timeout_ms = 10'000;
+  generation.opening_points = session.snapshot().creative_points;
+  window.controller().attach_generation(session, std::move(generation));
+#endif
   // 导出（需求第 19 节）：导出日志在 <数据目录>/exports，导出进程第一次导出时启动。
   pixcake::export_session::ExportOptions exports;
   exports.exportd_executable = exportd_executable();

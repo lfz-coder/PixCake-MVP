@@ -4,6 +4,9 @@
 #include "histogram_refresh_gate.hpp"
 
 #include "pixcake/export_session/export_session.hpp"
+#include "pixcake/generation_session/generation_session.hpp"
+#include "pixcake/generate/generation_tool_catalog.hpp"
+#include "pixcake/layerdoc/layer_document.hpp"
 #include "pixcake/preview_channel/preview_session.hpp"
 #include "pixcake/preview_channel/thumbnail_service.hpp"
 #include "pixcake/project_session/project_session.hpp"
@@ -11,6 +14,8 @@
 #include <QPointer>
 #include <QSocketNotifier>
 
+#include <atomic>
+#include <thread>
 #include <functional>
 #include <map>
 #include <set>
@@ -42,6 +47,22 @@ class ShellController final : public PageActions {
                        preview_channel::PreviewSessionOptions preview);
   // 接上导出（需求第 19 节）：<数据目录>/exports 的导出日志，导出进程按需启动。上次没交出去的任务接着交。
   void attach_exports(const SessionState& session, export_session::ExportOptions options);
+  void attach_generation(const SessionState& session, generation_session::GenerationSessionOptions options);
+  void request_generation() override;
+  bool generation_available() const override { return generation_ != nullptr; }
+  std::string generation_status() const override { return generation_status_; }
+  bool generation_cancel_available() const override;
+  void request_generation_cancel() override;
+  std::vector<GenerationToolEntry> generation_tools() const override;
+  void request_generation_tool(const std::string& tool_id) override;
+  std::vector<GenerationTaskEntry> generation_tasks() const override;
+  std::vector<GenerationHistoryEntry> generation_history() const override;
+  std::vector<GenerationParameterEntry> generation_parameters() const override;
+  void request_generation_parameter(const std::string& id, const std::string& value) override;
+  bool generation_retry_available() const override;
+  void request_generation_retry() override;
+  bool generation_apply_available() const override;
+  void request_generation_apply() override;
   std::optional<ExportTarget> export_target() const override;
   bool has_exports() const override { return exports_ != nullptr; }
   std::vector<std::string> request_export(const ExportRequest& request, const ExportDefaults& defaults,
@@ -133,6 +154,9 @@ class ShellController final : public PageActions {
   bool preview_current() const { return session_ && session_->shown_sequence() == session_->latest_sequence(); }
 
  private:
+  void reap_generation_worker();
+  void stop_generation_worker();
+  void discard_pending_generation_result();
   void read_frames();
   void publish();
   void mark_high_quality_preview_request();
@@ -201,6 +225,45 @@ class ShellController final : public PageActions {
   std::unique_ptr<export_session::ExportSession> exports_;
   std::unique_ptr<QSocketNotifier> export_notifier_;
   std::vector<std::pair<QPointer<QObject>, std::function<void()>>> export_watchers_;
+  std::unique_ptr<generation_session::GenerationSession> generation_;
+  struct GenerationDraft {
+    std::string tool_id;
+    std::string image_id;
+    std::uint64_t source_revision = 0;
+    std::vector<std::pair<std::string, std::string>> parameters;
+    std::vector<std::string> mask_ids;
+    std::vector<std::string> reference_image_ids;
+  };
+  generate::ToolCatalog generation_catalog_ = generate::ToolCatalog::development_fixture();
+  std::string generation_tool_id_ = generate::kDevelopmentFixtureToolId;
+  std::vector<std::pair<std::string, std::string>> generation_parameter_values_;
+  std::optional<GenerationDraft> generation_retry_draft_;
+  bool generation_use_retry_draft_ = false;
+  std::string generation_status_;
+  mutable PosixFileSystem generation_files_;
+  struct PendingGenerationResult {
+    ResultCode code = ResultCode::StateConflict;
+    std::string diagnostic;
+    ipc::GenerationProgressMessage progress;
+    generation_session::VerifiedGenerationResult verified;
+    bool handled = false;
+  };
+  std::thread generation_worker_;
+  std::atomic<bool> generation_cancel_requested_{false};
+  std::shared_ptr<PendingGenerationResult> generation_pending_;
+  bool generation_busy_ = false;
+  std::string generation_task_id_;
+  struct GenerationTaskState {
+    std::string task_id;
+    std::string image_id;
+    std::string tool_id;
+    std::string status;
+    std::uint64_t source_revision = 0;
+    std::uint32_t result_count = 0;
+  };
+  GenerationTaskState generation_entry_;
+  std::vector<generation_session::GenerationHistoryEntry> generation_history_;
+  std::shared_ptr<int> generation_lifetime_ = std::make_shared<int>(0);
 };
 
 }  // namespace pixcake::shell

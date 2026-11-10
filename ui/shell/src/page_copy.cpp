@@ -182,6 +182,14 @@ Texts build_texts() {
   t["region.creative-layers"] = "图层面板";
   t["creative.empty"] = "暂无图片或图层";
   t["creative.empty.hint"] = "将照片拖入画布后开始创作";
+  t["creative.generation.unavailable"] = "AI 工具暂不可用";
+  t["creative.generation.unavailable.hint"] = "登录并打开照片后可使用生成工具";
+  t["creative.generation.run"] = "开始生成";
+  t["creative.generation.cancel"] = "取消生成";
+  t["creative.generation.retry"] = "重试生成";
+  t["creative.generation.apply"] = "应用至精修";
+  t["creative.generation.idle"] = "等待生成请求";
+  t["creative.generation.task.separator"] = " · ";
 
   // 导出弹窗与导出列表（需求第 19 节；字样与默认值见
   // docs/superpowers/evidence/2026-11-06-export-dialog-observation.md）。

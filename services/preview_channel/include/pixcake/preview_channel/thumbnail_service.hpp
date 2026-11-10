@@ -37,7 +37,8 @@ class ThumbnailService {
   int fd() const { return client_.fd(); }
   // `document` empty: the original; otherwise EditDocument::encode() bytes.
   ResultCode request(std::int64_t key, const std::string& image_id, const std::string& source_path,
-                     std::vector<std::uint8_t> document, std::uint32_t max_edge, std::string& diagnostic);
+                     std::vector<std::uint8_t> document, std::uint32_t max_edge, std::string& diagnostic,
+                     std::vector<std::uint8_t> layer_document = {});
   // One finished thumbnail if waiting; Cancelled when none (stale ones are skipped).
   ResultCode take(Thumbnail& out, std::string& diagnostic);
   ResultCode wait(Thumbnail& out, int timeout_ms, std::string& diagnostic);

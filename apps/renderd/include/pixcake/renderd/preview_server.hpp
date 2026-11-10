@@ -2,6 +2,7 @@
 
 #include "pixcake/editdoc/edit_document.hpp"
 #include "pixcake/ipc/preview_protocol.hpp"
+#include "pixcake/layerdoc/layer_document.hpp"
 #include "pixcake/preview_channel/channel.hpp"
 #include "pixcake/renderd/image_io.hpp"
 #include "pixcake/renderd/render_service.hpp"
@@ -44,6 +45,7 @@ class PreviewServer {
   struct Source {
     ipc::PreviewSourceMessage message;
     std::optional<EditDocument> document;
+    std::optional<LayerDocument> layers;
     ResultCode code = ResultCode::Ok;  // why the source is unusable, if not Ok
     std::string diagnostic;
     std::uint32_t decoded_edge = 0;

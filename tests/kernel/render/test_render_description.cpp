@@ -385,6 +385,24 @@ void test_q06_layer_mask_feather_above_100_renders() {
   EXPECT(found);
 }
 
+void test_generated_layer_metadata_reaches_render_description() {
+  auto document = *pixcake::EditDocument::create("img-generated");
+  auto layers = *pixcake::LayerDocument::create("img-generated", 0);
+  EXPECT(layers.place_result("result-1", "新图层", "fixture", {}, "/creative/result-1.result",
+                             "0123456789abcdef", 32, 16) == pixcake::ResultCode::Ok);
+  const auto result = pixcake::render::compile(document, layers);
+  EXPECT(result.code == pixcake::ResultCode::Ok);
+  bool found = false;
+  for (const auto& layer : result.description.layers) {
+    if (layer.id != "result-1") continue;
+    found = true;
+    EXPECT(layer.pixel_file == "/creative/result-1.result");
+    EXPECT(layer.pixel_checksum == "0123456789abcdef");
+    EXPECT(layer.pixel_width == 32 && layer.pixel_height == 16);
+  }
+  EXPECT(found);
+}
+
 // C-33：同一帧追色只有一个来源（架构“写回的存放与切换”）。
 std::vector<std::uint8_t> records(std::vector<std::pair<std::uint32_t, std::pair<std::string, std::string>>> items) {
   std::vector<pixcake::FragmentRecord> out;
@@ -465,6 +483,7 @@ int main() {
   test_c33_precise_off_draws_amount_and_user_values();
   test_c33_precise_on_draws_written_back_values_only();
   test_q06_layer_mask_feather_above_100_renders();
+  test_generated_layer_metadata_reaches_render_description();
   test_c31_render_compiles_through_capability_modules();
   test_compile_is_read_only_and_uses_stable_fields();
   test_preview_without_committed_fragment_is_renderable();

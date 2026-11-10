@@ -117,6 +117,7 @@ PreviewSession::PreviewSession(std::string photo_path, EditDocument document, st
                                const PreviewSessionOptions& options)
     : photo_path_(std::move(photo_path)),
       document_(std::move(document)),
+      layer_document_path_(options.layer_document_path),
       document_path_(std::move(document_path)),
       options_(options) {
   gate_ = std::make_unique<CommandGate>(document_, latch_, files_, document_path_, phase_one_version_limits(), nullptr);
@@ -153,6 +154,15 @@ ResultCode PreviewSession::open(const std::string& photo_path, const PreviewSess
     }
   }
   std::unique_ptr<PreviewSession> session(new PreviewSession(photo_path, std::move(*document), document_path, options));
+  if (!options.layer_document_path.empty() && files.exists(options.layer_document_path)) {
+    LayerDocument layers;
+    const LoadResult loaded = LayerDocument::load(layers, files, options.layer_document_path);
+    if (loaded.code && *loaded.code != ResultCode::Ok) {
+      diagnostic = "layer document cannot be read: " + options.layer_document_path;
+      return *loaded.code;
+    }
+    if (!loaded.absent && !loaded.recovered_empty) session->layers_ = std::move(layers);
+  }
   // 历史：这次打开的第一步。已有提交的图折叠成“上一次保存”，没有的是“原图”（需求 §8.3）。
   if (session->document_.revision() > 0) {
     session->history_.reopen_folded(session->document_.image_id(), session->document_);
@@ -177,7 +187,46 @@ ResultCode PreviewSession::send_source(std::string& diagnostic) {
   source.document_revision = document_.revision();
   source.source_path = photo_path_;
   source.document = document_.encode();
+  if (layers_) source.layer_document = layers_->encode();
   return client_.send_source(source, diagnostic);
+}
+
+ResultCode PreviewSession::refresh_layer_document(const std::string& path, std::string& diagnostic) {
+  layer_document_path_ = path;
+  layers_.reset();
+  if (!path.empty() && files_.exists(path)) {
+    LayerDocument layers;
+    const LoadResult loaded = LayerDocument::load(layers, files_, path);
+    if (loaded.code && *loaded.code != ResultCode::Ok) {
+      diagnostic = "layer document cannot be read: " + path;
+      return *loaded.code;
+    }
+    if (!loaded.absent && !loaded.recovered_empty) layers_ = std::move(layers);
+  }
+  const ResultCode sent = send_source(diagnostic);
+  if (sent != ResultCode::Ok) return sent;
+  return refresh_preview(diagnostic);
+}
+
+ResultCode PreviewSession::apply_layers(std::string& diagnostic) {
+  if (!layers_ || layers_->recovered_empty() || layers_->source_image_id() != document_.image_id() ||
+      layers_->source_revision() != document_.revision()) {
+    diagnostic = "creative layers do not belong to the open photo";
+    return ResultCode::StateConflict;
+  }
+  const std::uint64_t before_revision = document_.revision();
+  const CommandResult result = gate_->apply_layers(*layers_, before_revision);
+  if (result.code != ResultCode::Ok) {
+    diagnostic = std::string("apply creative layers refused: ") + result_code_label(result.code);
+    return result.code;
+  }
+  // `apply_layers` is a document command, so the history and listener must
+  // observe it exactly like a slider commit or preset application.
+  if (result.revision != before_revision) {
+    history_.record_committed(document_.image_id(), document_, "creative.apply", "", "", false);
+    if (committed_) committed_();
+  }
+  return redraw({{"", ""}}, diagnostic);
 }
 
 ResultCode PreviewSession::send_request(const std::string& capability_id, const std::string& parameter_id,

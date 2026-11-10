@@ -7,6 +7,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <utility>
 
 #if defined(__APPLE__) || defined(__unix__)
 #include <spawn.h>
@@ -46,9 +47,11 @@ class FakeTool final : public pixcake::generated::RemoteTool {
 
 pixcake::generated::RemoteReply image_reply() {
   pixcake::generated::RemoteReply reply;
-  reply.image = {1, 2, 3, 4, 5, 6, 7, 8};
-  reply.width = 1;
-  reply.height = 2;
+  pixcake::generated::RemoteResult result;
+  result.image = {1, 2, 3, 4, 5, 6, 7, 8};
+  result.width = 1;
+  result.height = 2;
+  reply.results.push_back(std::move(result));
   return reply;
 }
 
@@ -99,9 +102,59 @@ void test_c04_result_written_before_ready() {
   EXPECT(progress.code == pixcake::ResultCode::Ok && progress.percent == 100);
   EXPECT(!progress.result_id.empty() && !progress.checksum.empty());
   EXPECT(progress.pixel_file.rfind(std::string(kCreative) + "/", 0) == 0);
-  EXPECT(files.files.count(progress.pixel_file) == 1 && files.files[progress.pixel_file] == tool.reply.image);
+  EXPECT(files.files.count(progress.pixel_file) == 1 &&
+         files.files[progress.pixel_file] == tool.reply.results.front().image);
   EXPECT(ledger.book->ledger().task_status("task-1") == "成功");
   EXPECT(ledger.book->ledger().creative_points() == 50);
+}
+
+void test_c04_failed_confirmation_reclaims_unplaced_result() {
+  Book ledger;
+  ledger.queued("task-rejected", 30);
+  pixcake::test::FakeFileSystem files;
+  FakeTool tool;
+  tool.reply = image_reply();
+  pixcake::generated::GenerationService service(*ledger.book, files, kCreative, tool);
+  const auto progress = service.run(task_of("task-rejected"));
+  EXPECT(progress.state == pixcake::generate::TaskState::Succeeded);
+  EXPECT(files.files.count(progress.pixel_file) == 1);
+
+  pixcake::ipc::GenerationResultConfirmMessage rejected;
+  rejected.task_id = progress.task_id;
+  rejected.result_id = progress.result_id;
+  rejected.checksum = progress.checksum;
+  rejected.code = pixcake::ResultCode::ImageCorrupt;
+  EXPECT(service.confirm(rejected) == pixcake::ResultCode::Ok);
+  EXPECT(files.files.empty());
+}
+
+void test_multiple_results_preserve_continuation_parameters() {
+  Book ledger;
+  ledger.queued("task-many", 30);
+  pixcake::test::FakeFileSystem files;
+  FakeTool tool;
+  tool.reply.results = {{
+      {1, 2, 3, 4},
+      1,
+      1,
+      {7, 8},
+  }, {
+      {5, 6, 7, 8},
+      1,
+      1,
+      {9},
+  }};
+  auto task = task_of("task-many");
+  task.tool.output_count = 2;
+  pixcake::generated::GenerationService service(*ledger.book, files, kCreative, tool);
+  const auto progress = service.run(task);
+  EXPECT(progress.state == pixcake::generate::TaskState::Succeeded);
+  EXPECT(progress.results.size() == 2);
+  EXPECT(progress.results[0].ordinal == 0 && progress.results[1].ordinal == 1);
+  EXPECT(progress.results[0].continuation_parameters == std::vector<std::uint8_t>({7, 8}));
+  EXPECT(progress.results[1].continuation_parameters == std::vector<std::uint8_t>({9}));
+  EXPECT(files.files.size() == 2);
+  EXPECT(ledger.book->ledger().task_status("task-many") == "成功");
 }
 
 void test_t03_b80_remote_bad_return_fails_without_file() {
@@ -109,8 +162,7 @@ void test_t03_b80_remote_bad_return_fails_without_file() {
   ledger.queued("task-bad", 30);
   pixcake::test::FakeFileSystem files;
   FakeTool tool;
-  tool.reply.width = 1;
-  tool.reply.height = 1;  // 没有像素
+  tool.reply.results.clear();  // 没有结果像素
   pixcake::generated::GenerationService service(*ledger.book, files, kCreative, tool);
   const auto progress = service.run(task_of("task-bad"));
   EXPECT(progress.state == pixcake::generate::TaskState::Failed);
@@ -146,7 +198,7 @@ void test_t03_b80_remote_size_mismatch_fails_and_keeps_previous_result() {
   const auto good = service.run(task_of("task-good"));
   EXPECT(good.state == pixcake::generate::TaskState::Succeeded);
   const auto good_bytes = files.files[good.pixel_file];
-  tool.reply.height = 3;  // 1×3 需要 12 字节，只给了 8
+  tool.reply.results.front().height = 3;  // 1×3 需要 12 字节，只给了 8
   const auto odd = service.run(task_of("task-odd"));
   EXPECT(odd.state == pixcake::generate::TaskState::Failed && odd.code == pixcake::ResultCode::ImageCorrupt);
   EXPECT(ledger.book->ledger().task_status("task-odd") == "失败");
@@ -182,7 +234,7 @@ void test_t03_duplicate_submit_runs_once() {
   const auto first = service.run(task_of("task-twice"));
   const auto points = ledger.book->ledger().creative_points();
   const auto bytes = files.files[first.pixel_file];
-  tool.reply.image = {9, 9, 9, 9, 9, 9, 9, 9};
+  tool.reply.results.front().image = {9, 9, 9, 9, 9, 9, 9, 9};
   const auto second = service.run(task_of("task-twice"));
   EXPECT(first.state == pixcake::generate::TaskState::Succeeded);
   EXPECT(second.state == pixcake::generate::TaskState::Failed && second.code == pixcake::ResultCode::StateConflict);
@@ -219,6 +271,22 @@ void test_c30_task_not_queued_is_not_sent() {
   EXPECT(progress.state == pixcake::generate::TaskState::Failed);
   EXPECT(progress.code == pixcake::ResultCode::StateConflict);
   EXPECT(tool.calls == 0);
+}
+
+void test_capability_too_new_task_is_rejected_before_remote_call() {
+  Book ledger;
+  ledger.queued("task-new-schema", 30);
+  pixcake::test::FakeFileSystem files;
+  FakeTool tool;
+  tool.reply = image_reply();
+  auto task = task_of("task-new-schema");
+  task.parameter_schema_version = pixcake::generate::kGenerationParameterSchemaVersion + 1;
+  pixcake::generated::GenerationService service(*ledger.book, files, kCreative, tool);
+  const auto progress = service.run(task);
+  EXPECT(progress.state == pixcake::generate::TaskState::Failed);
+  EXPECT(progress.code == pixcake::ResultCode::CapabilityTooNew);
+  EXPECT(tool.calls == 0);
+  EXPECT(ledger.book->ledger().task_status("task-new-schema") == "排队中");
 }
 
 // B-104、B-106：主进程按崩溃折叠时只动“生成中”的任务。排队中的任务不变，取消不扣点；
@@ -302,10 +370,13 @@ int main(int argc, char** argv) {
   test_t03_duplicate_submit_runs_once();
   test_b104_b106_crash_folds_only_generating_tasks();
   test_c04_result_written_before_ready();
+  test_c04_failed_confirmation_reclaims_unplaced_result();
+  test_multiple_results_preserve_continuation_parameters();
   test_t03_b80_remote_bad_return_fails_without_file();
   test_t03_b50_remote_timeout_fails_with_network_failed();
   test_c30_b65_b81_cancel_while_running_discards_late_result();
   test_c30_task_not_queued_is_not_sent();
+  test_capability_too_new_task_is_rejected_before_remote_call();
 #if defined(PIXCAKE_HAVE_FORK)
   test_c30_t03_b105_generated_crash_fails_without_refund();
 #endif

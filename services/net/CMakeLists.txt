@@ -1,0 +1,3 @@
+add_library(pixcake_net INTERFACE)
+target_include_directories(pixcake_net INTERFACE include)
+target_link_libraries(pixcake_net INTERFACE pixcake_support pixcake_warnings)

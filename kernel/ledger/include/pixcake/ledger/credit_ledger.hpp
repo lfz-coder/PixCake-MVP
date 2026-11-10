@@ -11,6 +11,10 @@
 
 namespace pixcake {
 
+inline constexpr char kLedgerOriginOfficial[] = "官方";
+inline constexpr char kLedgerOriginPackage[] = "工具包";
+inline constexpr char kLedgerOriginMaster[] = "大师精选";
+
 struct FreeQueuePolicy {
   bool official_member_free_queue = false;
   bool subscribed_package_non_high_compute_free_queue = false;

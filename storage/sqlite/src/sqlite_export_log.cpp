@@ -22,6 +22,7 @@ constexpr const char* kSchema =
     "original_id TEXT NOT NULL,"
     "document_revision INTEGER NOT NULL,"
     "document_snapshot TEXT NOT NULL,"
+    "layer_document_snapshot TEXT NOT NULL DEFAULT '',"
     "destination_path TEXT NOT NULL,"
     "destination_root TEXT NOT NULL DEFAULT '',"
     "destination_identity_valid INTEGER NOT NULL DEFAULT 0,"
@@ -217,6 +218,11 @@ ResultCode ensure_batch_schema(sqlite3* db) {
     const ResultCode root = exec_sql(db, "ALTER TABLE export_event ADD COLUMN destination_root TEXT NOT NULL DEFAULT ''; ");
     if (root != ResultCode::Ok) return root;
   }
+  if (!has_column(db, "export_event", "layer_document_snapshot")) {
+    const ResultCode layers =
+        exec_sql(db, "ALTER TABLE export_event ADD COLUMN layer_document_snapshot TEXT NOT NULL DEFAULT ''; ");
+    if (layers != ResultCode::Ok) return layers;
+  }
   if (!has_column(db, "export_event", "failure_code")) {
     const ResultCode failure = exec_sql(db, "ALTER TABLE export_event ADD COLUMN failure_code INTEGER NOT NULL DEFAULT 0;");
     if (failure != ResultCode::Ok) return failure;
@@ -305,7 +311,7 @@ ResultCode SqliteExportLog::load(std::vector<ExportEvent>& out) {
   Statement stmt;
   const ResultCode prepared = stmt.prepare(
       impl_->db,
-      "SELECT e.kind, e.export_id, e.original_id, e.document_revision, e.document_snapshot, e.destination_path, e.destination_root, "
+      "SELECT e.kind, e.export_id, e.original_id, e.document_revision, e.document_snapshot, e.layer_document_snapshot, e.destination_path, e.destination_root, "
       "e.destination_identity_valid, e.destination_device, e.destination_inode, e.destination_size, e.settings_snapshot, "
       "e.watermark_free_second, e.print_requested, e.checksum, e.failure_code, e.phase, e.duration_ms, e.deduplicated, b.batch_id "
       "FROM export_event AS e "
@@ -322,21 +328,22 @@ ResultCode SqliteExportLog::load(std::vector<ExportEvent>& out) {
     event.original_id = column_text(stmt.get(), 2);
     event.document_revision = static_cast<std::uint64_t>(sqlite3_column_int64(stmt.get(), 3));
     event.document_snapshot = hex_bytes(column_text(stmt.get(), 4));
-    event.destination_path = column_text(stmt.get(), 5);
-    event.destination_root = column_text(stmt.get(), 6);
-    event.destination_identity.valid = sqlite3_column_int(stmt.get(), 7) != 0;
-    event.destination_identity.device = static_cast<std::uint64_t>(sqlite3_column_int64(stmt.get(), 8));
-    event.destination_identity.inode = static_cast<std::uint64_t>(sqlite3_column_int64(stmt.get(), 9));
-    event.destination_identity.size = static_cast<std::uint64_t>(sqlite3_column_int64(stmt.get(), 10));
-    event.settings_snapshot = column_text(stmt.get(), 11);
-    event.watermark_free_second = sqlite3_column_int(stmt.get(), 12) != 0;
-    event.print_requested = sqlite3_column_int(stmt.get(), 13) != 0;
-    event.checksum = parse_hex16(column_text(stmt.get(), 14));
-    event.failure_code = static_cast<ResultCode>(sqlite3_column_int(stmt.get(), 15));
-    event.phase = column_text(stmt.get(), 16);
-    event.duration_ms = static_cast<std::uint64_t>(sqlite3_column_int64(stmt.get(), 17));
-    event.deduplicated = sqlite3_column_int(stmt.get(), 18) != 0;
-    event.batch_id = column_text(stmt.get(), 19);
+    event.layer_document_snapshot = hex_bytes(column_text(stmt.get(), 5));
+    event.destination_path = column_text(stmt.get(), 6);
+    event.destination_root = column_text(stmt.get(), 7);
+    event.destination_identity.valid = sqlite3_column_int(stmt.get(), 8) != 0;
+    event.destination_identity.device = static_cast<std::uint64_t>(sqlite3_column_int64(stmt.get(), 9));
+    event.destination_identity.inode = static_cast<std::uint64_t>(sqlite3_column_int64(stmt.get(), 10));
+    event.destination_identity.size = static_cast<std::uint64_t>(sqlite3_column_int64(stmt.get(), 11));
+    event.settings_snapshot = column_text(stmt.get(), 12);
+    event.watermark_free_second = sqlite3_column_int(stmt.get(), 13) != 0;
+    event.print_requested = sqlite3_column_int(stmt.get(), 14) != 0;
+    event.checksum = parse_hex16(column_text(stmt.get(), 15));
+    event.failure_code = static_cast<ResultCode>(sqlite3_column_int(stmt.get(), 16));
+    event.phase = column_text(stmt.get(), 17);
+    event.duration_ms = static_cast<std::uint64_t>(sqlite3_column_int64(stmt.get(), 18));
+    event.deduplicated = sqlite3_column_int(stmt.get(), 19) != 0;
+    event.batch_id = column_text(stmt.get(), 20);
     out.push_back(std::move(event));
   }
   return stepped == SQLITE_DONE ? ResultCode::Ok : ResultCode::IoFailed;
@@ -346,9 +353,9 @@ ResultCode SqliteExportLog::append(const std::vector<ExportEvent>& events) {
   Statement stmt;
   const ResultCode prepared = stmt.prepare(
       impl_->db,
-      "INSERT INTO export_event(kind, export_id, original_id, document_revision, document_snapshot, destination_path, destination_root, "
+      "INSERT INTO export_event(kind, export_id, original_id, document_revision, document_snapshot, layer_document_snapshot, destination_path, destination_root, "
       "destination_identity_valid, destination_device, destination_inode, destination_size, settings_snapshot, "
-      "watermark_free_second, print_requested, checksum, failure_code, phase, duration_ms, deduplicated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);");
+      "watermark_free_second, print_requested, checksum, failure_code, phase, duration_ms, deduplicated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);");
   if (prepared != ResultCode::Ok) {
     return prepared;
   }
@@ -375,36 +382,39 @@ ResultCode SqliteExportLog::append(const std::vector<ExportEvent>& events) {
     if (const ResultCode code = bind_text(stmt.get(), 5, bytes_hex(event.document_snapshot)); code != ResultCode::Ok) {
       return code;
     }
-    if (const ResultCode code = bind_text(stmt.get(), 6, event.destination_path); code != ResultCode::Ok) {
+    if (const ResultCode code = bind_text(stmt.get(), 6, bytes_hex(event.layer_document_snapshot)); code != ResultCode::Ok) {
       return code;
     }
-    if (const ResultCode code = bind_text(stmt.get(), 7, event.destination_root); code != ResultCode::Ok) {
+    if (const ResultCode code = bind_text(stmt.get(), 7, event.destination_path); code != ResultCode::Ok) {
       return code;
     }
-    if (const ResultCode code = map_sqlite(sqlite3_bind_int(stmt.get(), 8, event.destination_identity.valid ? 1 : 0)); code != ResultCode::Ok) return code;
-    if (const ResultCode code = map_sqlite(sqlite3_bind_int64(stmt.get(), 9, static_cast<sqlite3_int64>(event.destination_identity.device))); code != ResultCode::Ok) return code;
-    if (const ResultCode code = map_sqlite(sqlite3_bind_int64(stmt.get(), 10, static_cast<sqlite3_int64>(event.destination_identity.inode))); code != ResultCode::Ok) return code;
-    if (const ResultCode code = map_sqlite(sqlite3_bind_int64(stmt.get(), 11, static_cast<sqlite3_int64>(event.destination_identity.size))); code != ResultCode::Ok) return code;
-    if (const ResultCode code = bind_text(stmt.get(), 12, event.settings_snapshot); code != ResultCode::Ok) {
+    if (const ResultCode code = bind_text(stmt.get(), 8, event.destination_root); code != ResultCode::Ok) {
       return code;
     }
-    if (const ResultCode code = map_sqlite(sqlite3_bind_int(stmt.get(), 13, event.watermark_free_second ? 1 : 0));
+    if (const ResultCode code = map_sqlite(sqlite3_bind_int(stmt.get(), 9, event.destination_identity.valid ? 1 : 0)); code != ResultCode::Ok) return code;
+    if (const ResultCode code = map_sqlite(sqlite3_bind_int64(stmt.get(), 10, static_cast<sqlite3_int64>(event.destination_identity.device))); code != ResultCode::Ok) return code;
+    if (const ResultCode code = map_sqlite(sqlite3_bind_int64(stmt.get(), 11, static_cast<sqlite3_int64>(event.destination_identity.inode))); code != ResultCode::Ok) return code;
+    if (const ResultCode code = map_sqlite(sqlite3_bind_int64(stmt.get(), 12, static_cast<sqlite3_int64>(event.destination_identity.size))); code != ResultCode::Ok) return code;
+    if (const ResultCode code = bind_text(stmt.get(), 13, event.settings_snapshot); code != ResultCode::Ok) {
+      return code;
+    }
+    if (const ResultCode code = map_sqlite(sqlite3_bind_int(stmt.get(), 14, event.watermark_free_second ? 1 : 0));
         code != ResultCode::Ok) {
       return code;
     }
-    if (const ResultCode code = map_sqlite(sqlite3_bind_int(stmt.get(), 14, event.print_requested ? 1 : 0));
+    if (const ResultCode code = map_sqlite(sqlite3_bind_int(stmt.get(), 15, event.print_requested ? 1 : 0));
         code != ResultCode::Ok) {
       return code;
     }
-    if (const ResultCode code = bind_text(stmt.get(), 15, hex16(event.checksum)); code != ResultCode::Ok) {
+    if (const ResultCode code = bind_text(stmt.get(), 16, hex16(event.checksum)); code != ResultCode::Ok) {
       return code;
     }
-    if (const ResultCode code = map_sqlite(sqlite3_bind_int(stmt.get(), 16, static_cast<int>(event.failure_code))); code != ResultCode::Ok) {
+    if (const ResultCode code = map_sqlite(sqlite3_bind_int(stmt.get(), 17, static_cast<int>(event.failure_code))); code != ResultCode::Ok) {
       return code;
     }
-    if (const ResultCode code = bind_text(stmt.get(), 17, event.phase); code != ResultCode::Ok) return code;
-    if (const ResultCode code = map_sqlite(sqlite3_bind_int64(stmt.get(), 18, static_cast<sqlite3_int64>(event.duration_ms))); code != ResultCode::Ok) return code;
-    if (const ResultCode code = map_sqlite(sqlite3_bind_int(stmt.get(), 19, event.deduplicated ? 1 : 0)); code != ResultCode::Ok) return code;
+    if (const ResultCode code = bind_text(stmt.get(), 18, event.phase); code != ResultCode::Ok) return code;
+    if (const ResultCode code = map_sqlite(sqlite3_bind_int64(stmt.get(), 19, static_cast<sqlite3_int64>(event.duration_ms))); code != ResultCode::Ok) return code;
+    if (const ResultCode code = map_sqlite(sqlite3_bind_int(stmt.get(), 20, event.deduplicated ? 1 : 0)); code != ResultCode::Ok) return code;
     const int inserted = sqlite3_step(stmt.get());
     if (inserted != SQLITE_DONE) {
       return map_sqlite(inserted);

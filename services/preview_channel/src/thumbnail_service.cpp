@@ -23,13 +23,14 @@ ThumbnailService::~ThumbnailService() {
 
 ResultCode ThumbnailService::request(std::int64_t key, const std::string& image_id, const std::string& source_path,
                                      std::vector<std::uint8_t> document, std::uint32_t max_edge,
-                                     std::string& diagnostic) {
+                                     std::string& diagnostic, std::vector<std::uint8_t> layer_document) {
   ipc::ThumbnailRequestMessage message;
   message.request_id = ++next_id_;
   message.image_id = image_id;
   message.source_path = source_path;
   message.max_edge = max_edge;
   message.document = std::move(document);
+  message.layer_document = std::move(layer_document);
   const ResultCode code = client_.send_thumbnail(message, diagnostic);
   if (code != ResultCode::Ok) return code;
   pending_[message.request_id] = key;

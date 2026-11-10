@@ -49,6 +49,7 @@ struct PreviewFrameHeader {
 // 文档是 EditDocument::encode() 的字节，预览值不在其中，由每个预览请求带来。
 inline constexpr std::size_t kMaxPreviewSourceBytes = 8 * 1024 * 1024;
 inline constexpr std::size_t kMaxSourcePathBytes = 4096;
+inline constexpr std::size_t kMaxLayerSourceBytes = 4 * 1024 * 1024;
 
 struct PreviewSourceMessage {
   std::uint32_t protocol_version = kPreviewProtocolVersion;
@@ -57,6 +58,9 @@ struct PreviewSourceMessage {
   std::uint64_t document_revision = 0;
   std::string source_path;
   std::vector<std::uint8_t> document;
+  // Optional PXLD layer document.  Empty preserves the source-only preview
+  // contract used by photos without creative results.
+  std::vector<std::uint8_t> layer_document;
 };
 
 // renderd → 壳层：一个预览请求的结果。code 为 Ok 时 header 有效，像素在随消息传来的共享内存里
@@ -89,6 +93,7 @@ struct ThumbnailRequestMessage {
   std::string source_path;
   std::uint32_t max_edge = 320;
   std::vector<std::uint8_t> document;
+  std::vector<std::uint8_t> layer_document;
 };
 
 // 读信封里的消息种类，供传输层分派。不是合法信封时返回 StateConflict。

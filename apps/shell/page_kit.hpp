@@ -109,6 +109,38 @@ struct ExportTarget {
   std::int64_t remaining_sheets = 0;
 };
 
+// Creative tool and task rows are display snapshots. The page does not own a
+// catalog, task ledger, or provider connection.
+struct GenerationToolEntry {
+  std::string id;
+  std::string title;
+  std::string category;
+  bool selected = false;
+};
+
+struct GenerationTaskEntry {
+  std::string task_id;
+  std::string status;
+};
+
+struct GenerationHistoryEntry {
+  std::string task_id;
+  std::string tool_id;
+  std::string status;
+  std::size_t result_count = 0;
+  std::uint64_t source_revision = 0;
+};
+
+struct GenerationParameterEntry {
+  std::string id;
+  std::string title;
+  std::string type;
+  std::string value;
+  std::vector<std::string> choices;
+  std::uint32_t max_length = 0;
+  bool required = false;
+};
+
 // 页面发出的请求。实现方（ShellController）改显示模型；页面不直接改。
 class PageActions {
  public:
@@ -117,6 +149,23 @@ class PageActions {
 
   // 预览：有打开的照片时为真；否则精修页的滑杆保持禁用。
   virtual bool has_photo() const { return false; }
+  // Creative generation entry.  The page only emits the intent; the shell
+  // controller owns the task, ledger, process and layer-document writes.
+  virtual bool generation_available() const { return false; }
+  virtual std::string generation_status() const { return {}; }
+  virtual bool generation_cancel_available() const { return false; }
+  virtual void request_generation_cancel() {}
+  virtual std::vector<GenerationToolEntry> generation_tools() const { return {}; }
+  virtual void request_generation_tool(const std::string&) {}
+  virtual std::vector<GenerationTaskEntry> generation_tasks() const { return {}; }
+  virtual std::vector<GenerationHistoryEntry> generation_history() const { return {}; }
+  virtual std::vector<GenerationParameterEntry> generation_parameters() const { return {}; }
+  virtual void request_generation_parameter(const std::string&, const std::string&) {}
+  virtual bool generation_retry_available() const { return false; }
+  virtual void request_generation_retry() {}
+  virtual bool generation_apply_available() const { return false; }
+  virtual void request_generation_apply() {}
+  virtual void request_generation() {}
   // 文档里这个参数当前的显示值（打开照片时滑杆停在这里）。
   virtual std::optional<std::string> parameter_value(const ui::panels::SliderBinding&) const { return std::nullopt; }
   // 拖动中 commit 为假（只预览）；松手或键盘改值 commit 为真（经命令入口提交）。

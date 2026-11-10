@@ -5,15 +5,53 @@
 #include "pixcake/capability/capability_registry.hpp"
 
 #include <QDebug>
+#include <QCoreApplication>
+#include <QMetaObject>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 
 namespace pixcake::shell {
 
 ShellController::~ShellController() {
+  stop_generation_worker();
   notifier_.reset();
   session_.reset();  // closes the connection; renderd exits
+}
+
+void ShellController::reap_generation_worker() {
+  if (generation_busy_ || !generation_worker_.joinable()) return;
+  generation_worker_.join();
+  discard_pending_generation_result();
+}
+
+void ShellController::discard_pending_generation_result() {
+  const auto pending = generation_pending_;
+  if (!pending || pending->handled) return;
+  if (pending->code == ResultCode::Ok && !pending->progress.results.empty()) {
+    LayerDocument rejected;
+    std::string diagnostic;
+    if (generation_ != nullptr) {
+      (void)generation_->place_result(pending->verified, rejected, {}, diagnostic);
+    }
+    // If the generated child has already gone away, confirmation cannot reach
+    // it; remove the verified files locally so a stale callback cannot leave
+    // creative/ filled with orphaned pixels.
+    for (const auto& result : pending->progress.results) generation_files_.remove_file(result.pixel_file);
+  }
+  pending->handled = true;
+  generation_pending_.reset();
+}
+
+void ShellController::stop_generation_worker() {
+  generation_cancel_requested_.store(true, std::memory_order_release);
+  generation_lifetime_.reset();
+  if (generation_worker_.joinable()) generation_worker_.join();
+  discard_pending_generation_result();
+  generation_busy_ = false;
+  generation_task_id_.clear();
 }
 
 void ShellController::request_page(Page target) {
@@ -99,6 +137,7 @@ void ShellController::request_library_view(const std::string& view) {
 }
 
 void ShellController::close_photo() {
+  if (generation_busy_) generation_cancel_requested_.store(true, std::memory_order_release);
   notifier_.reset();
   session_.reset();
   current_photo_.reset();
@@ -161,8 +200,13 @@ void ShellController::request_thumbnail(std::int64_t photo_id) {
   if (projects_->resolve_photo(photo_id, path, diagnostic) != ResultCode::Ok) return;  // missing: no thumbnail
   std::vector<std::uint8_t> document;
   if (projects_->document_bytes(photo_id, document) != ResultCode::Ok) document.clear();  // show the original
+  std::vector<std::uint8_t> layer_document;
+  const std::string layer_path = projects_->layer_document_path(photo_id);
+  if (generation_files_.exists(layer_path)) {
+    if (generation_files_.read_file(layer_path, layer_document).ok == false) layer_document.clear();
+  }
   if (thumbnails_->request(photo_id, projects_->image_id(photo_id), path,
-                           std::move(document), kThumbnailEdge, diagnostic) != ResultCode::Ok) {
+                           std::move(document), kThumbnailEdge, diagnostic, std::move(layer_document)) != ResultCode::Ok) {
     qWarning("thumbnail request failed: %s", diagnostic.c_str());
   }
 }
@@ -788,6 +832,7 @@ void ShellController::open_project_photo(std::int64_t photo_id) {
   options.max_edge = preview_max_edge_;
   options.document_directory = projects_->document_directory();
   options.document_id = projects_->document_name(photo_id);
+  options.layer_document_path = projects_->layer_document_path(photo_id);
   if (open_photo(path, options, diagnostic) == ResultCode::Ok) {
     session_->on_committed([this, photo_id] {
       projects_->mark_edited(photo_id);
@@ -1158,6 +1203,432 @@ void ShellController::attach_exports(const SessionState& session, export_session
   // Tasks queued by an earlier session (or left by a crash, now failed and retryable).
   if (exports_->resume(diagnostic) != ResultCode::Ok) qWarning("export resume: %s", diagnostic.c_str());
   watch_exportd();
+}
+
+void ShellController::attach_generation(const SessionState& session,
+                                        generation_session::GenerationSessionOptions options) {
+  stop_generation_worker();
+  generation_lifetime_ = std::make_shared<int>(0);
+  generation_entry_ = {};
+  generation_history_.clear();
+  generation_.reset();
+  generation_status_.clear();
+  generation_tool_id_.clear();
+  generation_parameter_values_.clear();
+  generation_retry_draft_.reset();
+  generation_use_retry_draft_ = false;
+  if (!projects_) return;
+  std::string diagnostic;
+  if (generation_session::GenerationSession::open(session, std::move(options), generation_, diagnostic) !=
+      ResultCode::Ok) {
+    qWarning("generation unavailable: %s", diagnostic.c_str());
+    generation_status_ = "unavailable";
+  } else if (!generation_catalog_.descriptors().empty()) {
+    generation_tool_id_ = generation_catalog_.descriptors().front().spec.tool_id;
+    (void)generation_catalog_.default_parameters(generation_tool_id_, generation_parameter_values_);
+  }
+}
+
+std::vector<GenerationToolEntry> ShellController::generation_tools() const {
+  std::vector<GenerationToolEntry> entries;
+  if (!generation_) return entries;
+  for (const auto& descriptor : generation_catalog_.descriptors()) {
+    entries.push_back({descriptor.spec.tool_id, descriptor.title, descriptor.category,
+                       descriptor.spec.tool_id == generation_tool_id_});
+  }
+  return entries;
+}
+
+void ShellController::request_generation_tool(const std::string& tool_id) {
+  if (!generation_ || generation_catalog_.find(tool_id) == nullptr || tool_id == generation_tool_id_) return;
+  std::vector<std::pair<std::string, std::string>> defaults;
+  if (generation_catalog_.default_parameters(tool_id, defaults) != ResultCode::Ok) return;
+  generation_tool_id_ = tool_id;
+  generation_parameter_values_ = std::move(defaults);
+  generation_status_.clear();
+  if (changed_) changed_();
+}
+
+bool ShellController::generation_cancel_available() const {
+  return generation_ != nullptr && generation_busy_ && !generation_task_id_.empty();
+}
+
+void ShellController::request_generation_cancel() {
+  if (!generation_cancel_available()) return;
+  generation_cancel_requested_.store(true, std::memory_order_release);
+  generation_status_ = "cancelling";
+  generation_entry_.status = "cancelling";
+  if (changed_) changed_();
+}
+
+std::vector<GenerationTaskEntry> ShellController::generation_tasks() const {
+  std::vector<GenerationTaskEntry> entries;
+  if (!generation_) return entries;
+  if (generation_busy_) {
+    entries.push_back({generation_task_id_, generation_entry_.status});
+    return entries;
+  }
+  for (const auto& [task_id, status] : generation_->task_statuses()) {
+    entries.push_back({task_id, status});
+  }
+  return entries;
+}
+
+std::vector<GenerationHistoryEntry> ShellController::generation_history() const {
+  std::vector<GenerationHistoryEntry> entries;
+  if (!generation_) return entries;
+  const auto& history = generation_busy_ ? generation_history_ : generation_->history();
+  for (const auto& entry : history) {
+    entries.push_back({entry.task_id, entry.tool_id, entry.status, entry.results.size(), entry.source_revision});
+  }
+  return entries;
+}
+
+bool ShellController::generation_retry_available() const {
+  if (!generation_) return false;
+  if (generation_status_ == "failed" && generation_retry_draft_ && projects_ && session_ && selected_photo_ &&
+      generation_retry_draft_->image_id == projects_->image_id(*selected_photo_) &&
+      generation_retry_draft_->source_revision == session_->document().revision()) {
+    return true;
+  }
+  if (!projects_ || !session_ || !selected_photo_) return false;
+  const std::string image_id = projects_->image_id(*selected_photo_);
+  const std::uint64_t revision = session_->document().revision();
+  const auto& history = generation_->history();
+  for (auto it = history.rbegin(); it != history.rend(); ++it) {
+    if (it->status != generation_session::kGenerationHistoryFailedStatus || it->image_id != image_id ||
+        it->source_revision != revision ||
+        generation_catalog_.find(it->tool_id) == nullptr) {
+      continue;
+    }
+    std::vector<std::pair<std::string, std::string>> values;
+    if (generation_catalog_.decode_parameters(it->tool_id, it->parameter_payload, values) == ResultCode::Ok) return true;
+  }
+  return false;
+}
+
+std::vector<GenerationParameterEntry> ShellController::generation_parameters() const {
+  std::vector<GenerationParameterEntry> entries;
+  if (!generation_) return entries;
+  const auto* selected = generation_catalog_.find(generation_tool_id_);
+  if (selected == nullptr) return entries;
+  for (const auto& parameter : selected->parameters) {
+    const auto found = std::find_if(generation_parameter_values_.begin(), generation_parameter_values_.end(),
+                                    [&](const auto& value) { return value.first == parameter.id; });
+    const std::string type = parameter.type == generate::ToolParameterType::Choice
+                                 ? "choice"
+                                 : parameter.type == generate::ToolParameterType::Number
+                                       ? "number"
+                                       : parameter.type == generate::ToolParameterType::Boolean ? "boolean" : "text";
+    entries.push_back({parameter.id,
+                       parameter.title,
+                       type,
+                       found == generation_parameter_values_.end() ? parameter.default_value : found->second,
+                       parameter.choices,
+                       parameter.max_length,
+                       parameter.required});
+  }
+  return entries;
+}
+
+void ShellController::request_generation_parameter(const std::string& id, const std::string& value) {
+  if (!generation_) return;
+  auto values = generation_parameter_values_;
+  if (values.empty()) {
+    (void)generation_catalog_.default_parameters(generation_tool_id_, values);
+  }
+  bool found = false;
+  for (auto& entry : values) {
+    if (entry.first == id) {
+      entry.second = value;
+      found = true;
+      break;
+    }
+  }
+  if (!found) return;
+  std::vector<std::uint8_t> encoded;
+  if (generation_catalog_.encode_parameters(generation_tool_id_, values, encoded) != ResultCode::Ok) {
+    return;
+  }
+  generation_parameter_values_ = std::move(values);
+  if (changed_) changed_();
+}
+
+void ShellController::request_generation_retry() {
+  if (!generation_ || !projects_ || !session_ || !selected_photo_) return;
+  if (!generation_retry_draft_) {
+    const std::string image_id = projects_->image_id(*selected_photo_);
+    const std::uint64_t revision = session_->document().revision();
+    const auto& history = generation_->history();
+    for (auto it = history.rbegin(); it != history.rend(); ++it) {
+      if (it->status != generation_session::kGenerationHistoryFailedStatus || it->image_id != image_id ||
+          it->source_revision != revision) continue;
+      std::vector<std::pair<std::string, std::string>> values;
+      if (generation_catalog_.decode_parameters(it->tool_id, it->parameter_payload, values) != ResultCode::Ok) continue;
+      generation_retry_draft_ = GenerationDraft{it->tool_id, it->image_id, it->source_revision, std::move(values),
+                                                it->mask_ids, it->reference_image_ids};
+      break;
+    }
+  }
+  if (!generation_retry_draft_) {
+    request_generation();
+    return;
+  }
+  const auto& draft = *generation_retry_draft_;
+  if (projects_->image_id(*selected_photo_) != draft.image_id || session_->document().revision() != draft.source_revision) {
+    generation_status_ = "retry-source-changed";
+    if (changed_) changed_();
+    return;
+  }
+  generation_tool_id_ = draft.tool_id;
+  generation_parameter_values_ = draft.parameters;
+  generation_use_retry_draft_ = true;
+  request_generation();
+}
+
+bool ShellController::generation_apply_available() const {
+  if (!generation_ || !projects_ || !session_ || !selected_photo_) return false;
+  LayerDocument document;
+  const LoadResult loaded = LayerDocument::load(document, generation_files_, projects_->layer_document_path(*selected_photo_));
+  return !loaded.absent && (!loaded.code || *loaded.code == ResultCode::Ok) && !loaded.recovered_empty &&
+         document.source_image_id() == projects_->image_id(*selected_photo_) &&
+         document.source_revision() == session_->document().revision() && !document.generations().empty();
+}
+
+void ShellController::request_generation_apply() {
+  if (!generation_apply_available() || !projects_ || !selected_photo_ || !session_) return;
+  std::string diagnostic;
+  const ResultCode applied = session_->apply_layers(diagnostic);
+  if (applied != ResultCode::Ok) {
+    generation_status_ = "apply-failed";
+    if (!diagnostic.empty()) qWarning("generation apply: %s", diagnostic.c_str());
+    show_notices({}, NoticeScene::Generation, applied);
+    if (changed_) changed_();
+    return;
+  }
+  // The layer document stays alongside the photo, so renderd continues to
+  // composite the verified generated pixels after the edit document records
+  // the bake.  Enter Refine only after the command and redraw have succeeded.
+  generation_status_ = "applied";
+  display_.navigate(Page::Refine);
+  if (changed_) changed_();
+}
+
+void ShellController::request_generation() {
+  if (generation_busy_) {
+    generation_status_ = "busy";
+    if (changed_) changed_();
+    return;
+  }
+  const bool use_retry_draft = generation_use_retry_draft_;
+  generation_use_retry_draft_ = false;
+  reap_generation_worker();
+  if (!generation_ || generation_tool_id_.empty() || !projects_ || !current_project_ || !selected_photo_ || !session_) {
+    generation_status_ = "no-photo";
+    if (changed_) changed_();
+    return;
+  }
+
+  const std::int64_t photo_id = *selected_photo_;
+  const std::string layer_path = projects_->layer_document_path(photo_id);
+  LayerDocument document;
+  const LoadResult loaded = LayerDocument::load(document, generation_files_, layer_path);
+  if (!loaded.absent && (!loaded.code || *loaded.code != ResultCode::Ok || loaded.recovered_empty)) {
+    generation_status_ = "layer-document-unreadable";
+    show_notices({}, NoticeScene::Generation, loaded.code.value_or(ResultCode::DocumentCorrupt));
+    if (changed_) changed_();
+    return;
+  }
+  if (loaded.absent) {
+    auto created = LayerDocument::create(projects_->image_id(photo_id), session_->document().revision());
+    if (!created) {
+      generation_status_ = "layer-document-create-failed";
+      show_notices({}, NoticeScene::Generation, ResultCode::StateConflict);
+      if (changed_) changed_();
+      return;
+    }
+    document = std::move(*created);
+  }
+
+  static std::atomic<std::uint64_t> sequence{0};
+  const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::system_clock::now().time_since_epoch())
+                       .count();
+  std::vector<std::pair<std::string, std::string>> parameter_values = generation_parameter_values_;
+  std::vector<std::uint8_t> parameter_payload;
+  if (parameter_values.empty()) {
+    (void)generation_catalog_.default_parameters(generation_tool_id_, parameter_values);
+  }
+  const ResultCode parameter_code = generation_catalog_.encode_parameters(
+      generation_tool_id_, parameter_values, parameter_payload);
+  if (parameter_code != ResultCode::Ok) {
+    generation_status_ = "failed";
+    show_notices({}, NoticeScene::Generation, parameter_code);
+    if (changed_) changed_();
+    return;
+  }
+  std::vector<std::string> mask_ids = session_->document().mask_ids();
+  std::vector<std::string> reference_image_ids = session_->document().manual_refs();
+  if (use_retry_draft && generation_retry_draft_ && generation_retry_draft_->tool_id == generation_tool_id_ &&
+      generation_retry_draft_->image_id == projects_->image_id(photo_id) &&
+      generation_retry_draft_->source_revision == session_->document().revision()) {
+    mask_ids = generation_retry_draft_->mask_ids;
+    reference_image_ids = generation_retry_draft_->reference_image_ids;
+  }
+  generate::GenerationTask task;
+  const ResultCode task_code = generation_catalog_.build_task(
+      generation_tool_id_,
+      "creative-" + std::to_string(static_cast<long long>(now)) + "-" + std::to_string(++sequence),
+      projects_->image_id(photo_id), session_->document().revision(), std::move(parameter_payload),
+      std::move(mask_ids), std::move(reference_image_ids), {}, task);
+  if (task_code != ResultCode::Ok) {
+    generation_status_ = "failed";
+    show_notices({}, NoticeScene::Generation, task_code);
+    if (changed_) changed_();
+    return;
+  }
+
+  generation_retry_draft_ = GenerationDraft{task.tool.tool_id,
+                                            task.image_id,
+                                            task.source_revision,
+                                            parameter_values,
+                                            task.mask_ids,
+                                            task.reference_image_ids};
+
+  TaskQuote quote;
+  quote.task_id = task.task_id;
+  quote.tool_id = task.tool.tool_id;
+  quote.origin = kLedgerOriginPackage;
+  quote.quoted_points = 0;  // The fixture is local and deliberately free.
+
+  // The shell stays responsive while the provider process is
+  // queueing, waiting, verifying and writing its result files.
+  const std::string task_id = task.task_id;
+  const std::string task_image_id = task.image_id;
+  const std::uint64_t source_revision = task.source_revision;
+  const std::string editing_instance_id = session_->document().editing_instance_id();
+  generation_busy_ = true;
+  generation_task_id_ = task_id;
+  generation_entry_ = {task_id, task_image_id, task.tool.tool_id, "running", source_revision, 0};
+  generation_history_ = generation_->history();
+  generation_cancel_requested_.store(false, std::memory_order_release);
+  if (!generation_lifetime_) generation_lifetime_ = std::make_shared<int>(0);
+  const std::weak_ptr<int> lifetime = generation_lifetime_;
+  generation_status_ = "queued";
+  if (changed_) changed_();
+
+  generation_worker_ = std::thread(
+      [this, lifetime, task = std::move(task), quote, layer_path, photo_id, task_id, task_image_id, source_revision,
+       editing_instance_id]() mutable {
+        std::string diagnostic;
+        ipc::GenerationProgressMessage progress;
+        generation_session::VerifiedGenerationResult verified;
+        const ResultCode code = generation_->generate(task, quote, progress, 30'000, diagnostic,
+                                                     &generation_cancel_requested_, &verified);
+        auto pending = std::make_shared<PendingGenerationResult>();
+        pending->code = code;
+        pending->diagnostic = std::move(diagnostic);
+        pending->progress = std::move(progress);
+        pending->verified = std::move(verified);
+        generation_pending_ = pending;
+        const auto reject_unplaced = [&] {
+          if (pending->code != ResultCode::Ok || pending->progress.results.empty() || pending->handled) return;
+          LayerDocument rejected;
+          std::string reject_diagnostic;
+          (void)generation_->place_result(pending->verified, rejected, {}, reject_diagnostic);
+          pending->handled = true;
+        };
+        auto* application = QCoreApplication::instance();
+        if (application == nullptr || lifetime.expired()) {
+          reject_unplaced();
+          return;
+        }
+        QMetaObject::invokeMethod(
+            application,
+            [this, lifetime, pending, task_id, task_image_id, source_revision, editing_instance_id, layer_path,
+             photo_id]() mutable {
+              if (lifetime.expired()) return;
+              if (generation_worker_.joinable()) generation_worker_.join();
+              const ResultCode code = pending->code;
+              std::string& diagnostic = pending->diagnostic;
+              auto& progress = pending->progress;
+              auto& verified = pending->verified;
+              generation_busy_ = false;
+              generation_task_id_.clear();
+              const auto reject = [&] {
+                if (code != ResultCode::Ok || progress.results.empty()) return;
+                LayerDocument rejected;
+                std::string reject_diagnostic;
+                (void)generation_->place_result(verified, rejected, {}, reject_diagnostic);
+              };
+              if (code == ResultCode::Cancelled) {
+                generation_status_ = "cancelled";
+              } else if (code != ResultCode::Ok) {
+                generation_status_ = "failed";
+                if (!diagnostic.empty()) qWarning("generation: %s", diagnostic.c_str());
+                show_notices({}, NoticeScene::Generation, code);
+              } else if (generation_cancel_requested_.load(std::memory_order_acquire)) {
+                reject();
+                generation_status_ = "succeeded-not-applied";
+              } else if (!session_ || session_->document().image_id() != task_image_id ||
+                         session_->document().editing_instance_id() != editing_instance_id ||
+                         session_->document().revision() != source_revision) {
+                reject();
+                generation_status_ = "succeeded-source-changed";
+              } else {
+                LayerDocument document;
+                const LoadResult loaded = LayerDocument::load(document, generation_files_, layer_path);
+                ResultCode placed = ResultCode::Ok;
+                bool placement_attempted = false;
+                if (loaded.absent) {
+                  auto created = LayerDocument::create(task_image_id, source_revision);
+                  if (created) document = std::move(*created);
+                  else placed = ResultCode::StateConflict;
+                } else if (loaded.recovered_empty || !loaded.code || *loaded.code != ResultCode::Ok) {
+                  placed = loaded.code.value_or(ResultCode::DocumentCorrupt);
+                  if (placed == ResultCode::Ok) placed = ResultCode::DocumentCorrupt;
+                }
+                std::string placement_diagnostic = diagnostic;
+                if (placed == ResultCode::Ok) {
+                  placement_attempted = true;
+                  placed = generation_->place_result(verified, document, layer_path, placement_diagnostic);
+                }
+                if (placed != ResultCode::Ok) {
+                  // If loading the sidecar failed before place_result could
+                  // confirm the result, reject it explicitly to reclaim the
+                  // provider's temporary pixel files.
+                  if (!placement_attempted && !progress.results.empty()) {
+                    LayerDocument rejected;
+                    std::string reject_diagnostic;
+                    (void)generation_->place_result(verified, rejected, {}, reject_diagnostic);
+                  }
+                  generation_status_ = "succeeded-placement-failed";
+                  show_notices({}, NoticeScene::Generation, placed);
+                } else {
+                  std::string refresh_diagnostic;
+                  const ResultCode refreshed = session_->refresh_layer_document(layer_path, refresh_diagnostic);
+                  if (refreshed != ResultCode::Ok) {
+                    generation_status_ = "succeeded-refresh-failed";
+                    if (!refresh_diagnostic.empty()) qWarning("generation preview refresh: %s",
+                                                               refresh_diagnostic.c_str());
+                    show_notices({}, NoticeScene::Generation, refreshed);
+                  } else {
+                    generation_status_ = "succeeded";
+                    generation_retry_draft_.reset();
+                    request_thumbnail(photo_id);
+                  }
+                }
+                if (!placement_diagnostic.empty()) qWarning("generation placement: %s",
+                                                            placement_diagnostic.c_str());
+              }
+              generation_entry_.status = generation_status_;
+              generation_entry_.result_count = static_cast<std::uint32_t>(progress.results.size());
+              pending->handled = true;
+              if (generation_pending_ == pending) generation_pending_.reset();
+              if (changed_) changed_();
+            },
+            Qt::QueuedConnection);
+      });
 }
 
 std::optional<ExportTarget> ShellController::export_target() const {

@@ -2,10 +2,12 @@
 
 #include "pixcake/editdoc/edit_document.hpp"
 #include "pixcake/exportq/export_settings.hpp"
+#include "pixcake/layerdoc/layer_document.hpp"
 #include "pixcake/render/render_description.hpp"
 
 #include <algorithm>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -39,7 +41,19 @@ ResultCode work_from_job(const ExportJob& job, const std::string& source_path, E
     diagnostic = "导出任务的参数快照无法读取";
     return ResultCode::StateConflict;
   }
-  auto compiled = render::compile(*document);
+  std::optional<LayerDocument> layers;
+  if (!job.layer_document_snapshot.empty()) {
+    layers = LayerDocument::decode(job.layer_document_snapshot);
+    if (!layers) {
+      diagnostic = "导出任务的图层快照无法读取";
+      return ResultCode::DocumentCorrupt;
+    }
+    if (layers->source_image_id() != job.original_id) {
+      diagnostic = "导出任务的图层快照和原图编号不一致";
+      return ResultCode::StateConflict;
+    }
+  }
+  auto compiled = layers ? render::compile(*document, *layers) : render::compile(*document);
   if (compiled.code != ResultCode::Ok) {
     diagnostic = "导出任务的参数无法编译成绘制描述";
     return compiled.code;

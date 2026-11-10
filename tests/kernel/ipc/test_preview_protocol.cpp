@@ -136,11 +136,56 @@ void test_c30_process_messages_round_trip() {
   generated.result_id = "res-1";
   generated.pixel_file = "/creative/task-1.result";
   generated.checksum = "abc";
+  generated.results.push_back({0, "res-1", "/creative/task-1.result", "abc", 1, 2, {9, 8}});
   EXPECT(pixcake::ipc::encode_generation_progress(generated, bytes) == pixcake::ResultCode::Ok);
   pixcake::ipc::GenerationProgressMessage generation_out;
   EXPECT(pixcake::ipc::decode_generation_progress(bytes, generation_out) == pixcake::ResultCode::Ok);
   EXPECT(generation_out.state == pixcake::generate::TaskState::Succeeded && generation_out.result_id == "res-1" &&
          generation_out.pixel_file == "/creative/task-1.result" && generation_out.checksum == "abc");
+  EXPECT(generation_out.results.size() == 1 && generation_out.results.front().ordinal == 0 &&
+         generation_out.results.front().width == 1 && generation_out.results.front().height == 2 &&
+         generation_out.results.front().continuation_parameters == std::vector<std::uint8_t>({9, 8}));
+
+  pixcake::ipc::GenerationSubmitMessage submit;
+  submit.task.task_id = "task-submit";
+  submit.task.image_id = "image-1";
+  submit.task.source_revision = 8;
+  submit.task.tool.tool_id = "creative.sky-replace";
+  submit.task.tool.parameter_mode_id = "sky-default";
+  submit.task.tool.result_shape = pixcake::generate::ResultShape::EditableMaskLayer;
+  submit.task.tool.billing_rule_id = "creative-points";
+  submit.task.tool.output_count = 2;
+  submit.task.tool.cancellable = true;
+  submit.task.parameter_payload = {1, 0, 2, 0};
+  submit.task.mask_ids = {"mask-sky"};
+  submit.task.reference_image_ids = {"ref-1", "ref-2"};
+  submit.task.idempotency_key = "provider-task-submit";
+  EXPECT(pixcake::ipc::encode_generation_submit(submit, bytes) == pixcake::ResultCode::Ok);
+  EXPECT(pixcake::ipc::is_generation_submit(bytes));
+  pixcake::ipc::GenerationSubmitMessage submit_out;
+  EXPECT(pixcake::ipc::decode_generation_submit(bytes, submit_out) == pixcake::ResultCode::Ok);
+  EXPECT(submit_out.task.task_id == "task-submit" && submit_out.task.source_revision == 8);
+  EXPECT(submit_out.task.tool.output_count == 2 && submit_out.task.tool.cancellable);
+  EXPECT(submit_out.task.parameter_payload == submit.task.parameter_payload);
+  EXPECT(submit_out.task.mask_ids == submit.task.mask_ids &&
+         submit_out.task.reference_image_ids == submit.task.reference_image_ids);
+  EXPECT(submit_out.task.idempotency_key == "provider-task-submit");
+
+  auto too_new = submit;
+  too_new.task.parameter_schema_version = pixcake::generate::kGenerationParameterSchemaVersion + 1;
+  EXPECT(pixcake::ipc::encode_generation_submit(too_new, bytes) == pixcake::ResultCode::CapabilityTooNew);
+
+  pixcake::ipc::GenerationResultConfirmMessage confirmation;
+  confirmation.task_id = "task-submit";
+  confirmation.result_id = "task-submit-1";
+  confirmation.checksum = "fnv:abc";
+  confirmation.code = pixcake::ResultCode::Ok;
+  EXPECT(pixcake::ipc::encode_generation_result_confirm(confirmation, bytes) == pixcake::ResultCode::Ok);
+  EXPECT(pixcake::ipc::is_generation_result_confirm(bytes));
+  pixcake::ipc::GenerationResultConfirmMessage confirmation_out;
+  EXPECT(pixcake::ipc::decode_generation_result_confirm(bytes, confirmation_out) == pixcake::ResultCode::Ok);
+  EXPECT(confirmation_out.task_id == "task-submit" && confirmation_out.result_id == "task-submit-1" &&
+         confirmation_out.checksum == "fnv:abc" && confirmation_out.code == pixcake::ResultCode::Ok);
 
   pixcake::ipc::TaskCancelMessage cancel;
   cancel.kind = pixcake::ipc::TaskKind::Generation;
@@ -196,6 +241,7 @@ void test_source_and_result_messages() {
   source.document_revision = 7;
   source.source_path = "/Users/a/Pictures/a.jpg";
   source.document = {0, 1, 2, 0, 255, 0};  // binary, NUL bytes included
+  source.layer_document = {9, 8, 7};
   std::vector<std::uint8_t> bytes;
   EXPECT(encode_preview_source(source, bytes) == ResultCode::Ok);
   PreviewMessageKind kind{};
@@ -205,6 +251,7 @@ void test_source_and_result_messages() {
   EXPECT(decoded.image_id == "image-1" && decoded.editing_instance_id == "edit-1");
   EXPECT(decoded.document_revision == 7 && decoded.source_path == source.source_path);
   EXPECT(decoded.document == source.document);
+  EXPECT(decoded.layer_document == source.layer_document);
   // A source message is not a request, and vice versa.
   PreviewRequestMessage request;
   EXPECT(decode_preview_request(bytes, request) == ResultCode::StateConflict);
@@ -285,8 +332,10 @@ void test_thumbnail_messages() {
   EXPECT(decode_thumbnail_request(bytes, back) == ResultCode::Ok && back.request_id == 3 && back.max_edge == 320 &&
          back.document.empty() && back.source_path == request.source_path);
   request.document = {0, 7, 0};
+  request.layer_document = {6, 5, 4};
   EXPECT(encode_thumbnail_request(request, bytes) == ResultCode::Ok);
-  EXPECT(decode_thumbnail_request(bytes, back) == ResultCode::Ok && back.document == request.document);
+  EXPECT(decode_thumbnail_request(bytes, back) == ResultCode::Ok && back.document == request.document &&
+         back.layer_document == request.layer_document);
   auto bad = request;
   bad.max_edge = kMaxThumbnailEdge + 1;
   EXPECT(encode_thumbnail_request(bad, bytes) == ResultCode::StateConflict);

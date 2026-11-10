@@ -54,6 +54,16 @@ void PreviewServer::accept_source(ipc::PreviewSourceMessage message) {
     source.code = ResultCode::StateConflict;
     source.diagnostic = "preview source identity differs from its document";
   }
+  if (source.code == ResultCode::Ok && !message.layer_document.empty()) {
+    source.layers = LayerDocument::decode(message.layer_document);
+    if (!source.layers) {
+      source.code = ResultCode::DocumentCorrupt;
+      source.diagnostic = "preview source layer document cannot be decoded";
+    } else if (source.layers->source_image_id() != message.image_id) {
+      source.code = ResultCode::StateConflict;
+      source.diagnostic = "preview source layer identity differs from its document";
+    }
+  }
   struct stat info {};
   if (::stat(message.source_path.c_str(), &info) != 0 || !S_ISREG(info.st_mode)) {
     if (source.code == ResultCode::Ok) {
@@ -128,7 +138,7 @@ ipc::PreviewResultMessage PreviewServer::render(const ipc::PreviewRequestMessage
       return fail(ResultCode::StateConflict, "the parameter cannot be previewed: " + request.capability_id + "/" +
                                                  request.parameter_id);
     }
-    auto compiled = render::compile(document);
+    auto compiled = source.layers ? render::compile(document, *source.layers) : render::compile(document);
     if (compiled.code != ResultCode::Ok) return fail(compiled.code, "render description cannot be compiled");
     description = std::move(compiled.description);
     description.editing_instance_id = source.message.editing_instance_id;
@@ -278,7 +288,15 @@ ipc::PreviewResultMessage PreviewServer::render_thumbnail(const ipc::ThumbnailRe
   if (!request.document.empty()) {
     const auto document = EditDocument::decode(request.document);
     if (!document) return fail(ResultCode::DocumentCorrupt, "thumbnail document cannot be decoded");
-    auto compiled = render::compile(*document);
+    std::optional<LayerDocument> layers;
+    if (!request.layer_document.empty()) {
+      layers = LayerDocument::decode(request.layer_document);
+      if (!layers) return fail(ResultCode::DocumentCorrupt, "thumbnail layer document cannot be decoded");
+      if (layers->source_image_id() != request.image_id) {
+        return fail(ResultCode::StateConflict, "thumbnail layer identity differs from image");
+      }
+    }
+    auto compiled = layers ? render::compile(*document, *layers) : render::compile(*document);
     if (compiled.code != ResultCode::Ok) return fail(compiled.code, "render description cannot be compiled");
     description = std::move(compiled.description);
   }

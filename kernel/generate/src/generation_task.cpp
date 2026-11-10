@@ -9,6 +9,17 @@ bool valid_identifier(const std::string& value) {
   return !value.empty() && value.find('\0') == std::string::npos;
 }
 
+bool valid_optional_identifier(const std::string& value) {
+  return value.empty() || valid_identifier(value);
+}
+
+bool valid_identifier_list(const std::vector<std::string>& values) {
+  for (const auto& value : values) {
+    if (!valid_identifier(value)) return false;
+  }
+  return true;
+}
+
 bool valid_shape(ResultShape shape) {
   switch (shape) {
     case ResultShape::NewLayer:
@@ -64,15 +75,21 @@ const char* task_state_name(TaskState state) {
 
 ResultCode validate_tool_spec(const ToolSpec& spec) {
   if (!valid_identifier(spec.tool_id) || !valid_identifier(spec.parameter_mode_id) ||
-      !valid_identifier(spec.billing_rule_id) || !valid_shape(spec.result_shape) || spec.output_count == 0) {
+      !valid_identifier(spec.billing_rule_id) || !valid_shape(spec.result_shape) || spec.output_count == 0 ||
+      spec.output_count > kMaxGenerationOutputs) {
     return ResultCode::StateConflict;
   }
   return ResultCode::Ok;
 }
 
 ResultCode validate_task(const GenerationTask& task) {
-  if (!valid_identifier(task.task_id) || !valid_identifier(task.image_id)) {
+  if (!valid_identifier(task.task_id) || !valid_identifier(task.image_id) ||
+      !valid_optional_identifier(task.idempotency_key) ||
+      !valid_identifier_list(task.mask_ids) || !valid_identifier_list(task.reference_image_ids)) {
     return ResultCode::StateConflict;
+  }
+  if (task.parameter_schema_version != kGenerationParameterSchemaVersion) {
+    return ResultCode::CapabilityTooNew;
   }
   return validate_tool_spec(task.tool);
 }

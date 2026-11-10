@@ -18,6 +18,22 @@ target_link_libraries(test_layer_document PRIVATE pixcake_layerdoc pixcake_editd
 add_test(NAME test_layer_document COMMAND test_layer_document)
 
 
+add_executable(test_generation_result_applier services/generation_session/test_generation_result_applier.cpp)
+target_include_directories(test_generation_result_applier PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+target_link_libraries(test_generation_result_applier PRIVATE pixcake_generation_session pixcake_warnings)
+add_test(NAME test_generation_result_applier COMMAND test_generation_result_applier)
+
+add_executable(test_generation_session services/generation_session/test_generation_session.cpp)
+target_include_directories(test_generation_session PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+target_link_libraries(test_generation_session PRIVATE pixcake_generation_session pixcake_account pixcake_warnings)
+add_test(NAME test_generation_session COMMAND test_generation_session)
+
+add_executable(test_generation_history services/generation_session/test_generation_history.cpp)
+target_include_directories(test_generation_history PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+target_link_libraries(test_generation_history PRIVATE pixcake_generation_session pixcake_generate pixcake_warnings)
+add_test(NAME test_generation_history COMMAND test_generation_history)
+
+
 add_executable(test_shell_display ui/test_shell_display.cpp)
 target_link_libraries(test_shell_display PRIVATE pixcake_ui_shell pixcake_warnings)
 add_test(NAME test_shell_display COMMAND test_shell_display)
@@ -121,6 +137,10 @@ add_test(NAME test_preview_protocol COMMAND test_preview_protocol)
 add_executable(test_generation_task kernel/generate/test_generation_task.cpp)
 target_link_libraries(test_generation_task PRIVATE pixcake_generate pixcake_warnings)
 add_test(NAME test_generation_task COMMAND test_generation_task)
+
+add_executable(test_generation_tool_catalog kernel/generate/test_generation_tool_catalog.cpp)
+target_link_libraries(test_generation_tool_catalog PRIVATE pixcake_generate pixcake_warnings)
+add_test(NAME test_generation_tool_catalog COMMAND test_generation_tool_catalog)
 
 add_executable(test_source_probe kernel/import/test_source_probe.cpp)
 target_include_directories(test_source_probe PRIVATE ${CMAKE_SOURCE_DIR}/tests)
@@ -355,6 +375,26 @@ add_executable(test_generated apps/test_generated.cpp)
 target_include_directories(test_generated PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 target_link_libraries(test_generated PRIVATE pixcake_generated_service pixcake_storage pixcake_warnings)
 add_test(NAME test_generated COMMAND test_generated)
+
+add_executable(test_generation_adapter apps/test_generation_adapter.cpp)
+target_include_directories(test_generation_adapter PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+target_link_libraries(test_generation_adapter PRIVATE pixcake_generated_service pixcake_storage pixcake_warnings)
+add_test(NAME test_generation_adapter COMMAND test_generation_adapter)
+
+add_executable(test_generation_channel apps/test_generation_channel.cpp)
+target_include_directories(test_generation_channel PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+target_link_libraries(test_generation_channel PRIVATE pixcake_generated_service pixcake_generation_session pixcake_storage pixcake_warnings)
+add_test(NAME test_generation_channel COMMAND test_generation_channel)
+
+if(APPLE OR UNIX)
+  add_executable(test_generated_process apps/test_generated_process.cpp)
+  target_include_directories(test_generated_process PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+  target_link_libraries(test_generated_process PRIVATE pixcake_generated_service pixcake_storage pixcake_warnings)
+  target_compile_definitions(test_generated_process PRIVATE PIXCAKE_GENERATED_EXE="$<TARGET_FILE:pixcake_app_generated>")
+  add_dependencies(test_generated_process pixcake_app_generated)
+  add_test(NAME test_generated_process COMMAND test_generated_process)
+  set_tests_properties(test_generated_process PROPERTIES TIMEOUT 60)
+endif()
 
 add_executable(test_shell_sources apps/test_shell_sources.cpp)
 target_compile_definitions(test_shell_sources PRIVATE PIXCAKE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")

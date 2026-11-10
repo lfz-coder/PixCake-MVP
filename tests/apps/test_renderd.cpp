@@ -1,8 +1,12 @@
 #include "pixcake/renderd/render_service.hpp"
 
 #include "pixcake/gl/native_backend.hpp"
+#include "pixcake/support/checksum.hpp"
 
 #include <cassert>
+#include <cstdio>
+#include <fstream>
+#include <unistd.h>
 
 namespace {
 
@@ -126,5 +130,27 @@ int main() {
   assert(!service.has_pending());
   assert(service.cancel(current, diagnostic) == pixcake::ResultCode::StateConflict);
   assert(service.render_latest().code == pixcake::ResultCode::StateConflict);
+
+  // A verified creative result is loaded by renderd and composited after the
+  // retouch operations.  The fixture is 1x1 and is deterministically expanded
+  // to the 2x1 source frame.
+  {
+    const std::string path = "/tmp/pixcake-renderd-generated-" + std::to_string(::getpid()) + ".result";
+    const std::vector<std::uint8_t> pixels = {255, 0, 0, 255};
+    std::ofstream(path, std::ios::binary).write(reinterpret_cast<const char*>(pixels.data()), pixels.size());
+    auto generated = work(7, 10);
+    generated.description.operations.clear();
+    generated.description.layers.push_back({"generated-1", {}, 0, "normal", 100, false, false, false, 100, 0,
+                                             true, {}, path, "", 1, 1});
+    char checksum[17];
+    std::snprintf(checksum, sizeof(checksum), "%016llx",
+                  static_cast<unsigned long long>(pixcake::checksum_fnv1a64(pixels.data(), pixels.size())));
+    generated.description.layers.back().pixel_checksum = checksum;
+    const auto composited = service.render_now(7, "image-1", generated.description, generated.input, 4000);
+    assert(composited.code == pixcake::ResultCode::Ok);
+    assert(composited.rgba.size() == 8 && composited.rgba[0] == 255 && composited.rgba[1] == 0 &&
+           composited.rgba[4] == 255 && composited.rgba[5] == 0);
+    std::remove(path.c_str());
+  }
   return 0;
 }

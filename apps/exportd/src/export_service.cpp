@@ -2,6 +2,7 @@
 #include "pixcake/gpu/geometry.hpp"
 #include "pixcake/mask/combined_mask.hpp"
 #include "pixcake/mask/semantic_parts.hpp"
+#include "pixcake/support/checksum.hpp"
 
 #include "pixcake/exportd/layout.hpp"
 #include "pixcake/exportd/watermark.hpp"
@@ -9,9 +10,81 @@
 #include "pixcake/gl/native_backend.hpp"
 
 #include <cstdio>
+#include <fstream>
+#include <algorithm>
 #include <utility>
 
 namespace pixcake::exportd {
+
+namespace {
+
+std::string checksum_hex(std::uint64_t value) {
+  char buffer[17];
+  std::snprintf(buffer, sizeof(buffer), "%016llx", static_cast<unsigned long long>(value));
+  return buffer;
+}
+
+ResultCode load_generated_layer(const render::RenderLayer& source, std::uint32_t width, std::uint32_t height,
+                                gpu::RenderLayer& output, std::string& diagnostic) {
+  if (source.pixel_file.empty() || source.pixel_checksum.empty() || source.pixel_width == 0 ||
+      source.pixel_height == 0) {
+    diagnostic = "生成图层没有完整的像素元数据";
+    return ResultCode::StateConflict;
+  }
+  if (source.pixel_file.find('\0') != std::string::npos) {
+    diagnostic = "生成图层像素路径无效";
+    return ResultCode::StateConflict;
+  }
+  std::ifstream file(source.pixel_file, std::ios::binary);
+  if (!file) {
+    diagnostic = "生成图层像素文件不存在或不可读";
+    return ResultCode::SourceMissing;
+  }
+  file.seekg(0, std::ios::end);
+  const std::streamoff size = file.tellg();
+  const std::uint64_t expected = static_cast<std::uint64_t>(source.pixel_width) * source.pixel_height * 4ull;
+  if (size <= 0 || expected != static_cast<std::uint64_t>(size) || expected > 512ull * 1024ull * 1024ull) {
+    diagnostic = "生成图层像素尺寸不匹配";
+    return ResultCode::ImageCorrupt;
+  }
+  file.seekg(0, std::ios::beg);
+  std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
+  if (!file.read(reinterpret_cast<char*>(bytes.data()), size) ||
+      checksum_hex(checksum_fnv1a64(bytes.data(), bytes.size())) != source.pixel_checksum) {
+    diagnostic = "生成图层像素校验失败";
+    return ResultCode::ImageCorrupt;
+  }
+  output.image.width = width;
+  output.image.height = height;
+  output.image.row_stride = width * 4u;
+  output.image.pixels.resize(static_cast<std::size_t>(output.image.row_stride) * height);
+  for (std::uint32_t y = 0; y < height; ++y) {
+    const std::uint32_t source_y = std::min(source.pixel_height - 1,
+                                            static_cast<std::uint32_t>((static_cast<std::uint64_t>(y) *
+                                                                        source.pixel_height) /
+                                                                       std::max<std::uint32_t>(1, height)));
+    for (std::uint32_t x = 0; x < width; ++x) {
+      const std::uint32_t source_x = std::min(source.pixel_width - 1,
+                                              static_cast<std::uint32_t>((static_cast<std::uint64_t>(x) *
+                                                                          source.pixel_width) /
+                                                                         std::max<std::uint32_t>(1, width)));
+      const std::size_t from = (static_cast<std::size_t>(source_y) * source.pixel_width + source_x) * 4u;
+      const std::size_t to = static_cast<std::size_t>(y) * output.image.row_stride +
+                               static_cast<std::size_t>(x) * 4u;
+      std::copy(bytes.begin() + static_cast<std::ptrdiff_t>(from),
+                bytes.begin() + static_cast<std::ptrdiff_t>(from + 4),
+                output.image.pixels.begin() + static_cast<std::ptrdiff_t>(to));
+    }
+  }
+  output.opacity = std::clamp(static_cast<float>(source.opacity) / 100.0F, 0.0F, 1.0F);
+  output.blend_mode = source.blend_mode;
+  output.visible = !source.hidden && source.enabled;
+  output.order = source.order;
+  diagnostic.clear();
+  return ResultCode::Ok;
+}
+
+}  // namespace
 
 ExportService::ExportService(std::shared_ptr<ExportDecoder> decoder, std::shared_ptr<ExportEncoder> encoder,
                              std::shared_ptr<ExportMaskSource> masks)
@@ -122,6 +195,14 @@ ExportResult ExportService::produce(const ExportWork& work) {
       return result;
     }
     inputs.masks = std::move(masks.masks);
+  }
+  for (const auto& layer : work.description.layers) {
+    if (layer.pixel_file.empty()) continue;  // groups and metadata-only layers have no raster payload
+    gpu::RenderLayer generated;
+    std::string layer_diagnostic;
+    const ResultCode loaded = load_generated_layer(layer, image.width, image.height, generated, layer_diagnostic);
+    if (loaded != ResultCode::Ok) return refuse(loaded, layer_diagnostic);
+    inputs.layers.push_back(std::move(generated));
   }
   gpu::apply_geometry(gpu::geometry_of(work.description), image, inputs.masks);
   gpu::add_gradient_masks(work.description, image.width, image.height, inputs.masks);

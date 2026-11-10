@@ -639,6 +639,10 @@ ResultCode ProjectSession::document_bytes(std::int64_t photo_id, std::vector<std
   return ResultCode::Ok;
 }
 
+std::string ProjectSession::layer_document_path(std::int64_t photo_id) const {
+  return document_directory_ + "/" + document_name(photo_id) + ".pxlayer";
+}
+
 // One line: "library <photo id>" or "refine <photo id>"; the id is 0 for none.
 ResultCode ProjectSession::remember_place(std::int64_t project_id, const ProjectPlace& place) {
   const std::string path = workspace_directory_ + "/project-" + std::to_string(project_id);

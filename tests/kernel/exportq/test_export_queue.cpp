@@ -126,6 +126,7 @@ void test_b66_snapshot_and_fast_export_stay() {
   pixcake::test::FakeFileSystem files;
   auto queue = pixcake::ExportQueue::open("/cache/exports");
   auto job = job_of("exp-1", "orig-1", "/out/a.jpg");
+  job.layer_document_snapshot = {9, 8, 7};
   EXPECT(queue.enqueue(job) == pixcake::ResultCode::Ok);
   job.document_revision = 99;
   job.settings_snapshot = "quality=1";
@@ -136,6 +137,7 @@ void test_b66_snapshot_and_fast_export_stay() {
   EXPECT(queue.find_job("exp-1", stored));
   EXPECT(stored.document_revision == 7);
   EXPECT(stored.settings_snapshot == "format=original;quality=8");
+  EXPECT(stored.layer_document_snapshot == std::vector<std::uint8_t>({9, 8, 7}));
 
   EXPECT(queue.set_fast_export(true) == pixcake::ResultCode::Ok);
   EXPECT(queue.enabled());
@@ -499,6 +501,29 @@ void test_duplicate_task_cache_key_is_state_conflict_and_one_row_round_trips() {
   EXPECT(code == pixcake::ResultCode::StateConflict);
 }
 
+void test_layer_snapshot_survives_sqlite_restart() {
+  pixcake::test::TempDir dir;
+  std::unique_ptr<pixcake::SqliteExportLog> first_log;
+  EXPECT(pixcake::SqliteExportLog::open(dir.path() + "/export.db", first_log) == pixcake::ResultCode::Ok);
+  pixcake::PosixFileSystem files;
+  std::unique_ptr<pixcake::ExportBook> first;
+  EXPECT(pixcake::ExportBook::open(dir.path() + "/cache", *first_log, files, first) == pixcake::ResultCode::Ok);
+  auto job = job_of("layer-restart", "orig-layer", dir.path() + "/out.jpg");
+  job.destination_root = dir.path();
+  job.layer_document_snapshot = {0x50, 0x58, 0x4c, 0x44, 1};
+  EXPECT(first->queue().enqueue(job) == pixcake::ResultCode::Ok);
+  first.reset();
+  first_log.reset();
+
+  std::unique_ptr<pixcake::SqliteExportLog> second_log;
+  EXPECT(pixcake::SqliteExportLog::open(dir.path() + "/export.db", second_log) == pixcake::ResultCode::Ok);
+  std::unique_ptr<pixcake::ExportBook> second;
+  EXPECT(pixcake::ExportBook::open(dir.path() + "/cache", *second_log, files, second) == pixcake::ResultCode::Ok);
+  pixcake::ExportJob restored;
+  EXPECT(second->queue().find_job("layer-restart", restored));
+  EXPECT(restored.layer_document_snapshot == std::vector<std::uint8_t>({0x50, 0x58, 0x4c, 0x44, 1}));
+}
+
 }  // namespace
 
 struct ExportRecords final : pixcake::LogSink {
@@ -596,6 +621,7 @@ int main() {
   test_commit_returns_remove_error_when_mismatched_destination_cannot_be_deleted();
   test_commit_returns_sync_error_after_unlinking_mismatched_destination();
   test_duplicate_task_cache_key_is_state_conflict_and_one_row_round_trips();
+  test_layer_snapshot_survives_sqlite_restart();
   test_b99_publish_does_not_overwrite_a_file_that_appears_after_preflight();
   test_enqueue_rejects_destination_outside_selected_root();
   if (g_failures != 0) {

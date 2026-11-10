@@ -60,6 +60,7 @@ target_link_libraries(pixcake_app_shell PRIVATE
 target_compile_features(pixcake_app_shell PRIVATE cxx_std_17)
 target_link_libraries(pixcake_app_shell PRIVATE pixcake_account pixcake_preview_session pixcake_project_session
   pixcake_export_session
+  pixcake_generation_session
   pixcake_platform_macos pixcake_logging)
 # The shell starts renderd for previews; development builds use the build tree's copy.
 add_dependencies(pixcake_app_shell pixcake_app_renderd)
@@ -67,6 +68,10 @@ target_compile_definitions(pixcake_app_shell PRIVATE PIXCAKE_RENDERD_DEV_PATH="$
 # Exports go to exportd (architecture 10: the shell does not export at full resolution).
 add_dependencies(pixcake_app_shell pixcake_app_exportd)
 target_compile_definitions(pixcake_app_shell PRIVATE PIXCAKE_EXPORTD_DEV_PATH="$<TARGET_FILE:pixcake_app_exportd>")
+
+# The development shell can exercise the explicit fixture generation process.
+add_dependencies(pixcake_app_shell pixcake_app_generated)
+target_compile_definitions(pixcake_app_shell PRIVATE PIXCAKE_GENERATED_DEV_PATH="$<TARGET_FILE:pixcake_app_generated>")
 
 # --page 直达业务页只在开发构建里有（安全清单 S-25）。发布构建由账号会话决定首屏。
 if(CMAKE_BUILD_TYPE STREQUAL "Release")

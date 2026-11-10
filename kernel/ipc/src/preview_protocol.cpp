@@ -179,6 +179,9 @@ ResultCode encode_preview_source(const PreviewSourceMessage& message, std::vecto
       !writer.blob(5, message.document, kMaxPreviewSourceBytes)) {
     return ResultCode::StateConflict;
   }
+  if (!message.layer_document.empty() && !writer.blob(6, message.layer_document, kMaxLayerSourceBytes)) {
+    return ResultCode::StateConflict;
+  }
   writer.u64(3, message.document_revision);
   out = writer.bytes();
   if (out.size() > kMaxPreviewSourceBytes) {
@@ -198,6 +201,9 @@ ResultCode decode_preview_source(const std::vector<std::uint8_t>& bytes, Preview
   if (!reader.text(1, message.image_id, kMaxIdBytes) || !reader.text(2, message.editing_instance_id, kMaxIdBytes) ||
       !reader.u64(3, message.document_revision) || !reader.text(4, message.source_path, kMaxSourcePathBytes) ||
       !reader.blob(5, message.document, kMaxPreviewSourceBytes) || message.document.empty()) {
+    return ResultCode::StateConflict;
+  }
+  if (reader.has(6) && !reader.blob(6, message.layer_document, kMaxLayerSourceBytes)) {
     return ResultCode::StateConflict;
   }
   out = std::move(message);
@@ -281,6 +287,9 @@ ResultCode encode_thumbnail_request(const ThumbnailRequestMessage& message, std:
       !writer.blob(5, message.document, kMaxPreviewSourceBytes)) {
     return ResultCode::StateConflict;
   }
+  if (!message.layer_document.empty() && !writer.blob(6, message.layer_document, kMaxLayerSourceBytes)) {
+    return ResultCode::StateConflict;
+  }
   out = writer.bytes();
   if (out.size() > kMaxPreviewSourceBytes) {
     out.clear();
@@ -301,6 +310,9 @@ ResultCode decode_thumbnail_request(const std::vector<std::uint8_t>& bytes, Thum
       !reader.text(2, message.image_id, kMaxIdBytes) || !reader.text(3, message.source_path, kMaxSourcePathBytes) ||
       !reader.u32(4, message.max_edge) || message.max_edge == 0 || message.max_edge > kMaxThumbnailEdge ||
       !reader.blob(5, message.document, kMaxPreviewSourceBytes)) {
+    return ResultCode::StateConflict;
+  }
+  if (reader.has(6) && !reader.blob(6, message.layer_document, kMaxLayerSourceBytes)) {
     return ResultCode::StateConflict;
   }
   out = std::move(message);

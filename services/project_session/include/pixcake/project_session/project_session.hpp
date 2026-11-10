@@ -147,6 +147,9 @@ class ProjectSession {
   // The photo's committed edit document as EditDocument::encode() bytes (for
   // thumbnails); empty when the photo was never edited.
   ResultCode document_bytes(std::int64_t photo_id, std::vector<std::uint8_t>& out);
+  // Creative generation layers live beside the parameter document and use
+  // the same stable document name for originals and virtual copies.
+  std::string layer_document_path(std::int64_t photo_id) const;
 
   // Remembered per project in <data_directory>/workspace/project-<id>.  A
   // missing or unreadable record is the default place; a photo that left the
