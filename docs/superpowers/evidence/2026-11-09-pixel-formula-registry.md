@@ -34,7 +34,7 @@ PhotoCraft 参考副本当前提交为 `885a6ddf27cc58c07faf1722e5c327cd38953657
 4. Camera Raw 阶段 3 Contrast（PhotoCraft 移植）
 5. Camera Raw 阶段 4 Presence：vibrance、saturation（PhotoCraft 移植）
 6. 全局工具的分组：色阶 → Camera Raw 阶段 5 曲线（参数曲线 → master → 红/绿/蓝，[曲线移植证据](2026-11-10-photocraft-curves-port.md)）→ 黑白配置文件时黑白混合，否则 Camera Raw Color Mixer → 可选颜色 → Camera Raw Color Grading（Balance 固定 0）
-7. 颗粒，最后按蒙版/不透明度合成并写回（裁剪到 0..1 再量化）
+7. 细节操作：Camera Raw 阶段 8 锐化与降噪（整帧，[锐化与降噪移植证据](2026-11-10-photocraft-detail-port.md)），再颗粒，最后按蒙版/不透明度合成并写回（裁剪到 0..1 再量化）
 
 含任一整帧参数（dehaze、highlights、shadows、texture、clarity、whites、blacks）的操作改走 PhotoCraft `develop` 的分段顺序（reference：`draw_spatial`；GPU：`kColor` 前段写 Rgba32F 帧 → `camera_raw_gl` 各阶段 → `kColor` 后段，帧须 ≥32 万像素且不超过一个 GPU 分块）：第 1–3 步逐像素 → 整帧去雾 → 整帧高光/阴影 → 整帧对比度 + 纹理 + 清晰度（PhotoCraft `tone()`）→ 整帧白色/黑色 → 第 5–6 步逐像素 → 按覆盖率回混。整帧阶段之间保持浮点、不裁剪；蒙版只决定在哪里显示。
 
