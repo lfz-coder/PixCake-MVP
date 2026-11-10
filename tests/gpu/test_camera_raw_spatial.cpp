@@ -31,16 +31,17 @@ std::array<float, 4> pixel(const std::string& frame, std::size_t x, std::size_t 
 }
 cr::Frame frame_of(const std::string& name) {
   cr::Frame f;
-  f.width = name == "strip" ? 840 : 24;
-  f.height = name == "strip" ? 6 : 16;
+  f.width = name == "strip" ? 840 : name == "long" ? 1700 : 24;
+  f.height = name == "strip" ? 6 : name == "long" ? 12 : 16;
   for (std::size_t i = 0; i < std::size_t{f.width} * f.height; ++i) f.px.push_back(pixel(name, i % f.width, i / f.width, f.width, f.height));
   return f;
 }
 
 // develop's whole-frame stages in its order, with what this build has ported.
 bool develop(const SpatialCase& c, cr::Frame& f) {
-  if (c.shadows != 0.0F || c.highlights != 0.0F || c.whites != 0.0F || c.blacks != 0.0F) return false;
+  if (c.whites != 0.0F || c.blacks != 0.0F) return false;
   if (c.dehaze != 0.0F) cr::dehaze(f, c.dehaze / 100.0F);
+  if (c.shadows != 0.0F || c.highlights != 0.0F) cr::localTone(f, c.shadows, c.highlights);
   if (c.contrast != 0.0F || c.texture != 0.0F || c.clarity != 0.0F) cr::toneDetail(f, c.contrast, c.texture, c.clarity, c.pixel_scale);
   return true;
 }

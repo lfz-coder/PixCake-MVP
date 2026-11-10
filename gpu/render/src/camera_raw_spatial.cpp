@@ -7,8 +7,12 @@
 // the order of every sum is the same); sRGB encoding only.
 #include <pixcake/gpu/camera_raw_spatial.hpp>
 
+#include <pixcake/gpu/camera_raw.hpp>
+
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <functional>
 #include <limits>
 #include <numeric>
 
@@ -279,6 +283,325 @@ void toneDetail(Frame& frame, float contrast, float texture, float clarity, floa
     }
     if (!tex.empty()) lv += texture / 100.0F * 0.9F * std::clamp(lc[i] - tex[i], -0.1F, 0.1F);
     tone(frame.px[i], l[i], lc[i], lv, k_con);
+  }
+}
+
+// ---- Highlights and Shadows (camera_raw/local_tone.rs)
+namespace {
+
+constexpr float kRefStep = 0.125F;
+constexpr std::size_t kWorkSide = 1600;
+constexpr std::size_t kKnots = 5;
+struct Lift {
+  float own[kKnots], around[kKnots], sigma, down;
+};
+struct Side {
+  float pull[kKnots], push[kKnots], sigma;
+};
+constexpr Lift kShadows{{-0.017F, 0.466F, 0.886F, 1.221F, -0.081F}, {4.566F, 4.067F, 1.088F, 0.149F, 0.878F}, 0.571F, 0.808F};
+constexpr Side kHighlights{{0.179F, 0.141F, 0.196F, 0.629F, 2.07F}, {0.156F, 0.08F, 0.175F, 0.049F, 1.261F}, 0.05F};
+constexpr float kTaps[5] = {1.0F / 16.0F, 4.0F / 16.0F, 6.0F / 16.0F, 4.0F / 16.0F, 1.0F / 16.0F};
+
+struct Plane {
+  std::size_t w = 0, h = 0;
+  std::vector<float> v;
+};
+
+// Rust's f32::total_cmp as a strict order.
+std::int32_t total_key(float f) {
+  std::int32_t bits;
+  std::memcpy(&bits, &f, sizeof bits);
+  return bits ^ static_cast<std::int32_t>(static_cast<std::uint32_t>(bits >> 31) >> 1);
+}
+bool total_less(float a, float b) { return total_key(a) < total_key(b); }
+
+// Mirrors i into 0..n (the edge sample is not repeated).
+std::size_t mirror(std::ptrdiff_t i, std::size_t n) {
+  const auto ni = static_cast<std::ptrdiff_t>(n);
+  if (ni == 1) return 0;
+  const std::ptrdiff_t p = 2 * (ni - 1);
+  std::ptrdiff_t m = i % p;
+  if (m < 0) m += p;
+  return static_cast<std::size_t>(m >= ni ? p - m : m);
+}
+
+// The binomial 5-tap blur, sampled every `step` pixels from 0.
+Plane blur_step(const Plane& p, std::size_t step) {
+  const std::size_t w2 = div_ceil(p.w, step), h2 = div_ceil(p.h, step);
+  std::vector<float> tmp(p.w * h2);
+  for (std::size_t y2 = 0; y2 < h2; ++y2) {
+    const auto y = static_cast<std::ptrdiff_t>(y2 * step);
+    const float* src[5];
+    for (int k = 0; k < 5; ++k) src[k] = &p.v[mirror(y + k - 2, p.h) * p.w];
+    for (std::size_t x = 0; x < p.w; ++x) {
+      float sum = -0.0F;
+      for (int k = 0; k < 5; ++k) sum += kTaps[k] * src[k][x];
+      tmp[y2 * p.w + x] = sum;
+    }
+  }
+  Plane out{w2, h2, std::vector<float>(w2 * h2)};
+  for (std::size_t y2 = 0; y2 < h2; ++y2) {
+    const float* src = &tmp[y2 * p.w];
+    for (std::size_t x2 = 0; x2 < w2; ++x2) {
+      const std::size_t x = x2 * step;
+      float sum = -0.0F;
+      for (int k = 0; k < 5; ++k) sum += kTaps[k] * src[mirror(static_cast<std::ptrdiff_t>(x) + k - 2, p.w)];
+      out.v[y2 * w2 + x2] = sum;
+    }
+  }
+  return out;
+}
+Plane down(const Plane& p) { return blur_step(p, 2); }
+
+// The source sample behind index i of a zero-stuffed axis of length n holding lim samples.
+bool stuffed(std::ptrdiff_t i, std::size_t n, std::size_t lim, std::size_t& at) {
+  const std::size_t m = mirror(i, n);
+  if (m % 2 != 0 || m / 2 >= lim) return false;
+  at = m / 2;
+  return true;
+}
+
+// p brought up to w x h: zeros between samples, then the blur times four.
+Plane up(const Plane& p, std::size_t w, std::size_t h) {
+  const std::size_t lh = std::min(p.h, div_ceil(h, 2)), lw = std::min(p.w, div_ceil(w, 2));
+  std::vector<float> tmp(lw * h);
+  for (std::size_t y = 0; y < h; ++y) {
+    std::size_t rows[5];
+    bool has[5];
+    for (int k = 0; k < 5; ++k) has[k] = stuffed(static_cast<std::ptrdiff_t>(y) + k - 2, h, lh, rows[k]);
+    for (std::size_t j = 0; j < lw; ++j) {
+      float sum = -0.0F;
+      for (int k = 0; k < 5; ++k)
+        if (has[k]) sum += kTaps[k] * (p.v[rows[k] * p.w + j] * 4.0F);
+      tmp[y * lw + j] = sum;
+    }
+  }
+  Plane out{w, h, std::vector<float>(w * h)};
+  for (std::size_t y = 0; y < h; ++y) {
+    const float* t = &tmp[y * lw];
+    for (std::size_t x = 0; x < w; ++x) {
+      float sum = -0.0F;
+      for (int k = 0; k < 5; ++k) {
+        std::size_t j;
+        if (stuffed(static_cast<std::ptrdiff_t>(x) + k - 2, w, lw, j)) sum += kTaps[k] * t[j];
+      }
+      out.v[y * w + x] = sum;
+    }
+  }
+  return out;
+}
+
+// One sample of up(p, w, h) at output row y (taps from up_rows) and column x, same terms in the
+// same order.
+float up_at(const Plane& p, std::size_t w, const std::size_t rows[5], const bool has[5], std::size_t x) {
+  const std::size_t lw = std::min(p.w, div_ceil(w, 2));
+  const auto col = [&](std::size_t j) {
+    float sum = -0.0F;
+    for (int k = 0; k < 5; ++k)
+      if (has[k]) sum += kTaps[k] * (p.v[rows[k] * p.w + j] * 4.0F);
+    return sum;
+  };
+  float sum = -0.0F;
+  for (int k = 0; k < 5; ++k) {
+    std::size_t j;
+    if (stuffed(static_cast<std::ptrdiff_t>(x) + k - 2, w, lw, j)) sum += kTaps[k] * col(j);
+  }
+  return sum;
+}
+
+std::size_t depth(std::size_t w, std::size_t h) {
+  std::size_t s = std::min(w, h), n = 1;
+  while (s > 2) {
+    s = div_ceil(s, 2);
+    ++n;
+  }
+  return n;
+}
+
+std::vector<Plane> gaussian(Plane p, std::size_t n) {
+  std::vector<Plane> g;
+  g.push_back(std::move(p));
+  for (std::size_t i = 1; i < n; ++i) g.push_back(down(g.back()));
+  return g;
+}
+
+float quantile(const std::vector<float>& v, float q) {
+  std::vector<float> s = v;
+  const auto i = static_cast<std::size_t>(std::round(static_cast<float>(s.size() - 1) * q));
+  std::nth_element(s.begin(), s.begin() + static_cast<std::ptrdiff_t>(i), s.end(), total_less);
+  return s[i];
+}
+
+// The local Laplacian filter of u with remap(value, reference); the coarsest level is kept.
+Plane llf(const Plane& u, const std::function<float(float, float)>& remap) {
+  const std::size_t n = depth(u.w, u.h);
+  const auto g = gaussian(u, n);
+  float hi = -std::numeric_limits<float>::infinity();
+  for (const float v : u.v) hi = std::fmax(hi, v);
+  const float lo = std::fmin(quantile(u.v, 0.001F), hi);
+  if (hi - lo <= 1e-6F || std::isnan(hi - lo)) return u;
+  const std::size_t refs = std::clamp<std::size_t>(static_cast<std::size_t>(std::ceil((hi - lo) / kRefStep)) + 1, 2, 96);
+  const float step = (hi - lo) / static_cast<float>(refs - 1);
+  std::vector<std::vector<float>> lap;
+  for (std::size_t l = 0; l + 1 < n; ++l) lap.emplace_back(g[l].v.size(), 0.0F);
+  for (std::size_t k = 0; k < refs; ++k) {
+    const float r = lo + step * static_cast<float>(k);
+    Plane m = u;
+    for (float& v : m.v) v = remap(v, r);
+    const auto gr = gaussian(std::move(m), n);
+    for (std::size_t l = 0; l + 1 < n; ++l) {
+      const auto& gl = g[l].v;
+      const auto& fine = gr[l].v;
+      const Plane& coarse = gr[l + 1];
+      const std::size_t lw = g[l].w, lh = g[l].h;
+      const std::size_t clh = std::min(coarse.h, div_ceil(lh, 2));
+      for (std::size_t y = 0; y < lh; ++y) {
+        std::size_t rows[5];
+        bool has[5];
+        for (int t = 0; t < 5; ++t) has[t] = stuffed(static_cast<std::ptrdiff_t>(y) + t - 2, lh, clh, rows[t]);
+        for (std::size_t x = 0; x < lw; ++x) {
+          const std::size_t i = y * lw + x;
+          const float wgt = std::fmax(1.0F - std::fabs(std::clamp(gl[i], lo, hi) - r) / step, 0.0F);
+          if (wgt > 0.0F) lap[l][i] += wgt * (fine[i] - up_at(coarse, lw, rows, has, x));
+        }
+      }
+    }
+  }
+  Plane o = g[n - 1];
+  for (std::size_t l = n - 1; l-- > 0;) {
+    Plane next = up(o, g[l].w, g[l].h);
+    for (std::size_t i = 0; i < next.v.size(); ++i) next.v[i] += lap[l][i];
+    o = std::move(next);
+  }
+  return o;
+}
+
+// 1st and 99th percentiles of the log luminance on a copy at most 256 pixels across.
+std::pair<float, float> range_of(const Plane& u) {
+  const std::size_t f = std::max<std::size_t>(div_ceil(std::max(u.w, u.h), 256), 1);
+  const std::size_t sw = div_ceil(u.w, f), sh = div_ceil(u.h, f);
+  std::vector<std::pair<double, std::uint32_t>> sum(sw * sh, {0.0, 0});
+  for (std::size_t y = 0; y < u.h; ++y) {
+    for (std::size_t x = 0; x < u.w; ++x) {
+      auto& c = sum[(y / f) * sw + x / f];
+      c.first += static_cast<double>(u.v[y * u.w + x]);
+      c.second += 1;
+    }
+  }
+  std::vector<float> cells;
+  for (const auto& c : sum)
+    if (c.second > 0) cells.push_back(static_cast<float>(c.first / static_cast<double>(c.second)));
+  return {quantile(cells, 0.01F), quantile(cells, 0.99F)};
+}
+
+float excess(float d, float sigma) { return d - sigma * std::tanh(d / sigma); }
+float knot(float t, const float k[kKnots]) {
+  const float x = std::clamp(t, 0.0F, 1.0F) * static_cast<float>(kKnots - 1);
+  const std::size_t i = std::min(static_cast<std::size_t>(x), kKnots - 2);
+  return k[i] + (k[i + 1] - k[i]) * (x - static_cast<float>(i));
+}
+
+Plane highlights_pass(const Plane& u, float amount) {
+  const auto bounds = range_of(u);
+  const float lo = bounds.first, hi = bounds.second;
+  const float span = std::fmax(hi - lo, 1.0F);
+  const float* strengths = amount < 0.0F ? kHighlights.pull : kHighlights.push;
+  Plane o = llf(u, [&](float x, float g) {
+    return x + knot((g - lo) / span, strengths) * amount * excess(std::fmax(x - g, 0.0F), kHighlights.sigma);
+  });
+  const float shift = quantile(u.v, 0.01F) - quantile(o.v, 0.01F);
+  for (float& v : o.v) v = v + shift;
+  return o;
+}
+
+Plane shadows_pass(const Plane& u, float amount) {
+  const auto bounds = range_of(u);
+  const float lo = bounds.first, hi = bounds.second;
+  const float span = std::fmax(hi - lo, 1.0F);
+  const float k = amount > 0.0F ? amount : amount * kShadows.down;
+  Plane o = llf(u, [&](float x, float g) {
+    const float below = std::clamp((g - x) / kShadows.sigma, 0.0F, 1.0F);
+    if (below == 0.0F) return x;
+    const float w = below * below * (3.0F - 2.0F * below);
+    return x + k * knot((x - lo) / span, kShadows.own) * knot((g - lo) / span, kShadows.around) * w;
+  });
+  // Keep the brightest content.
+  const float shift = quantile(u.v, 0.99F) - quantile(o.v, 0.99F);
+  for (float& v : o.v) v = v + shift;
+  return o;
+}
+
+Plane shrink(const Plane& u, std::size_t f) {
+  const std::size_t sw = div_ceil(u.w, f), sh = div_ceil(u.h, f);
+  Plane out{sw, sh, std::vector<float>(sw * sh)};
+  for (std::size_t y = 0; y < sh; ++y) {
+    for (std::size_t x = 0; x < sw; ++x) {
+      const std::size_t x0 = x * f, y0 = y * f, x1 = std::min(x0 + f, u.w), y1 = std::min(y0 + f, u.h);
+      double s = 0.0;
+      for (std::size_t yy = y0; yy < y1; ++yy)
+        for (std::size_t xx = x0; xx < x1; ++xx) s += static_cast<double>(u.v[yy * u.w + xx]);
+      out.v[y * sw + x] = static_cast<float>(s / static_cast<double>((x1 - x0) * (y1 - y0)));
+    }
+  }
+  return out;
+}
+
+std::vector<float> guided_upsample(const Plane& small, const std::vector<float>& d, const Plane& full) {
+  const std::size_t sw = small.w, sh = small.h, r = 2, n = sw * sh;
+  const float eps = 0.01F;
+  const auto mean = [&](const std::vector<float>& v) { return boxMean(v, sw, sh, r); };
+  std::vector<float> ud(n), uu(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    ud[i] = small.v[i] * d[i];
+    uu[i] = small.v[i] * small.v[i];
+  }
+  const auto mu = mean(small.v), md = mean(d), mud = mean(ud), muu = mean(uu);
+  std::vector<float> a(n), b(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    a[i] = (mud[i] - mu[i] * md[i]) / (muu[i] - mu[i] * mu[i] + eps);
+    b[i] = md[i] - a[i] * mu[i];
+  }
+  const auto ma = mean(a), mb = mean(b);
+  const float fx = static_cast<float>(sw) / static_cast<float>(full.w), fy = static_cast<float>(sh) / static_cast<float>(full.h);
+  std::vector<float> out(full.w * full.h);
+  for (std::size_t y = 0; y < full.h; ++y) {
+    const float sy = (static_cast<float>(y) + 0.5F) * fy - 0.5F;
+    for (std::size_t x = 0; x < full.w; ++x) {
+      const float sx = (static_cast<float>(x) + 0.5F) * fx - 0.5F;
+      out[y * full.w + x] = bilinear(ma, sw, sh, sx, sy) * full.v[y * full.w + x] + bilinear(mb, sw, sh, sx, sy);
+    }
+  }
+  return out;
+}
+
+}  // namespace
+
+void localTone(Frame& frame, float shadows, float highlights) {
+  const std::size_t w = frame.width, h = frame.height;
+  if ((shadows == 0.0F && highlights == 0.0F) || w < 2 || h < 2) return;
+  constexpr float kFloor = 1.0F / 65536.0F;
+  Plane u{w, h, std::vector<float>(w * h)};
+  for (std::size_t i = 0; i < w * h; ++i) {
+    const auto& q = frame.px[i];
+    u.v[i] = std::log2(std::fmax(luma3(srgbToLinear(q[0]), srgbToLinear(q[1]), srgbToLinear(q[2])), 0.0F) + kFloor);
+  }
+  const std::size_t f = std::max<std::size_t>(div_ceil(std::max(w, h), kWorkSide), 1);
+  const Plane small = f == 1 ? u : shrink(u, f);
+  Plane o = small;
+  if (highlights != 0.0F) o = highlights_pass(o, std::clamp(highlights, -100.0F, 100.0F) / 100.0F);
+  if (shadows != 0.0F) o = shadows_pass(o, std::clamp(shadows, -100.0F, 100.0F) / 100.0F);
+  std::vector<float> change(w * h);
+  if (f == 1) {
+    for (std::size_t i = 0; i < w * h; ++i) change[i] = o.v[i] - u.v[i];
+  } else {
+    std::vector<float> d(o.v.size());
+    for (std::size_t i = 0; i < d.size(); ++i) d[i] = o.v[i] - small.v[i];
+    change = guided_upsample(small, d, u);
+  }
+  for (std::size_t i = 0; i < w * h; ++i) {
+    const float gain = std::exp2(change[i]);
+    auto& q = frame.px[i];
+    for (int c = 0; c < 3; ++c) q[c] = linearToSrgb(srgbToLinear(q[c]) * gain);
   }
 }
 

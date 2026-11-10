@@ -26,6 +26,9 @@ struct Frame {
 void dehaze(Frame& frame, float amount);
 // Stage 3: Contrast with Texture and Clarity (sliders -100..100); pixel_scale as in grainOf.
 void toneDetail(Frame& frame, float contrast, float texture, float clarity, float pixel_scale);
+// Stage 3: Highlights and Shadows (-100..100), a fast local Laplacian filter on log2 luminance,
+// at most 1600 px across with a guided upsampling of the change (local_tone.rs apply).
+void localTone(Frame& frame, float shadows, float highlights);
 
 // Building blocks, exposed for tests.
 std::array<std::size_t, 3> gaussBoxRadii(float sigma);
