@@ -123,3 +123,5 @@ Highlights/Shadows、Texture/Clarity 见 `crates/algo/src/camera_raw/local_tone.
 2026-11-10：上述四个整帧阶段的 GLSL（`gpu/render/src/camera_raw_gl.cpp`、`camera_raw_gl_shaders.hpp`）以 C++ reference 为 oracle，阶段级差 ≤1.1e-5（容差 1/4096），端到端 readback 差 ≤1；GL 封装层增加 R32F/RGBA32F 纹理。帧不少于 32 万像素且不超过一个 GPU 分块时走 GPU，否则整幅走 reference。状态 `photocraft-ported`（8 位 sRGB 输入）。
 
 2026-11-10：曲线接入 PhotoCraft Camera Raw 第 5 阶段（`camera_raw.rs` `parametric_lut`、`curve_lut`、`lut_eval`、`validate_curve`）：参数曲线四个滑杆与 RGB/红/绿/蓝点曲线（文本参数）登记在 `color.global`，分割点固定 25/50/75；CPU 与 PhotoCraft 16 组向量逐位一致，GPU 用 R32F 表，readback 差 ≤1。状态 `photocraft-ported`（8 位 sRGB 输入）。见[曲线移植证据](../evidence/2026-11-10-photocraft-curves-port.md)。
+
+2026-11-10：校准接入 PhotoCraft Camera Raw 阶段 1b（`camera_raw.rs` `calibrate`、`calibration_weights`）：红/绿/蓝原色色相、饱和度六个参数登记在 `color.global`，阴影色调不登记；CPU 与 PhotoCraft 10 组向量逐位一致，GPU 差 0。状态 `photocraft-ported`（8 位 sRGB 输入）。见[校准移植证据](../evidence/2026-11-10-photocraft-calibration-port.md)。

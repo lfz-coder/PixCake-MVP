@@ -28,7 +28,7 @@ PhotoCraft 参考副本当前提交为 `885a6ddf27cc58c07faf1722e5c327cd38953657
 
 帧里的值是解码器输出的 sRGB 字节 /255，即 Camera Raw 的显示编码输入（`encoding_gamma = 0`），executor 不做线性化。每个像素依次：
 
-1. Camera Raw 阶段 1：temperature、tint、exposure（PhotoCraft 移植）
+1. Camera Raw 阶段 1：temperature、tint、exposure（PhotoCraft 移植），随后阶段 1b 校准原色（PhotoCraft 移植，[校准移植证据](2026-11-10-photocraft-calibration-port.md)）
 2. AI 风格偏移（`amount`，PixCake-specific 暂定）
 3. Photoshop 现代亮度（PhotoCraft 移植；按 2026-11-09 用户裁决放在阶段 1 之后）
 4. Camera Raw 阶段 3 Contrast（PhotoCraft 移植）

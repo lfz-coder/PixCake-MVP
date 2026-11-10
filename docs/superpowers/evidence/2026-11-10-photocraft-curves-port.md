@@ -38,11 +38,18 @@
 
 | 测试 | 内容 | 结果 |
 | --- | --- | --- |
-| `test_camera_raw_curves` | 16 组 PhotoCraft 向量（`tools/photocraft_vectors curves`）。三种参数曲线（含分割点和被夹住的分割点）；master 曲线的 S 形、抬黑、平段、陡段、反相、内点、乱序；分通道；全开；曝光 1.5 之后（值超过 1，走线性外推）；Presence + 曲线 + Color Mixer | 表逐项相同（0 项不同），显影最大差 0 |
+| `test_camera_raw_curves` | 16 组 PhotoCraft 向量（`tools/photocraft_vectors curves`）。三种参数曲线（含分割点和被夹住的分割点）；master 曲线的 S 形、抬黑、平段、陡段、反相、内点、乱序；分通道；全开；曝光 1.5 之后（值超过 1，走线性外推）；Presence + 曲线 + Color Mixer | 抽样表项（每 4 项一个及最后一项）相同，显影最大差 0 |
 | `test_capability_registry` | 范围、格式、`validate_curve` 的各种拒收情况（单点、间隔不到 1 级、乱序、超出 0..255、NaN、缺坐标、多余分号、空格、17 个点），16 个点可以收 | 通过 |
 | `test_capability_modules` | 点曲线带着文本进入绘制描述；不合格时这一步停用 | 通过 |
 | `test_reference_color_groups` `test_curves` | executor 与 CPU 移植一致；对角线曲线和单点文本不改变像素；快速路径与通用路径相同 | 0 级 |
 | `test_gpu_backend_native` | 曲线 0；曝光 2 + 曲线 0；曲线 + 色阶 + HSL + 颜色分级 0；整帧 + 曲线 ≤1；32 px 分块 0；`color.local` 带曲线时回退 reference，差 0 | ≤1 级 |
+
+另外，独立审查者用 PhotoCraft 本体做了 3000 组随机对照：随机参数和分割点，2–16 个点的曲线，0..1 以外的输入。完整 1024 项表与输出全部逐位一致。不一致的只有 3 组：同时含 −0 和 +0 输入的非法曲线，能力层会拒收，产品里走不到。
+
+审查后修复：
+
+- 没有曲线的调色绘制也给单元 4 绑上完整纹理，消除 macOS GL 驱动的 unloadable 警告（`test_gpu_no_driver_warnings`）。
+- 曲线被重置后，预览重绘不再把文本参数发成 "0"（`test_preview_session`）。
 
 变异检查：
 
