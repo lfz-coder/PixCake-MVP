@@ -18,8 +18,8 @@ int main(int argc, char** argv) {
   operation.capability_id = "color.global";
   operation.stage = "color";
   operation.program = "pixcake.color.global";
-  // Exercise all four channels whose formulas and bindings are registered:
-  // Bradford white balance, EV exposure, and affine contrast.
+  // Exercise the four channels of PhotoCraft's Camera Raw white balance, exposure and
+  // Contrast (camera_raw.cpp, translated in shader_sources.hpp).
   operation.values = {{"temperature", "temperature", "25", 25.0},
                       {"tint", "tint", "-20", -20.0},
                       {"exposure", "exposure", "0.25", 0.25},

@@ -243,7 +243,9 @@ int main() {
     assert(files.write_new(written, result.product).ok);
     const double before = mean_red(decode(source).rgba), after = mean_red(decode(written).rgba);
     std::printf("export exposure +1: mean red %.1f -> %.1f\n", before, after);
-    assert(after > before * 1.8 && after < before * 2.2);
+    // Camera Raw exposure doubles linear light; on sRGB-encoded midtones that is about x1.4
+    // (79.6 -> 111.1 here, through a JPEG round trip).  The former byte-linear gain doubled it.
+    assert(after > before * 1.25 && after < before * 1.6);
   }
 
   // Geometry (requirement 12.6): the export is drawn on the rotated, flipped, straightened and cropped frame.
@@ -290,6 +292,8 @@ int main() {
   }
 
   // A linear gradient region (needs no mask source): +1 EV only on the left part of the frame.
+  // "Brightened" below means more than x1.25: Camera Raw's +1 EV doubles linear light, about
+  // x1.4 on sRGB midtones (the former byte-linear gain doubled the bytes, so these said x1.5).
   {
     ExportService service;  // no mask source on purpose
     auto job = work("gradient-1", source, dir.path() + "/unused.jpg", dir.path());
@@ -308,7 +312,7 @@ int main() {
     const auto red_at = [](const pixcake::platform::MacDecodedImage& image, std::uint32_t x) {
       return static_cast<int>(image.rgba[(static_cast<std::size_t>(100) * image.width + x) * 4]);
     };
-    assert(red_at(after, 20) > red_at(before, 20) * 3 / 2);               // brightened on the masked side
+    assert(red_at(after, 20) > red_at(before, 20) * 5 / 4);               // brightened on the masked side
     assert(std::abs(red_at(after, 300) - red_at(before, 300)) <= 3);      // untouched on the other side
     std::printf("export gradient: left %d -> %d, right %d -> %d\n", red_at(before, 20), red_at(after, 20),
                 red_at(before, 300), red_at(after, 300));
@@ -333,7 +337,7 @@ int main() {
     const auto red_at = [](const pixcake::platform::MacDecodedImage& image, std::uint32_t x, std::uint32_t y) {
       return static_cast<int>(image.rgba[(static_cast<std::size_t>(y) * image.width + x) * 4]);
     };
-    assert(red_at(after, 80, 5) > red_at(before, 80, 5) * 3 / 2);            // outside the circle: brightened
+    assert(red_at(after, 80, 5) > red_at(before, 80, 5) * 5 / 4);            // outside the circle: brightened
     assert(std::abs(red_at(after, 80, 100) - red_at(before, 80, 100)) <= 3);  // inside the circle: cut away
     assert(std::abs(red_at(after, 300, 100) - red_at(before, 300, 100)) <= 3);
     std::printf("export combined: top %d -> %d, circle %d -> %d\n", red_at(before, 80, 5), red_at(after, 80, 5),
@@ -361,7 +365,7 @@ int main() {
     const auto red_at = [](const pixcake::platform::MacDecodedImage& image, std::uint32_t x, std::uint32_t y) {
       return static_cast<int>(image.rgba[(static_cast<std::size_t>(y) * image.width + x) * 4]);
     };
-    assert(red_at(after, 5, 5) > red_at(before, 5, 5) * 3 / 2);                 // matches: brightened
+    assert(red_at(after, 5, 5) > red_at(before, 5, 5) * 5 / 4);                 // matches: brightened
     assert(std::abs(red_at(after, 315, 195) - red_at(before, 315, 195)) <= 3);  // far from the sample / brighter: untouched
     std::printf("export %s: top left %d -> %d, bottom right %d -> %d\n", id.c_str(), red_at(before, 5, 5),
                 red_at(after, 5, 5), red_at(before, 315, 195), red_at(after, 315, 195));
@@ -386,7 +390,7 @@ int main() {
     const auto red_at = [](const pixcake::platform::MacDecodedImage& image, std::uint32_t x, std::uint32_t y) {
       return static_cast<int>(image.rgba[(static_cast<std::size_t>(y) * image.width + x) * 4]);
     };
-    assert(red_at(after, 160, 100) > red_at(before, 160, 100) * 3 / 2);            // on the stroke
+    assert(red_at(after, 160, 100) > red_at(before, 160, 100) * 5 / 4);            // on the stroke
     assert(std::abs(red_at(after, 160, 20) - red_at(before, 160, 20)) <= 3);       // far above it
     assert(std::abs(red_at(after, 160, 180) - red_at(before, 160, 180)) <= 3);     // far below it
     assert(std::abs(red_at(after, 5, 100) - red_at(before, 5, 100)) <= 3);         // beyond its end
@@ -414,7 +418,7 @@ int main() {
       return static_cast<int>(image.rgba[(static_cast<std::size_t>(100) * image.width + x) * 4]);
     };
     assert(std::abs(red_at(after, 20) - red_at(before, 20)) <= 3);        // the gradient's own side: now untouched
-    assert(red_at(after, 300) > red_at(before, 300) * 3 / 2);             // the other side: brightened
+    assert(red_at(after, 300) > red_at(before, 300) * 5 / 4);             // the other side: brightened
     std::printf("export invert: left %d -> %d, right %d -> %d\n", red_at(before, 20), red_at(after, 20), red_at(before, 300),
                 red_at(after, 300));
   }
@@ -485,7 +489,8 @@ int main() {
   }
 
   // Masks at full resolution come from the mask source: a local exposure +1
-  // on the left half doubles the left half only; a mask source that cannot
+  // on the left half brightens the left half only (Camera Raw doubles its linear
+  // light, about x1.4 in sRGB); a mask source that cannot
   // compute the masks fails the export with its reason.
   {
     auto masks = std::make_shared<HalfMask>();
@@ -531,7 +536,7 @@ int main() {
     };
     std::printf("masked export: left red %.1f (original %.1f), right red %.1f (original %.1f)\n", half_red(true),
                 original_red(true), half_red(false), original_red(false));
-    assert(half_red(true) > original_red(true) * 1.8);
+    assert(half_red(true) > original_red(true) * 1.25);
     assert(std::abs(half_red(false) - original_red(false)) < 3.0);
 
     ExportService broken(nullptr, nullptr, std::make_shared<FailingMasks>());
