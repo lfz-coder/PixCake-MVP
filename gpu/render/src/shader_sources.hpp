@@ -9,9 +9,9 @@
 // keep row 0 first, so the grain hash sees the same coordinates.
 //
 // A fragment shader is kPrelude followed by one body.  The prelude holds the
-// operation's composite (composite() in render_executor.cpp): up to four
-// masks packed into the RGBA channels of one texture multiply into the
-// weight, then normal, multiply or screen blending by the pixel's alpha.
+// operation's blend back (blend_back() in render_executor.cpp, PhotoCraft
+// composite.rs blend_back): up to four masks packed into the RGBA channels of
+// one texture multiply into the coverage, then normal, multiply or screen.
 
 namespace pixcake::gpu::shaders {
 
@@ -23,12 +23,37 @@ uniform vec4 blend0;  // masks used (0..4), blend mode (0 normal, 1 multiply, 2 
 
 float clamp01(float v) { return clamp(v, 0.0, 1.0); }
 float luminance(vec3 p) { return 0.2126 * p.r + 0.7152 * p.g + 0.0722 * p.b; }
-vec4 composite(vec4 base, vec4 top, float opacity, float mode) {
-  opacity = clamp01(opacity) * top.a;
-  vec4 mixed = top;
-  if (mode > 0.5 && mode < 1.5) mixed = vec4(base.rgb * top.rgb, top.a);
-  if (mode > 1.5) mixed = vec4(1.0 - (1.0 - base.rgb) * (1.0 - top.rgb), top.a);
-  return base + (mixed - base) * clamp01(opacity);
+// B(cb, cs) for normal (0), multiply (1), screen (2) (adjust.cpp blendRgb).
+vec3 blend_rgb(vec3 cb, vec3 cs, float mode) {
+  if (mode > 0.5 && mode < 1.5) return cb * cs;
+  if (mode > 1.5) return cb + cs - cb * cs;
+  return cs;
+}
+// An operation's result back into the pixel by coverage k, alpha kept (adjust.cpp blendBack).
+vec4 blend_back(vec4 b, vec3 s, float k, float mode) {
+  if (k <= 0.0) return b;
+  vec3 blended = mode < 0.5 ? s : blend_rgb(b.rgb, s, mode);
+  float j = 1.0 - k;
+  return vec4(b.rgb * j + blended * k, b.a);
+}
+// A layer over the frame, straight alpha (adjust.cpp composite, W3C general formula).
+vec4 composite_layer(vec4 backdrop, vec4 source, float opacity, float mode) {
+  float ab = backdrop.a;
+  float as_ = source.a * opacity;
+  if (as_ <= 0.0) return backdrop;
+  float ao = as_ + ab * (1.0 - as_);
+  if (ao <= 0.0) return vec4(0.0);
+  vec3 cb = backdrop.rgb, cs = source.rgb;
+  vec3 o;
+  if (mode < 0.5) {
+    float kb = ab * (1.0 - as_);
+    float inv = 1.0 / ao;
+    o = (kb * cb + as_ * cs) * inv;
+  } else {
+    vec3 b = blend_rgb(cb, cs, mode);
+    o = ((1.0 - as_) * ab * cb + (1.0 - ab) * as_ * cs + as_ * ab * b) / ao;
+  }
+  return vec4(o, ao);
 }
 float mask_weight() {
   float weight = 1.0;
@@ -42,7 +67,7 @@ float mask_weight() {
   return weight;
 }
 vec4 finish(vec4 before, vec3 p) {
-  return clamp(composite(before, vec4(p, before.a), mask_weight(), blend0.y), 0.0, 1.0);
+  return clamp(blend_back(before, p, clamp01(mask_weight()), blend0.y), 0.0, 1.0);
 }
 )";
 
@@ -73,7 +98,7 @@ uniform vec4 tone1;    // highlights, shadows, whites, blacks (legacy)
 uniform vec4 tone2;    // local contrast (legacy), -, -, -
 uniform vec4 groups0;  // levels, monochrome, hsl, selective (1 = on)
 uniform vec4 groups1;  // grading, absolute selective mode, grading blend, grading balance
-uniform vec4 levels0;  // input black, input white, gamma, output black
+uniform vec4 levels0;  // Levels master (0..1): input black, input white, gamma, output black
 uniform vec4 levels1;  // output white, -, -, -
 uniform vec4 hue_a;    // Color Mixer sliders per band (red, orange, yellow, green)
 uniform vec4 hue_b;    //                              (aqua, blue, purple, magenta)
@@ -83,7 +108,7 @@ uniform vec4 light_a;
 uniform vec4 light_b;
 uniform vec4 mix_a;    // black-and-white mix per band
 uniform vec4 mix_b;
-uniform vec4 ink0;     // selective colour per target: cyan, magenta, yellow, black
+uniform vec4 ink0;     // selective colour per target (percent / 100): cyan, magenta, yellow, black
 uniform vec4 ink1;
 uniform vec4 ink2;
 uniform vec4 ink3;
@@ -244,11 +269,38 @@ vec3 tone(vec3 p) {
   if (cr1.w > 0.5) p = cr_presence(p);
   return p;
 }
-vec3 levels(vec3 p) {
-  float span = max(levels0.y - levels0.x, 1.0 / 255.0);
-  vec3 x = pow(clamp((p - levels0.x) / span, 0.0, 1.0), vec3(1.0 / levels0.z));
-  return levels0.w + x * (levels1.x - levels0.w);
+// Levels: PhotoCraft's 8-bit Photoshop Levels (adjust.cpp levelsQ / levelsLut / sampleLut). The
+// table is not uploaded: its two entries around the sample are computed here.
+float levels_gamma(float u, float g) {
+  float c = 1.0 / g;
+  if (g <= 1.0) return pow(u, c);
+  float a = pow(2.0, g), q = 2.2;
+  float u1 = pow((1.0 - c / q) / (a * (1.0 - 1.0 / q)), 1.0 / (1.0 - c));
+  if (u >= u1 || u1 <= 0.0) return pow(u, c);
+  float b = (a * u1 - pow(u1, c)) / pow(u1, q);
+  if (isinf(b) || isnan(b)) return pow(u, c);
+  return a * u - b * pow(u, q);
 }
+float levels_whole(float x) { return floor(x * 255.0 + 0.5) / 255.0; }
+float levels_q(float v, float ib, float iw, float gm, float ob, float ow) {
+  float range = max(iw - ib, 1e-6);
+  float w = floor(v * 255.0 + 0.5) / 255.0;
+  float u = floor(clamp((w - ib) / range, 0.0, 1.0) * 255.0 + 0.5 + 1e-3) / 255.0;
+  float t = levels_whole(levels_gamma(u, max(gm, 0.01)));
+  return levels_whole(ob + t * (ow - ob));
+}
+float levels_entry(int k) {
+  float x = float(k) / 4095.0;
+  return levels_q(levels_q(x, 0.0, 1.0, 1.0, 0.0, 1.0), levels0.x, levels0.y, levels0.z, levels0.w, levels1.x);
+}
+float levels_sample(float v) {
+  float x = clamp(v, 0.0, 1.0) * 4095.0;
+  int i = int(x);
+  int j = min(i + 1, 4095);
+  float f = x - float(i);
+  return levels_entry(i) * (1.0 - f) + levels_entry(j) * f;
+}
+vec3 levels(vec3 p) { return vec3(levels_sample(p.r), levels_sample(p.g), levels_sample(p.b)); }
 // Stage 6, Color Mixer; greys come back unchanged.
 float band_of(vec4 a, vec4 b, int k) { return k < 4 ? a[k] : b[k - 4]; }
 vec3 hsl(vec3 c) {
@@ -281,31 +333,33 @@ vec3 monochrome(vec3 p) {
   }
   return vec3(grey);
 }
-vec3 selective(vec3 p) {
-  float r = p.r, g = p.g, b = p.b;
-  float high = max3(p), low = min3(p);
-  float mid = r + g + b - high - low;
-  float weight[9] = float[9](r == high ? high - mid : 0.0, b == low ? mid - low : 0.0,
-                             g == high ? high - mid : 0.0, r == low ? mid - low : 0.0,
-                             b == high ? high - mid : 0.0, g == low ? mid - low : 0.0,
-                             low > 0.5 ? (low - 0.5) * 2.0 : 0.0,
-                             max(0.0, 1.0 - (abs(high - 0.5) + abs(low - 0.5))),
-                             high < 0.5 ? (0.5 - high) * 2.0 : 0.0);
+// Selective colour: PhotoCraft's Photoshop Selective Color (adjust.cpp selectiveColor).
+vec3 selective(vec3 c) {
+  float mx = max3(c), mn = min3(c);
+  float mid = c.r + c.g + c.b - mx - mn;
+  float w[9] = float[9](c.r >= mx ? mx - mid : 0.0, c.b <= mn ? mid - mn : 0.0, c.g >= mx ? mx - mid : 0.0,
+                        c.r <= mn ? mid - mn : 0.0, c.b >= mx ? mx - mid : 0.0, c.g <= mn ? mid - mn : 0.0,
+                        max((mn - 0.5) * 2.0, 0.0), clamp(1.0 - abs(mx - 0.5) - abs(mn - 0.5), 0.0, 1.0),
+                        max((0.5 - mx) * 2.0, 0.0));
   vec4 inks[9] = vec4[9](ink0, ink1, ink2, ink3, ink4, ink5, ink6, ink7, ink8);
-  vec3 out_;
-  for (int c = 0; c < 3; ++c) {
-    float ink = 1.0 - p[c];
-    float change = 0.0;
-    for (int t = 0; t < 9; ++t) {
-      if (weight[t] <= 0.0) continue;
-      float s = inks[t][c], k = inks[t].w;
-      float next = clamp01(groups1.y > 0.5 ? ink + s : ink * (1.0 + s));
-      next += k * (k > 0.0 ? 1.0 - next : next);
-      change += weight[t] * (next - ink);
+  bool relative = groups1.y < 0.5;
+  vec3 delta = vec3(0.0);
+  for (int r = 0; r < 9; ++r) {
+    if (w[r] <= 0.0) continue;
+    for (int i = 0; i < 3; ++i) {
+      float ink = 1.0 - c[i];
+      float d = inks[r][i] + inks[r].w;
+      if (relative) {
+        d = d * ink;
+      } else if (d > 0.0) {
+        d = d * min(2.0 * (1.0 - ink), 1.0);
+      } else {
+        d = d * min(2.0 * ink, 1.0);
+      }
+      delta[i] += d * w[r];
     }
-    out_[c] = clamp01(p[c] - change);
   }
-  return out_;
+  return clamp(c - delta, 0.0, 1.0);
 }
 // Stage 7, Color Grading: shadows / midtones / highlights / global wheels.
 float cr_smoothstep(float e0, float e1, float x) {
@@ -345,47 +399,65 @@ void main() {
 
 // Detail grain (Grain): lattice value noise mixed with per-pixel noise.
 inline constexpr const char* kGrain = R"(
-uniform vec4 grain0;  // amount, shadows, midtones, highlights
-uniform vec4 grain1;  // 1 / cell, roughness, colour, -
+uniform vec4 grain0;  // Camera Raw grain: cell, roughness, amount, scale (full-resolution px per px)
+uniform vec4 grain1;  // PixCake zones shadows, midtones, highlights; colour
 uniform vec4 grain2;  // the tile's origin in the frame: x, y
 
-float hash01(uint x, uint y, uint channel) {
-  uint h = x * 0x8da6b343u ^ y * 0xd8163841u ^ channel * 0xcb1ab31fu;
-  h ^= h >> 16;
-  h *= 0x7feb352du;
-  h ^= h >> 15;
-  h *= 0x846ca68bu;
-  h ^= h >> 16;
-  return float(h & 0xFFFFFFu) * (1.0 / 16777216.0);
+// PhotoCraft photo_util.rs hash01 in 64-bit words emulated as (low, high), as camera_raw.wgsl.
+uvec2 mul_wide(uint a, uint b) {
+  uint a0 = a & 0xffffu, a1 = a >> 16u, b0 = b & 0xffffu, b1 = b >> 16u;
+  uint p00 = a0 * b0, p01 = a0 * b1, p10 = a1 * b0, p11 = a1 * b1;
+  uint mid = (p00 >> 16u) + (p01 & 0xffffu) + (p10 & 0xffffu);
+  return uvec2((p00 & 0xffffu) | (mid << 16u), p11 + (p01 >> 16u) + (p10 >> 16u) + (mid >> 16u));
 }
-float value_noise(float x, float y, uint channel) {
-  float fx = floor(x), fy = floor(y);
-  uint ix = uint(int(fx)), iy = uint(int(fy));
-  float tx = x - fx, ty = y - fy;
-  tx = tx * tx * (3.0 - 2.0 * tx);
-  ty = ty * ty * (3.0 - 2.0 * ty);
-  float top = hash01(ix, iy, channel) + (hash01(ix + 1u, iy, channel) - hash01(ix, iy, channel)) * tx;
-  float bottom = hash01(ix, iy + 1u, channel) + (hash01(ix + 1u, iy + 1u, channel) - hash01(ix, iy + 1u, channel)) * tx;
-  return top + (bottom - top) * ty;
+uvec2 mul64(uvec2 a, uvec2 b) {
+  uvec2 w = mul_wide(a.x, b.x);
+  return uvec2(w.x, w.y + a.x * b.y + a.y * b.x);
 }
-float noise(uint x, uint y, uint channel) {
-  float smooth_ = value_noise(float(x) * grain1.x, float(y) * grain1.x, channel);
-  return smooth_ + (hash01(x, y, channel + 8u) - smooth_) * grain1.y - 0.5;
+uvec2 shr64(uvec2 z, uint n) { return uvec2((z.x >> n) | (z.y << (32u - n)), z.y >> n); }
+uvec2 i64_(int v) { return uvec2(uint(v), v < 0 ? 0xffffffffu : 0u); }
+float hash01(int x, int y, uint seed) {
+  uvec2 z = mul64(i64_(x), uvec2(0x7f4a7c15u, 0x9e3779b9u)) ^ mul64(i64_(y), uvec2(0x27d4eb4fu, 0xc2b2ae3du)) ^
+            mul64(uvec2(seed, 0u), uvec2(0x9e3779f9u, 0x165667b1u));
+  z = mul64(z ^ shr64(z, 30u), uvec2(0x1ce4e5b9u, 0xbf58476du));
+  z = mul64(z ^ shr64(z, 27u), uvec2(0x133111ebu, 0x94d049bbu));
+  z = z ^ shr64(z, 31u);
+  return float(z.y >> 8u) / 16777216.0;
+}
+float value_noise(float x, float y, uint seed) {
+  float xi = floor(x), yi = floor(y);
+  float tx = x - xi, ty = y - yi;
+  float sx = tx * tx * (3.0 - 2.0 * tx), sy = ty * ty * (3.0 - 2.0 * ty);
+  int ix = int(xi), iy = int(yi);
+  float h00 = hash01(ix, iy, seed), h10 = hash01(ix + 1, iy, seed);
+  float h01 = hash01(ix, iy + 1, seed), h11 = hash01(ix + 1, iy + 1, seed);
+  float top = h00 + (h10 - h00) * sx;
+  float bot = h01 + (h11 - h01) * sx;
+  return top + (bot - top) * sy;
+}
+// camera_raw.cpp grainNoise: two octaves in full-resolution coordinates.
+float grain_noise(float x, float y, uint seed) {
+  float fx = x * grain0.w / grain0.x, fy = y * grain0.w / grain0.x;
+  return value_noise(fx, fy, seed) * (1.0 - grain0.y) + (value_noise(fx * 2.3, fy * 2.3, seed + 7u) - 0.0) * grain0.y;
+}
+float grain_zone(float l, float s, float m, float h) {
+  return max(0.0, 1.0 - l / 0.5) * s + max(0.0, 1.0 - abs(l - 0.5) / 0.5) * m + max(0.0, 1.0 - (1.0 - l) / 0.5) * h;
 }
 
 void main() {
-  uint x = uint(gl_FragCoord.x) + uint(grain2.x), y = uint(gl_FragCoord.y) + uint(grain2.y);
+  float x = float(uint(gl_FragCoord.x) + uint(grain2.x)), y = float(uint(gl_FragCoord.y) + uint(grain2.y));
   vec4 before = texelFetch(source, ivec2(gl_FragCoord.xy), 0);
   vec3 p = before.rgb;
-  float l = luminance(p);
-  float zone = max(0.0, 1.0 - l / 0.5) * grain0.y + max(0.0, 1.0 - abs(l - 0.5) / 0.5) * grain0.z +
-               max(0.0, 1.0 - (1.0 - l) / 0.5) * grain0.w;
-  float strength = grain0.x * zone * 0.5;
-  if (strength > 0.0) {
-    float mono = noise(x, y, 0u);
-    p.r += strength * (mono + (noise(x, y, 1u) - mono) * grain1.z);
-    p.g += strength * (mono + (noise(x, y, 2u) - mono) * grain1.z);
-    p.b += strength * (mono + (noise(x, y, 3u) - mono) * grain1.z);
+  float l = clamp(luminance(p), 0.0, 1.0);
+  float zone = grain_zone(l, grain1.x, grain1.y, grain1.z) / grain_zone(l, 0.30, 0.50, 0.15);
+  if (zone > 0.0) {
+    float w = (0.4 + 2.4 * l * (1.0 - l)) * zone;
+    float mono = grain_noise(x, y, 0u);
+    vec3 n = vec3(mono);
+    if (grain1.w > 0.0) {
+      for (int k = 0; k < 3; ++k) n[k] = mono + (grain_noise(x, y, uint(k + 1)) - mono) * grain1.w;
+    }
+    p += (n - 0.5) * 2.0 * grain0.z * w;
   }
   color = finish(before, p);
 }
@@ -400,7 +472,7 @@ void main() {
   vec4 before = texelFetch(source, ivec2(gl_FragCoord.xy), 0);
   vec4 top = texelFetch(layer, ivec2(gl_FragCoord.xy), 0);
   float amount = layer0.x * (layer0.y > 0.5 ? texelFetch(masks, ivec2(gl_FragCoord.xy), 0).r : 1.0);
-  color = clamp(composite(before, top, amount, layer0.z), 0.0, 1.0);
+  color = clamp(composite_layer(before, top, clamp01(amount), layer0.z), 0.0, 1.0);
 }
 )";
 
