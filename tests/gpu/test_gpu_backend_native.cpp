@@ -230,8 +230,13 @@ int main() {
   };
   const Case cases[] = {
       {"tone", {global({v("temperature", -30), v("exposure", 0.4), v("brightness", 10), v("contrast", 25),
-                        v("highlights", -40), v("shadows", 35), v("whites", 20), v("blacks", -15), v("clarity", 30),
-                        v("texture", 10), v("dehaze", 5), v("vibrance", 40), v("saturation", -20)})}},
+                        v("vibrance", 40), v("saturation", -20)})}},
+      // Camera Raw's whole-frame stages have no shader yet: the operation runs on the reference,
+      // over the whole frame even when the export is drawn in tiles.
+      {"tone, whole-frame (reference)", {global({v("exposure", 0.4), v("contrast", 25), v("highlights", -40),
+                                                 v("shadows", 35), v("whites", 20), v("blacks", -15),
+                                                 v("clarity", 30), v("texture", 10), v("dehaze", 5)})},
+       nullptr, false},
       {"levels", {global({v("levels_rgb_input_black", 20), v("levels_rgb_input_white", 230),
                           v("levels_rgb_input_gray", 0.3), v("levels_rgb_output_black", 10),
                           v("levels_rgb_output_white", 240)})}},
@@ -277,7 +282,7 @@ int main() {
                              grain({v("grain_amount", 60)})}},
       {"local, one mask", {colour("color.local", "pixcake.color.local", {v("exposure", 0.6), v("saturation", 30),
                                                                           v("temperature", 40)}, {"m0"})}, &extras},
-      {"local, 3 masks, mult", {colour("color.local", "pixcake.color.local", {v("contrast", 40), v("shadows", 50)},
+      {"local, 3 masks, mult", {colour("color.local", "pixcake.color.local", {v("contrast", 40), v("saturation", 50)},
                                        {"m1", "m2", "m3"}, "multiply")}, &extras},
       {"post, 4 masks, screen", {colour("color.post", "pixcake.color.post", {v("brightness", -20), v("vibrance", 50)},
                                         {"m0", "m1", "m2", "m3"}, "screen")}, &extras},
@@ -355,6 +360,18 @@ int main() {
       std::printf("gpu tiles    %-20s max diff %d, %zu differ\n", item.name, tile_worst, tile_off);
       if (tile_worst > 1) {
         std::fprintf(stderr, "FAIL %s in tiles: differs from reference by %d (%s)\n", item.name, tile_worst, tile_error.c_str());
+        ++failures;
+      }
+    } else {
+      // A fallback renders the whole frame on the reference, so tiling cannot cut it up.
+      pixcake::gpu::RenderResult in_tiles;
+      std::string tile_error;
+      const bool tiles_drawn = tiled.execute(context, multi, padded, case_inputs, in_tiles, tile_error);
+      std::size_t tile_off = 0;
+      const int tile_worst = tiles_drawn && in_tiles.reference_fallback ? worst_of(in_tiles.image, on_cpu.image, tile_off) : 999;
+      std::printf("gpu tiles    %-20s max diff %d, %zu differ (reference)\n", item.name, tile_worst, tile_off);
+      if (tile_worst != 0) {
+        std::fprintf(stderr, "FAIL %s in tiles: fallback differs from reference by %d\n", item.name, tile_worst);
         ++failures;
       }
     }

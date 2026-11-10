@@ -80,8 +80,8 @@ void main() {
 
 // The colour and tone steps and the global tool's sub-groups, in the order of
 // draw_reference (render_executor.cpp): Camera Raw white balance and exposure,
-// AI style tint, Photoshop modern brightness, legacy lift and local contrast,
-// Camera Raw Contrast and Presence; then levels, black-and-white or the Camera
+// AI style tint, Photoshop modern brightness, Camera Raw Contrast and Presence
+// (the whole-frame controls run on the reference only); then levels, black-and-white or the Camera
 // Raw Color Mixer, selective colour, Camera Raw Color Grading.  The Camera Raw
 // and brightness functions are line-for-line ports of camera_raw.cpp and
 // brightness.cpp (PhotoCraft 885a6ddf27cc58c07faf1722e5c327cd38953657, MIT;
@@ -94,8 +94,6 @@ uniform vec4 bright0;  // brightness curve: s, e, x0, alpha
 uniform vec4 bright1;  // brightness on, raise, hermite, -
 uniform vec4 bright2;  // end slopes past 0 and past 1 (lut_extended), -, -
 uniform vec4 tone0;    // style, -, -, -
-uniform vec4 tone1;    // highlights, shadows, whites, blacks (legacy)
-uniform vec4 tone2;    // local contrast (legacy), -, -, -
 uniform vec4 groups0;  // levels, monochrome, hsl, selective (1 = on)
 uniform vec4 groups1;  // grading, absolute selective mode, grading blend, grading balance
 uniform vec4 levels0;  // Levels master (0..1): input black, input white, gamma, output black
@@ -259,12 +257,6 @@ vec3 colour_step(vec3 p) {
 }
 vec3 tone(vec3 p) {
   if (bright1.x > 0.5) p = vec3(modern_brightness(p.r), modern_brightness(p.g), modern_brightness(p.b));
-  if (tone1 != vec4(0.0)) {
-    float l = luminance(p);
-    float hi = clamp01((l - 0.5) * 2.0), lo = clamp01((0.5 - l) * 2.0);
-    p += tone1.x * hi * 0.45 + tone1.y * lo * 0.45 + tone1.z * hi * 0.2 + tone1.w * lo * 0.2;
-  }
-  if (tone2.x != 0.0) p = (p - 0.5) * (1.0 + tone2.x) + 0.5;
   if (cr1.x != 0.0) p = cr_contrast(p);
   if (cr1.w > 0.5) p = cr_presence(p);
   return p;

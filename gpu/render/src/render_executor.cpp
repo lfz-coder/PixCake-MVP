@@ -4,6 +4,7 @@
 #include "pixcake/gpu/adjust.hpp"
 #include "pixcake/gpu/brightness.hpp"
 #include "pixcake/gpu/camera_raw.hpp"
+#include "pixcake/gpu/camera_raw_spatial.hpp"
 #include "shader_sources.hpp"
 
 #include <algorithm>
@@ -74,11 +75,11 @@ Pixel with_rgb(Pixel p, const cr::Rgb& c) {
 //   2. AI style tint (amount; PixCake's provisional offset)
 //   3. Photoshop modern brightness (PhotoCraft port; placed after stage 1 by the
 //      2026-11-09 user decision), continued past 0..1 as PhotoCraft's lut_extended
-//   4. highlights/shadows/whites/blacks lift and clarity/texture/dehaze local
-//      contrast -- PixCake legacy-provisional placeholders until their spatial
-//      and image-statistics stages are ported
-//   5. Camera Raw stage 3, Contrast; 6. stage 4, Vibrance / Saturation
-// then the global tool's groups (apply_color_groups).
+//   4. Camera Raw stage 3, Contrast; 5. stage 4, Vibrance / Saturation
+// then the global tool's groups (apply_color_groups).  An operation with any of
+// Camera Raw's whole-frame controls (dehaze, highlights, shadows, texture,
+// clarity, whites, blacks) runs them between steps 3 and 5 in develop's order
+// instead (draw_spatial; camera_raw_spatial.cpp), on the reference path only.
 struct ToneColor {
   bool balance = false;
   cr::Rgb gains{1.0F, 1.0F, 1.0F};
@@ -87,8 +88,10 @@ struct ToneColor {
   std::vector<float> brightness_lut;
   std::array<float, 2> brightness_slopes{1.0F, 1.0F};  // past 0 and past 1 (lut_extended)
   float brightness = 0;  // slider -100..100 (the GPU evaluates the curve from it)
-  float highlights = 0, shadows = 0, whites = 0, blacks = 0, local = 0;
   float contrast = 0, vibrance = 0, saturation = 0;  // Camera Raw sliders, -100..100
+  // Camera Raw's whole-frame sliders, -100..100.
+  float dehaze = 0, highlights = 0, shadows = 0, texture = 0, clarity = 0, whites = 0, blacks = 0;
+  bool spatial = false;
 };
 ToneColor tone_color_of(const std::map<std::string, float>& v) {
   ToneColor t;
@@ -105,25 +108,25 @@ ToneColor tone_color_of(const std::map<std::string, float>& v) {
     t.brightness_lut = br::modernLut(t.brightness);
     t.brightness_slopes = br::endSlopes(t.brightness_lut);
   }
-  t.highlights = get(v, "highlights") / 100.0F;
-  t.shadows = get(v, "shadows") / 100.0F;
-  t.whites = get(v, "whites") / 100.0F;
-  t.blacks = get(v, "blacks") / 100.0F;
-  t.local = (get(v, "clarity") + get(v, "texture") + get(v, "dehaze")) / 300.0F * 0.35F;
+  t.dehaze = get(v, "dehaze");
+  t.highlights = get(v, "highlights");
+  t.shadows = get(v, "shadows");
+  t.texture = get(v, "texture");
+  t.clarity = get(v, "clarity");
+  t.whites = get(v, "whites");
+  t.blacks = get(v, "blacks");
+  t.spatial = t.dehaze != 0.0F || t.highlights != 0.0F || t.shadows != 0.0F || t.texture != 0.0F ||
+              t.clarity != 0.0F || t.whites != 0.0F || t.blacks != 0.0F;
   t.contrast = get(v, "contrast");
   t.saturation = get(v, "saturation");
   t.vibrance = get(v, "vibrance");
   return t;
 }
-bool lift_is_active(const ToneColor& t) {
-  return t.highlights != 0.0F || t.shadows != 0.0F || t.whites != 0.0F || t.blacks != 0.0F;
-}
 bool color_is_active(const ToneColor& t) {
   return t.balance || std::abs(t.style) > 1e-7F;
 }
 bool tone_is_active(const ToneColor& t) {
-  return t.brightness_on || lift_is_active(t) || t.local != 0.0F || t.contrast != 0.0F || t.vibrance != 0.0F ||
-         t.saturation != 0.0F;
+  return t.brightness_on || t.spatial || t.contrast != 0.0F || t.vibrance != 0.0F || t.saturation != 0.0F;
 }
 // Steps 1 and 2.
 Pixel color(Pixel p, const ToneColor& t) {
@@ -131,27 +134,26 @@ Pixel color(Pixel p, const ToneColor& t) {
   p.r += t.style * 0.04F; p.g += t.style * 0.01F; p.b -= t.style * 0.03F;
   return p;
 }
-// Steps 3 to 6; a step whose controls are at rest leaves the pixel untouched.
-Pixel tone(Pixel p, const ToneColor& t) {
+// Step 3, brightness.
+Pixel tone_brightness(Pixel p, const ToneColor& t) {
   if (t.brightness_on) {
     p.r = br::sampleLutExtended(t.brightness_lut, p.r);
     p.g = br::sampleLutExtended(t.brightness_lut, p.g);
     p.b = br::sampleLutExtended(t.brightness_lut, p.b);
   }
-  if (lift_is_active(t)) {
-    const float l = luminance(p);
-    const float hi = clamp01((l - 0.5F) * 2.0F), lo = clamp01((0.5F - l) * 2.0F);
-    const float lift = t.highlights * hi * 0.45F + t.shadows * lo * 0.45F + t.whites * hi * 0.2F + t.blacks * lo * 0.2F;
-    p.r += lift; p.g += lift; p.b += lift;
-  }
-  if (t.local != 0.0F) {
-    p.r = (p.r - 0.5F) * (1.0F + t.local) + 0.5F;
-    p.g = (p.g - 0.5F) * (1.0F + t.local) + 0.5F;
-    p.b = (p.b - 0.5F) * (1.0F + t.local) + 0.5F;
-  }
-  if (t.contrast != 0.0F) p = with_rgb(p, cr::applyContrast(rgb_of(p), t.contrast));
+  return p;
+}
+// Step 5, presence.
+Pixel tone_presence(Pixel p, const ToneColor& t) {
   if (t.vibrance != 0.0F || t.saturation != 0.0F) p = with_rgb(p, cr::applyPresence(rgb_of(p), t.vibrance, t.saturation));
   return p;
+}
+// Steps 3 to 5 for an operation without whole-frame controls; a step whose controls are at
+// rest leaves the pixel untouched.
+Pixel tone(Pixel p, const ToneColor& t) {
+  p = tone_brightness(p, t);
+  if (t.contrast != 0.0F) p = with_rgb(p, cr::applyContrast(rgb_of(p), t.contrast));
+  return tone_presence(p, t);
 }
 // ---- color.global sub-groups and detail grain (requirement 10.3) -----------
 // 像素蛋糕's own formulas are not published.  These are the project's
@@ -460,10 +462,11 @@ bool has_prefix(std::string_view text, std::string_view prefix) {
 // reference (test_gpu_backend_C57_C60, test_gpu_shader_path).  A channel
 // outside this list falls back to the reference.  The colour editor's offsets
 // are drawn by neither path (no target colour yet), so they do not block it.
+// Camera Raw's whole-frame controls (dehaze, Highlights/Shadows, Texture/Clarity,
+// Whites/Blacks) have no shader yet: an operation that moves one runs on the reference.
 const std::set<std::string_view>& tone_channels() {
-  static const std::set<std::string_view> channels = {
-      "temperature", "tint",    "exposure", "contrast", "brightness", "highlights", "shadows",
-      "whites",      "blacks",  "clarity",  "texture",  "dehaze",     "vibrance",   "saturation"};
+  static const std::set<std::string_view> channels = {"temperature", "tint",     "exposure",  "contrast",
+                                                      "brightness",  "vibrance", "saturation"};
   return channels;
 }
 bool gpu_channel(std::string_view capability, std::string_view channel) {
@@ -513,6 +516,7 @@ struct PreparedOperation {
   Grain grain;
   ToneColor tone_color;
   Blend blend = Blend::Normal;
+  float pixel_scale = 1.0F;  // RenderInputs::pixel_scale (texture and grain)
 };
 
 // Checks the frame, records every operation's status and diagnostics in
@@ -607,6 +611,7 @@ bool prepare(const pixcake::render::RenderDescription& description, const RgbaIm
     draw.tone_color = tone_color_of(values);
     draw.color_active = color_is_active(draw.tone_color);
     draw.tone_active = tone_is_active(draw.tone_color);
+    draw.pixel_scale = inputs.pixel_scale;
     draw.lut_amount = values.find("amount") == values.end() ? 1.0F : clamp01(get(values, "amount") / 100.0F);
     draw.blend = blend_of(operation.blend_mode);
     draws.push_back(std::move(draw));
@@ -614,7 +619,58 @@ bool prepare(const pixcake::render::RenderDescription& description, const RgbaIm
   return true;
 }
 
+float coverage(const PreparedOperation& draw, std::size_t pixel) {
+  float weight = 1.0F;
+  if (draw.masks.size() == 1) return draw.masks.front()->alpha[pixel] / 255.0F;
+  for (const auto* mask : draw.masks) weight *= mask->alpha[pixel] / 255.0F;
+  return weight;
+}
+
+// An operation with Camera Raw's whole-frame controls: the per-pixel steps before them, then
+// PhotoCraft develop's stages 2, 3 and 3b on the whole frame (unclipped floats), then the
+// per-pixel steps after them, blended back by coverage.  Masks choose where the result shows;
+// the whole-frame stages always see the whole frame.
+void draw_spatial(const PreparedOperation& draw, RgbaImage& frame) {
+  const ToneColor& t = draw.tone_color;
+  cr::Frame f;
+  f.width = frame.width;
+  f.height = frame.height;
+  f.px.resize(static_cast<std::size_t>(frame.width) * frame.height);
+  std::vector<Pixel> before(f.px.size());
+  for (std::uint32_t y = 0; y < frame.height; ++y) {
+    for (std::uint32_t x = 0; x < frame.width; ++x) {
+      const std::size_t i = static_cast<std::size_t>(y) * frame.width + x;
+      before[i] = read(frame, x, y);
+      Pixel p = before[i];
+      if (draw.color_active) p = color(p, t);
+      p = tone_brightness(p, t);
+      f.px[i] = {p.r, p.g, p.b, p.a};
+    }
+  }
+  if (t.dehaze != 0.0F) cr::dehaze(f, t.dehaze / 100.0F);
+  if (t.shadows != 0.0F || t.highlights != 0.0F) cr::localTone(f, t.shadows, t.highlights);
+  if (t.contrast != 0.0F || t.texture != 0.0F || t.clarity != 0.0F) cr::toneDetail(f, t.contrast, t.texture, t.clarity, draw.pixel_scale);
+  if (t.whites != 0.0F || t.blacks != 0.0F) cr::whitesBlacks(f, t.whites, t.blacks);
+  for_rows(frame.width, frame.height, [&](std::uint32_t first, std::uint32_t end) {
+    for (std::uint32_t y = first; y < end; ++y) for (std::uint32_t x = 0; x < frame.width; ++x) {
+      const std::size_t i = static_cast<std::size_t>(y) * frame.width + x;
+      Pixel after{f.px[i][0], f.px[i][1], f.px[i][2], before[i].a};
+      after = tone_presence(after, t);
+      if (draw.has_groups) after = apply_color_groups(after, draw.groups);
+      if (draw.masks.empty() && draw.blend == Blend::Normal && before[i].a >= 1.0F) {
+        write(frame, x, y, after);
+      } else {
+        write(frame, x, y, blend_back(before[i], after, coverage(draw, i), draw.blend));
+      }
+    }
+  });
+}
+
 void draw_reference(const PreparedOperation& draw, RgbaImage& frame) {
+  if (!draw.has_lut && draw.tone_active && draw.tone_color.spatial) {
+    draw_spatial(draw, frame);
+    return;
+  }
   const RenderMask* single_mask = draw.masks.size() == 1 ? draw.masks.front() : nullptr;
   const bool direct_normal = draw.masks.empty() && draw.blend == Blend::Normal;
   for_rows(frame.width, frame.height, [&](std::uint32_t first, std::uint32_t end) {
@@ -792,8 +848,6 @@ bool set_color_uniforms(gl::Program& program, const PreparedOperation& draw, std
             program.setVec4("bright1", {flag(t.brightness_on), flag(curve.raise), flag(curve.hermite), 0.0F}, error) &&
             program.setVec4("bright2", {t.brightness_slopes[0], t.brightness_slopes[1], 0.0F, 0.0F}, error) &&
             program.setVec4("tone0", {t.style, 0.0F, 0.0F, 0.0F}, error) &&
-            program.setVec4("tone1", {t.highlights, t.shadows, t.whites, t.blacks}, error) &&
-            program.setVec4("tone2", {t.local, 0.0F, 0.0F, 0.0F}, error) &&
             program.setVec4("groups0", {flag(draw.has_groups && g.levels), flag(draw.has_groups && g.monochrome),
                                         flag(draw.has_groups && g.hsl), flag(draw.has_groups && g.selective)}, error) &&
             program.setVec4("groups1", {flag(draw.has_groups && g.grading), flag(g.absolute), g.grade.blend,
@@ -930,7 +984,7 @@ bool RenderExecutor::execute(gl::Context& context, const pixcake::render::Render
   if (!gpu_supported) {
     const bool ok = renderReference(description, input, inputs, result);
     result.reference_fallback = true;
-    result.diagnostics.push_back({"", "当前绘制描述包含 GPU 路径未覆盖的内容（3D LUT、超过四个蒙版或未登记的参数），已回退 reference", false});
+    result.diagnostics.push_back({"", "当前绘制描述包含 GPU 路径未覆盖的内容（3D LUT、超过四个蒙版、Camera Raw 整帧参数或未登记的参数），已回退 reference", false});
     context.doneCurrent();
     if (!ok) error = "reference render failed";
     return ok;
