@@ -3,12 +3,21 @@
 #include <pixcake/gpu/camera_raw_spatial.hpp>
 
 #include <algorithm>
-#include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
+
+// Checked in every build type (the release benchmark build defines NDEBUG).
+#define CHECK(x)                                                              \
+  do {                                                                        \
+    if (!(x)) {                                                               \
+      std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #x);      \
+      std::abort();                                                           \
+    }                                                                         \
+  } while (0)
 
 namespace {
 
@@ -60,7 +69,7 @@ void test_spatial_matches_photocraft() {
         worst = std::max(worst, d);
         if (!(d <= 1e-5F)) {
           std::printf("%s / %s pixel %zu c%d: got %.9g want %.9g\n", c.frame, c.name, k * c.stride, ch, got, want);
-          assert(false);
+          CHECK(false);
         }
       }
     }
@@ -69,9 +78,8 @@ void test_spatial_matches_photocraft() {
 }
 
 void test_box_radii() {  // Kovesi's triple, and one radius-1 pass below sigma ~0.577
-  assert((cr::gaussBoxRadii(0.4F) == std::array<std::size_t, 3>{1, 0, 0}));
-  const auto r = cr::gaussBoxRadii(3.0F);
-  assert(r[0] >= 2 && r[2] <= 4);
+  CHECK((cr::gaussBoxRadii(0.4F) == std::array<std::size_t, 3>{1, 0, 0}));
+  CHECK(cr::gaussBoxRadii(3.0F)[0] >= 2 && cr::gaussBoxRadii(3.0F)[2] <= 4);
 }
 
 }  // namespace

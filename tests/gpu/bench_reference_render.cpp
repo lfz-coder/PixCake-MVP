@@ -135,5 +135,17 @@ int main() {
     return pixcake::gpu::RenderExecutor{}.renderReference(all, interactive, {}, result);
   });
   std::printf("%-20s %7.1f ms %7.1f ms\n", "interactive 600px, all", interactive_reference, -1.0);
+
+  // Camera Raw's whole-frame stages (dehaze, Highlights/Shadows, Texture/Clarity, Whites/Blacks)
+  // run on the reference only; the GPU falls back to it.  The 4000 px frame is timed once.
+  const auto spatial = op("color.global", "tone", "pixcake.color.global",
+                          {value("dehaze", 30), value("shadows", 50), value("highlights", -40), value("texture", 20),
+                           value("clarity", 30), value("whites", 20), value("blacks", -20)});
+  const double spatial_interactive = best_ms([&] { return pixcake::gpu::RenderExecutor{}.renderReference(spatial, interactive, {}, result); });
+  std::printf("%-20s %7.1f ms %7.1f ms\n", "interactive 600px, spatial", spatial_interactive, -1.0);
+  const auto start = std::chrono::steady_clock::now();
+  const bool spatial_ok = pixcake::gpu::RenderExecutor{}.renderReference(spatial, input, {}, result);
+  const double spatial_preview = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+  std::printf("%-20s %7.1f ms %7.1f ms\n", "4000px, spatial (1 run)", spatial_ok ? spatial_preview : -1.0, -1.0);
   return 0;
 }

@@ -7,13 +7,21 @@
 
 #include <algorithm>
 #include <array>
-#include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <initializer_list>
 #include <string>
+
+// Checked in every build type (the release benchmark build defines NDEBUG).
+#define CHECK(x)                                                              \
+  do {                                                                        \
+    if (!(x)) {                                                               \
+      std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #x);      \
+      std::abort();                                                           \
+    }                                                                         \
+  } while (0)
 
 namespace {
 
@@ -62,7 +70,8 @@ RgbaImage scene(std::uint32_t w, std::uint32_t h) {
 }
 RenderResult run(const RenderDescription& d, const RgbaImage& input, const RenderInputs& inputs = {}) {
   RenderResult result;
-  assert(RenderExecutor{}.renderReference(d, input, inputs, result));
+  const bool ok = RenderExecutor{}.renderReference(d, input, inputs, result);
+  CHECK(ok);
   return result;
 }
 std::uint8_t q(float v) { return static_cast<std::uint8_t>(std::lround(std::clamp(v, 0.0F, 1.0F) * 255.0F)); }
@@ -90,7 +99,7 @@ void test_spatial_order_matches_develop() {
     for (int k = 0; k < 3; ++k) {
       if (result.image.pixels[i * 4 + k] != q(c[k])) {
         std::printf("pixel %zu c%d: got %d want %d\n", i, k, result.image.pixels[i * 4 + k], q(c[k]));
-        assert(false);
+        CHECK(false);
       }
     }
   }
@@ -132,7 +141,7 @@ void test_spatial_preview_matches_export() {
   // PhotoCraft's own preview/export gap (pyramid depth and percentiles follow the frame size;
   // the port matches PhotoCraft bit for bit): measured mean 2.45, worst 5 here, mean 0.75 /
   // worst 10 at 1600 x 1200.  The bound catches a stage skipped or run on the wrong frame.
-  assert(mean <= 3.0 && worst <= 24);
+  CHECK(mean <= 3.0 && worst <= 24);
 }
 
 void test_spatial_tiny_frames() {
@@ -140,14 +149,14 @@ void test_spatial_tiny_frames() {
                          value("texture", 50), value("whites", 50), value("blacks", 50)});
   for (const auto size : {std::array<std::uint32_t, 2>{1, 1}, std::array<std::uint32_t, 2>{1, 5}, std::array<std::uint32_t, 2>{7, 1}}) {
     const auto result = run(d, scene(size[0], size[1]));
-    assert(result.image.width == size[0] && result.image.height == size[1]);
+    CHECK(result.image.width == size[0] && result.image.height == size[1]);
   }
 }
 
 void test_spatial_falls_back_to_reference() {
   for (const char* channel : {"dehaze", "shadows", "highlights", "clarity", "texture", "whites", "blacks"}) {
-    assert(PassRegistry::classify(global({value(channel, 30)}).operations[0]) == PassStatus::ReferenceOnly);
-    assert(PassRegistry::classify(global({value(channel, 0), value("exposure", 0.3)}).operations[0]) == PassStatus::Implemented);
+    CHECK(PassRegistry::classify(global({value(channel, 30)}).operations[0]) == PassStatus::ReferenceOnly);
+    CHECK(PassRegistry::classify(global({value(channel, 0), value("exposure", 0.3)}).operations[0]) == PassStatus::Implemented);
   }
 }
 
@@ -165,7 +174,7 @@ void test_spatial_local_masked() {
     for (std::uint32_t x = 0; x < 32; ++x)
       for (int c = 0; c < 4; ++c) {
         const std::size_t i = (y * 32 + x) * 4 + c;
-        assert(local.image.pixels[i] == (x < 16 ? whole.image.pixels[i] : input.pixels[i]));
+        CHECK(local.image.pixels[i] == (x < 16 ? whole.image.pixels[i] : input.pixels[i]));
       }
 }
 

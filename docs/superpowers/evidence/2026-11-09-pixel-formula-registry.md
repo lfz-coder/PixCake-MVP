@@ -22,6 +22,8 @@ PhotoCraft 参考副本当前提交为 `885a6ddf27cc58c07faf1722e5c327cd38953657
 
 **2026-11-09 接入**：temperature、tint、exposure、contrast、brightness、vibrance、saturation、HSL 八色带和色彩分级已是 `photocraft-ported`（范围：8 位 sRGB 输入，executor 输入未线性化）。CPU 公式在 `gpu/render/src/camera_raw.cpp`、`gpu/render/src/brightness.cpp`，`RenderExecutor` 预览和导出执行它们，GLSL 在 `gpu/render/src/shader_sources.hpp` `kColor`；证据见[逐像素移植证据](2026-11-09-camera-raw-per-pixel-port.md)。迁移前的旧公式记录在第 11 节。
 
+**2026-11-09 第三批**：dehaze、highlights、shadows、texture、clarity、whites、blacks 执行 PhotoCraft Camera Raw 整帧阶段（`gpu/render/src/camera_raw_spatial.cpp`），状态 `photocraft-reference-only`：C++ 与 PhotoCraft 逐位一致，预览和导出已接入，没有 GLSL，GPU 回退 reference。证据见[整帧阶段移植证据](2026-11-09-photocraft-spatial-stages-port.md)。
+
 ### 逐像素管线顺序
 
 帧里的值是解码器输出的 sRGB 字节 /255，即 Camera Raw 的显示编码输入（`encoding_gamma = 0`），executor 不做线性化。每个像素依次：
@@ -29,11 +31,12 @@ PhotoCraft 参考副本当前提交为 `885a6ddf27cc58c07faf1722e5c327cd38953657
 1. Camera Raw 阶段 1：temperature、tint、exposure（PhotoCraft 移植）
 2. AI 风格偏移（`amount`，PixCake-specific 暂定）
 3. Photoshop 现代亮度（PhotoCraft 移植；按 2026-11-09 用户裁决放在阶段 1 之后）
-4. highlights/shadows/whites/blacks 提亮和 clarity/texture/dehaze 局部对比度：`legacy-provisional` 占位，控件为 0 时整步跳过
-5. Camera Raw 阶段 3 Contrast（PhotoCraft 移植）
-6. Camera Raw 阶段 4 Presence：vibrance、saturation（PhotoCraft 移植）
-7. 全局工具的分组：旧色阶 → 黑白配置文件时旧黑白混合，否则 Camera Raw Color Mixer → 旧可选颜色 → Camera Raw Color Grading（Balance 固定 0）
-8. 颗粒，最后按蒙版/不透明度合成并写回（裁剪到 0..1 再量化）
+4. Camera Raw 阶段 3 Contrast（PhotoCraft 移植）
+5. Camera Raw 阶段 4 Presence：vibrance、saturation（PhotoCraft 移植）
+6. 全局工具的分组：旧色阶 → 黑白配置文件时旧黑白混合，否则 Camera Raw Color Mixer → 旧可选颜色 → Camera Raw Color Grading（Balance 固定 0）
+7. 颗粒，最后按蒙版/不透明度合成并写回（裁剪到 0..1 再量化）
+
+含任一整帧参数（dehaze、highlights、shadows、texture、clarity、whites、blacks）的操作改走 PhotoCraft `develop` 的分段顺序（`draw_spatial`，只在 reference 上）：第 1–3 步逐像素 → 整帧去雾 → 整帧高光/阴影 → 整帧对比度 + 纹理 + 清晰度（PhotoCraft `tone()`）→ 整帧白色/黑色 → 第 5–6 步逐像素 → 按覆盖率回混。整帧阶段之间保持浮点、不裁剪；蒙版只决定在哪里显示。
 
 只含 exposure、brightness 和 RGB 色阶的全局操作走 256 级逐通道查表快速路径；表由上面同一组函数在灰阶上生成，与通用路径逐字节相同（`test_scalar_tone_fast_path_matches_general_reference`，含半透明像素）。contrast 作用于亮度，不走快速路径。
 
@@ -47,26 +50,16 @@ PhotoCraft 参考副本当前提交为 `885a6ddf27cc58c07faf1722e5c327cd38953657
 | tint | -100..100，直接传值 | 与 temperature 共用一次增益（见上）；正值降低绿色、偏品红（旧 Bradford 实现正值偏绿，方向相反） | `photocraft-target`（A），`photocraft-ported`；像素蛋糕方向待黑盒确认 | 同上 |
 | AI 风格 amount | a=clamp(amount/100,0,2) | r'=r+0.04a; g'=g+0.01a; b'=b-0.03a | `PixCake-specific`；没有 PhotoCraft 对应业务模型 | color()；render_executor.cpp |
 | exposure | EV，范围 -5..5（与 Camera Raw 单位相同） | 与白平衡合并：线性光乘 `2^exposure`（+1 EV 把 sRGB 64 变为 90） | `photocraft-target`（A），`photocraft-ported`。Photoshop“曝光度”调整图层（`compose/src/adjust.rs:138-157`，带 offset/gamma）**不是**本滑杆的目标 | `camera_raw::balanceGains`；PhotoCraft `algo/src/camera_raw.rs` 的 `balance()` 与 `per_pixel::gains` |
-| contrast | -100..100，强度 `k = contrast/100·0.6` | `l0 = max(luma(c),0)`、`lc = min(l0,1)`；`lv = max(lc - k·sin(2π·lc)/(2π), 0) + (l0-lc)`；`c' = c·lv/l0`（l0 ≤ 1e-5 时 `c + (lv-l0)`），保持颜色比例 | `photocraft-target`（A），`photocraft-ported`（只是 Contrast；纹理/清晰度仍为旧占位） | `camera_raw::applyContrast`；GPU `cr_contrast`；PhotoCraft `algo/src/camera_raw/per_pixel.rs:23-25` 与 `camera_raw.rs` 阶段 3 |
+| contrast | -100..100，强度 `k = contrast/100·0.6` | `l0 = max(luma(c),0)`、`lc = min(l0,1)`；`lv = max(lc - k·sin(2π·lc)/(2π), 0) + (l0-lc)`；`c' = c·lv/l0`（l0 ≤ 1e-5 时 `c + (lv-l0)`），保持颜色比例 | `photocraft-target`（A），`photocraft-ported`（逐像素 Contrast；与纹理/清晰度同开时由整帧阶段 3 一起执行，见下） | `camera_raw::applyContrast`；GPU `cr_contrast`；PhotoCraft `algo/src/camera_raw/per_pixel.rs:23-25` 与 `camera_raw.rs` 阶段 3 |
 
 ### 亮度、高光、阴影、白色、黑色
 
-highlights/shadows/whites/blacks 目前不是各自独立的官方模型，而是同一个项目 reference 中的不同系数（管线第 4 步）：
+highlights/shadows 与 whites/blacks 是 PhotoCraft Camera Raw 的整帧阶段，`photocraft-target`（A），状态 `photocraft-reference-only`：
 
-~~~text
-h = highlights / 100
-s = shadows / 100
-w = whites / 100
-k = blacks / 100
+- **高光/阴影**（`camera_raw::localTone`，PhotoCraft `algo/src/camera_raw/local_tone.rs` `apply`）：在 log2 亮度（线性 luma + 1/65536）上做快速局部拉普拉斯滤波，参考层间距 0.125、最多 96 层；高光把比周围亮的细节按超出 0.05 stop 的部分拉向（或推离）周围，再按 1 % 分位数把最暗处放回原位；阴影按“比周围暗”的程度 smoothstep 提亮，再按 99 % 分位数保住最亮处；强度随周围在图像 1–99 % 范围中的位置按 5 个结点插值。超过 1600 px 时先按块平均缩小，变化量用引导滤波（r=2、eps=0.01）放大回原尺寸；最后每像素线性光乘 `2^change`。
+- **白色/黑色**（`camera_raw::whitesBlacks`，PhotoCraft `algo/src/camera_raw/whites_blacks.rs`）：33 级灰阶上的实测曲线（白色 38 行、黑色 21 行，内部量 10 一行）。压缩方向（白色降低、黑色提高）用固定曲线、按亮度变化等比缩放像素；裁剪方向（白色提高、黑色降低）按图像黑白点自适应（`luminancePoints`：≤256 px 副本上亮度的 3 % 分位与最亮通道的 99.5 % 分位；`AW`/`AB` 表双线性插值，黑色至少 1.2 倍），逐通道作用。
 
-l = 0.2126*r + 0.7152*g + 0.0722*B
-hi = clamp01((l - 0.5) * 2)
-lo = clamp01((0.5 - l) * 2)
-lift = h*hi*0.45 + s*lo*0.45 + w*hi*0.20 + k*lo*0.20
-p = p + lift
-~~~
-
-结论：当前公式是清楚的，但 0.45、0.20、中灰分界和三角权重都是旧 PixCake `legacy-provisional`。highlights/shadows/whites/blacks 都有 PhotoCraft Camera Raw 目标（A）：高光/阴影是按引导滤波基底加权的局部曝光变化（`algo/src/camera_raw/local_tone.rs`），白色/黑色是按图像黑白点自适应的全局曲线（`algo/src/camera_raw/whites_blacks.rs`、`per_pixel::white_black_points`）。这两类都依赖整幅图像统计，移植时必须让预览代理和全分辨率导出共用同一统计。
+预览与导出都在当前帧上计算统计和滤波；PhotoCraft 的代理尺寸（256/768/1600 px）让二者接近，但不完全相同（[证据](2026-11-09-photocraft-spatial-stages-port.md)：400×300 平均 2.45 级）。旧的 lift 公式见第 11 节。
 
 brightness 例外：Camera Raw（PV2012）没有亮度滑杆。2026-11-09 用户裁决按 Photoshop 来做：来源是 `photocraft-target`（B），状态 `photocraft-ported`。公式是 Photoshop 现代亮度/对比度中的亮度部分 `modern_brightness`（`third_party/photocraft/crates/compose/src/adjust/tone.rs:155`）：`modern_lut(brightness, 0)`（`tone.rs:230`）生成 4096 点查找表，逐通道作用于编码值，保持纯黑和纯白不动；不使用 legacy 线性亮度（`compose/src/adjust.rs` 的 `legacy: true` 分支）。单位：Photoshop 现代亮度范围 −150..150，PixCake −100..100 直接取同值。提亮分支是膝点 126/255 以下的直线 `s·x` 加 Hermite 或幂函数尾段；压暗分支是提亮曲线的单调逆。管线里亮度之前的白平衡/曝光可能把值推出 0..1，因此表外按 PhotoCraft `lut_extended`（`tone.rs:134`）沿表两端 16 步的斜率外推，不在中途裁剪（`test_brightness_is_continuous_past_white`）。它在 A 管线中的位置是 `PixCake-specific` 顺序：阶段 1 之后（管线第 3 步），待像素蛋糕黑盒测量确认。
 
@@ -74,12 +67,12 @@ brightness 例外：Camera Raw（PV2012）没有亮度滑杆。2026-11-09 用户
 
 ### 清晰度、纹理、祛雾、鲜艳度、饱和度
 
-~~~text
-local = (clarity + texture + dehaze) / 300 * 0.35
-p = (p - 0.5) * (1 + local) + 0.5
-~~~
+clarity、texture、dehaze 是 PhotoCraft Camera Raw 的整帧阶段，`photocraft-target`（A），状态 `photocraft-reference-only`：
 
-结论：clarity/texture/dehaze 当前共用一个全局对比度变换（管线第 4 步），这是 `legacy-provisional`，与目标语义差距很大。三者都有 PhotoCraft Camera Raw 目标（A）：清晰度和纹理是引导滤波/高斯分带的局部对比度（`algo/src/camera_raw/local_tone.rs`），去雾是暗通道先验（He、Sun、Tang 2009）加引导滤波细化（`algo/src/camera_raw.rs` 阶段 2）。它们是空间阶段，PhotoCraft 只有 CPU 实现，PixCake 的 OpenGL 版本以移植后的 C++ reference 为 oracle。
+- **去雾**（`camera_raw::dehaze`，PhotoCraft `algo/src/camera_raw.rs` 阶段 2）：≤768 px 代理上的暗通道先验（He、Sun、Tang 2009），窗口半径 max(长边/60, 2)；大气光为暗通道最亮 0.1 % 的平均颜色（每通道至少 0.2）；透射率 `1 − w·开运算(归一化暗通道)`，用代理亮度做引导滤波细化后双线性放大、限制在 0.1..1；正值 `c + (J − c)·a`，负值向大气光混合。
+- **对比度 + 纹理 + 清晰度**（`camera_raw::toneDetail`，PhotoCraft 阶段 3 与 `tone()`）：`lc = min(luma, 1)`；清晰度 `lv += clarity/100·0.8·(lc − guided_fast(lc))·(1 − (2lv − 1)²)`，半径 max(长边·0.02, 3)、eps 0.005；纹理 `lv += texture/100·0.9·clamp(lc − gauss(lc), ±0.1)`，σ = max(长边·0.002, 1.5·pixel_scale)；然后对比度 S 曲线，按 `lv/l0` 缩放颜色。纹理和清晰度都为 0 时就是上表的逐像素 Contrast。
+
+PhotoCraft 这些阶段只有 CPU 实现；PixCake 的 OpenGL 版本以这份 C++ reference 为 oracle（下一份计划）。旧的“局部对比度”公式见第 11 节。
 
 vibrance/saturation 是 Camera Raw 阶段 4（Presence），`photocraft-ported`：
 
@@ -221,10 +214,10 @@ colour > 0：通道 k 的 n_k = n + (n'_k − n)·colour，n'_k 用 seed k+1（k
 
 ## 8. 局部、后期和 AI 色彩路径
 
-- `color.local` 和 `color.post` 的滑杆与全局调色走同一 `tone_color_of()`/`color()`/`tone()`：白平衡、曝光、亮度、对比度、鲜艳度/饱和度已执行移植公式；高光/阴影/白色/黑色和局部对比度仍为旧占位。操作顺序、蒙版权重、选择区和 PixCake 参数语义是 PixCake-specific。蒙版下的空间阶段（清晰度、去雾等）仍按整幅图像统计计算，再按蒙版混合。
+- `color.local` 和 `color.post` 的滑杆与全局调色走同一 `tone_color_of()`/`color()`/`tone()`：白平衡、曝光、亮度、对比度、鲜艳度/饱和度已执行移植公式，去雾、高光/阴影、纹理/清晰度、白色/黑色执行 PhotoCraft 整帧阶段（reference）。操作顺序、蒙版权重、选择区和 PixCake 参数语义是 PixCake-specific。蒙版下的整帧阶段在整幅图像上计算，再按蒙版混合（`test_spatial_local_masked`）。
 - `color.style` 当前只执行固定 RGB 风格偏移：`r+=0.04a, g+=0.01a, b-=0.03a`，其中 `a=amount/100`。PhotoCraft 没有 PixCake 的 AI 风格业务模型，因此这是 `PixCake-specific` 的临时实现，不得称为 PhotoCraft AI。
 - `color.match` 当前也不是 AI 模型。关闭 precise 时，amount 走同一固定 RGB 偏移；打开 precise 后，amount 本身不再绘制，效果来自写回到 `color.global`/`color.local` 的参数记录。PhotoCraft 没有对应 PixCake 点数/样片流程，当前实现是 `PixCake-specific`，不能用 PhotoCraft 普通调整冒充。
-- 局部操作最多四个 GPU 蒙版通道；超过四个蒙版、GPU 不可用或通道未通过支持门禁时回退 reference。
+- 局部操作最多四个 GPU 蒙版通道；超过四个蒙版、含整帧参数、GPU 不可用或通道未通过支持门禁时回退 reference（整幅帧，分块导出也一样）。
 
 ## 9. 其他已执行的像素运算
 
@@ -239,7 +232,7 @@ colour > 0：通道 k 的 n_k = n + (n'_k − n)·colour，n'_k 用 seed k+1（k
 
 ## 10. 这次审查确认的缺口
 
-1. **已完成来源迁移：** Camera Raw 逐像素阶段与现代亮度（[逐像素移植证据](2026-11-09-camera-raw-per-pixel-port.md)），以及色阶、可选颜色、混合、3D LUT 采样和颗粒基础三项（[调整图层与颗粒移植证据](2026-11-09-photocraft-adjustments-and-grain-port.md)），均为 `photocraft-ported`（8 位 sRGB 输入）。仍执行旧公式的 PhotoCraft 目标：高光/阴影/白色/黑色、纹理/清晰度/去雾（A，依赖图像统计或空间阶段）；曲线未实现。八色带黑白、颗粒扩展子参数和 AI 业务是 PixCake-specific；色彩编辑器是 no-equivalent。
+1. **已完成来源迁移：** Camera Raw 逐像素阶段与现代亮度（[逐像素移植证据](2026-11-09-camera-raw-per-pixel-port.md)），以及色阶、可选颜色、混合、3D LUT 采样和颗粒基础三项（[调整图层与颗粒移植证据](2026-11-09-photocraft-adjustments-and-grain-port.md)），均为 `photocraft-ported`（8 位 sRGB 输入）。高光/阴影/白色/黑色、纹理/清晰度/去雾为 `photocraft-reference-only`（[整帧阶段移植证据](2026-11-09-photocraft-spatial-stages-port.md)：C++ 与 PhotoCraft 逐位一致，预览和导出已接入，缺 GLSL）；曲线未实现。八色带黑白、颗粒扩展子参数和 AI 业务是 PixCake-specific；色彩编辑器是 no-equivalent。
 2. **色阶不是红绿蓝独立色阶。** 当前只有一套 RGB 复合黑/灰/白参数，代码对 R/G/B 复用同一映射；用户所说的红、绿、蓝独立黑场/灰场/白场目前没有实现。
 3. **黑白混合的 Rec.709 来源链接没有在登记中固定。** 代码和测试都写了权重，但来源登记仍不完整。
 4. **GPU readback 证明的是与 CPU reference 对齐。** 已移植的各项靠 CPU reference 与 PhotoCraft 对照向量（`test_camera_raw_port`、`test_brightness_port`、`test_adjust_port`）加 GPU 与 reference 差 ≤1 两段证明 PhotoCraft parity；仍为旧公式的项，GPU 证据不能证明 PhotoCraft parity。任何一项都没有官方 PixCake 逐像素证明。
@@ -249,7 +242,7 @@ colour > 0：通道 k 的 n_k = n + (n'_k − n)·colour，n'_k 用 seed k+1（k
 
 ## 11. 迁移前记录（2026-11-09 之前 executor 执行的旧公式）
 
-以下是被 PhotoCraft 移植替换掉的旧 PixCake `legacy-provisional` 公式，只作回归对照，不再执行。被替换的测试期望值（旧 → 新）记在提交 `6a9db0e`、`308b21b` 的说明里。
+以下是被 PhotoCraft 移植替换掉的旧 PixCake `legacy-provisional` 公式，只作回归对照，不再执行。被替换的测试期望值（旧 → 新）记在提交 `6a9db0e`、`308b21b`、`cda7d36` 的说明里。
 
 ~~~text
 # PP-WB-001 白平衡：IEC/ICC sRGB D65 矩阵 + Bradford CAT（ICC 1:2022 附录 E）
@@ -286,4 +279,16 @@ p += w_z*sat_z/100*0.25 * (HSL(hue_z,1,0.5) - luma(HSL(hue_z,1,0.5))) + w_z*lum_
 # 颗粒：cell = max(1, min(w,h)·(0.0008 + 0.006·size))；32 位哈希值噪声，roughness 混入逐像素哈希；
 #       strength = amount·zone·0.5（zone 为 shadows/midtones/highlights 三角分区）
 # 合成：opacity·top.a 作为混合量，base + (B − base)·量（像素自身 alpha 乘进了调整强度）
+~~~
+
+### 高光/阴影/白色/黑色与局部对比度（2026-11-09 第三批之前）
+
+~~~text
+# 管线第 4 步，在现代亮度之后、Contrast 之前，逐像素：
+l = 0.2126*r + 0.7152*g + 0.0722*b
+hi = clamp01((l - 0.5) * 2);  lo = clamp01((0.5 - l) * 2)
+p += highlights/100*hi*0.45 + shadows/100*lo*0.45 + whites/100*hi*0.20 + blacks/100*lo*0.20
+local = (clarity + texture + dehaze) / 300 * 0.35
+p = (p - 0.5) * (1 + local) + 0.5
+# GPU：kColor 中同一公式，uniform tone1 = (h, s, w, k)、tone2.x = local
 ~~~
