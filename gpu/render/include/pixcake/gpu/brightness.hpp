@@ -10,6 +10,8 @@
 // with Camera Raw (camera_raw.hpp), so the table is modern_lut(brightness, 0).
 
 #include <cstddef>
+#include <array>
+#include <cstddef>
 #include <vector>
 
 namespace pixcake::gpu::brightness {
@@ -20,6 +22,12 @@ constexpr std::size_t kLutSize = 4096;
 std::vector<float> modernLut(float brightness);
 // tone::lut: v clamped to 0..1, linear between neighbouring samples.
 float sampleLut(const std::vector<float>& table, float v);
+// PhotoCraft lut_extended (tone.rs:134): sampleLut inside 0..1 and for non-finite v; outside
+// 0..1 the table's end segments continued along their slope over kSlopeSpan steps.
+inline constexpr std::size_t kSlopeSpan = 16;
+float sampleLutExtended(const std::vector<float>& table, float v);
+// Those two slopes (below 0, above 1), for the GPU, which evaluates the curve without a table.
+std::array<float, 2> endSlopes(const std::vector<float>& table);
 
 // The raised curve's constants (Brightness::new of |brightness|), for the GPU, which
 // evaluates the curve instead of a table.  raise is brightness > 0; a lowered curve is the

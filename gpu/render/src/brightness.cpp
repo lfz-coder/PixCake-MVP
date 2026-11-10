@@ -86,4 +86,19 @@ float sampleLut(const std::vector<float>& table, float v) {
   return table[i] * (1.0F - f) + table[j] * f;
 }
 
+std::array<float, 2> endSlopes(const std::vector<float>& table) {
+  const std::size_t n = table.size();
+  if (n < 2) return {1.0F, 1.0F};
+  const std::size_t k = std::min(kSlopeSpan, n - 1);
+  const float per_unit = static_cast<float>(n - 1) / static_cast<float>(k);
+  return {(table[k] - table[0]) * per_unit, (table[n - 1] - table[n - 1 - k]) * per_unit};
+}
+
+float sampleLutExtended(const std::vector<float>& table, float v) {
+  const std::size_t n = table.size();
+  if (!std::isfinite(v) || (v >= 0.0F && v <= 1.0F) || n < 2) return sampleLut(table, v);
+  const auto slopes = endSlopes(table);
+  return v < 0.0F ? table[0] + v * slopes[0] : table[n - 1] + (v - 1.0F) * slopes[1];
+}
+
 }  // namespace pixcake::gpu::brightness

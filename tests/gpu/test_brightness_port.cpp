@@ -78,7 +78,29 @@ void test_curve_matches_lut() {
 
 }  // namespace
 
+// PhotoCraft lut_extended (tone.rs:134): inside 0..1 the table, outside it the end segments'
+// slope over 16 steps; non-finite samples stay with the table.
+void test_sample_lut_extended() {
+  for (const float b : {40.0F, -60.0F}) {
+    const auto lut = br::modernLut(b);
+    const float per_unit = 4095.0F / 16.0F;
+    const float lo = (lut[16] - lut[0]) * per_unit, hi = (lut[4095] - lut[4079]) * per_unit;
+    assert(br::sampleLutExtended(lut, 0.3F) == br::sampleLut(lut, 0.3F));
+    assert(std::abs(br::sampleLutExtended(lut, -0.2F) - (lut[0] - 0.2F * lo)) < 1e-6F);
+    assert(std::abs(br::sampleLutExtended(lut, 1.5F) - (lut[4095] + 0.5F * hi)) < 1e-6F);
+    const auto slopes = br::endSlopes(lut);
+    assert(slopes[0] == lo && slopes[1] == hi);
+  }
+  // The slopes follow the curve's own ends: s = 1.375^(b/50) at black, 1 / (1 + 0.084 b) at
+  // white, both 1 at b = 0 (b = +1: 1.0064 and 0.9235; lowered, their inverses' slopes).
+  const auto up = br::endSlopes(br::modernLut(1.0F));
+  assert(std::abs(up[0] - 1.0064F) < 2e-3F && std::abs(up[1] - 0.9235F) < 2e-3F);
+  const auto down = br::endSlopes(br::modernLut(-1.0F));
+  assert(down[0] < 1.0F && down[1] > 1.0F);
+}
+
 int main() {
+  test_sample_lut_extended();
   test_matches_photocraft_lut();
   test_zero_is_identity();
   test_sample_lut_clamps();

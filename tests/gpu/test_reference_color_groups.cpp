@@ -1,6 +1,8 @@
 // Reference formulas for the colour sub-groups of color.global (levels, HSL,
 // black-and-white mix, selective color, color grading) and detail grain.
-// The formulas are the project's provisional ones (render_executor.cpp); these
+// HSL, grading and the tone/colour sliders run PhotoCraft's Camera Raw and modern
+// brightness ports (camera_raw.cpp, brightness.cpp); levels, black-and-white,
+// selective colour and grain are still PixCake's provisional formulas.  These
 // vectors pin them, check identity at the registered defaults, and check that
 // each group acts only on the pixels it targets.
 #include <pixcake/gpu/brightness.hpp>
@@ -128,9 +130,33 @@ void test_brightness_after_balance() {
 
 // In the black-and-white profile the Color Mixer does not run.
 void test_monochrome_skips_color_mixer() {
+  // Red luminance +100 changes a red's luminance (a hue turn alone would keep it, and the
+  // black-and-white grey could not tell): it moves the pixel outside the profile ...
+  const auto plain = render(global({}), image(200, 60, 40));
+  const auto mixed = render(global({value("hsl_luminance_red", 100)}), image(200, 60, 40));
+  assert(!near(mixed, plain, 4));
+  // ... and does nothing to the black-and-white grey.
   const auto mono = render(global({choice("profile", "monochrome", 2)}), image(200, 60, 40));
-  assert(near(render(global({choice("profile", "monochrome", 2), value("hsl_hue_red", 100)}), image(200, 60, 40)),
+  assert(near(render(global({choice("profile", "monochrome", 2), value("hsl_luminance_red", 100)}), image(200, 60, 40)),
               mono, 0));
+}
+
+// Brightness continues its curve past 0..1 along the end slopes (PhotoCraft lut_extended), so a
+// one-step move from 0 does not clip what exposure pushed past white before the later stages.
+void test_brightness_is_continuous_past_white() {
+  for (const float b : {1.0F, -1.0F}) {
+    for (const auto& px : {std::array<int, 3>{0, 255, 162}, std::array<int, 3>{250, 240, 30}}) {
+      const auto at = [&](float brightness) {
+        return render(global({value("exposure", 1), value("contrast", 30), value("saturation", 40),
+                              value("brightness", brightness)}),
+                      image(static_cast<std::uint8_t>(px[0]), static_cast<std::uint8_t>(px[1]),
+                            static_cast<std::uint8_t>(px[2])));
+      };
+      // Clipping there moved (0,255,162) by 37 levels.  What is left is the curve's own end slope
+      // at |b| = 1 (1 / (1 + 0.084) = 0.92 at white), applied to what exposure pushed past white.
+      assert(near(at(b), at(0), 5));
+    }
+  }
 }
 
 // Local colour runs the same Camera Raw stages.
@@ -384,6 +410,7 @@ int main() {
   test_global_uses_camera_raw();
   test_brightness_after_balance();
   test_monochrome_skips_color_mixer();
+  test_brightness_is_continuous_past_white();
   test_local_uses_camera_raw();
   test_identity_at_defaults();
   test_levels();

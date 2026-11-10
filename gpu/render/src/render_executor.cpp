@@ -71,7 +71,7 @@ Pixel with_rgb(Pixel p, const cr::Rgb& c) {
 //   1. Camera Raw stage 1: temperature, tint, exposure (PhotoCraft port)
 //   2. AI style tint (amount; PixCake's provisional offset)
 //   3. Photoshop modern brightness (PhotoCraft port; placed after stage 1 by the
-//      2026-11-09 user decision)
+//      2026-11-09 user decision), continued past 0..1 as PhotoCraft's lut_extended
 //   4. highlights/shadows/whites/blacks lift and clarity/texture/dehaze local
 //      contrast -- PixCake legacy-provisional placeholders until their spatial
 //      and image-statistics stages are ported
@@ -83,6 +83,7 @@ struct ToneColor {
   float style = 0;
   bool brightness_on = false;
   std::vector<float> brightness_lut;
+  std::array<float, 2> brightness_slopes{1.0F, 1.0F};  // past 0 and past 1 (lut_extended)
   float brightness = 0;  // slider -100..100 (the GPU evaluates the curve from it)
   float highlights = 0, shadows = 0, whites = 0, blacks = 0, local = 0;
   float contrast = 0, vibrance = 0, saturation = 0;  // Camera Raw sliders, -100..100
@@ -98,7 +99,10 @@ ToneColor tone_color_of(const std::map<std::string, float>& v) {
   t.style = std::clamp(get(v, "amount") / 100.0F, 0.0F, 2.0F);
   t.brightness = get(v, "brightness");
   t.brightness_on = t.brightness != 0.0F;
-  if (t.brightness_on) t.brightness_lut = br::modernLut(t.brightness);
+  if (t.brightness_on) {
+    t.brightness_lut = br::modernLut(t.brightness);
+    t.brightness_slopes = br::endSlopes(t.brightness_lut);
+  }
   t.highlights = get(v, "highlights") / 100.0F;
   t.shadows = get(v, "shadows") / 100.0F;
   t.whites = get(v, "whites") / 100.0F;
@@ -128,9 +132,9 @@ Pixel color(Pixel p, const ToneColor& t) {
 // Steps 3 to 6; a step whose controls are at rest leaves the pixel untouched.
 Pixel tone(Pixel p, const ToneColor& t) {
   if (t.brightness_on) {
-    p.r = br::sampleLut(t.brightness_lut, p.r);
-    p.g = br::sampleLut(t.brightness_lut, p.g);
-    p.b = br::sampleLut(t.brightness_lut, p.b);
+    p.r = br::sampleLutExtended(t.brightness_lut, p.r);
+    p.g = br::sampleLutExtended(t.brightness_lut, p.g);
+    p.b = br::sampleLutExtended(t.brightness_lut, p.b);
   }
   if (lift_is_active(t)) {
     const float l = luminance(p);
@@ -849,6 +853,7 @@ bool set_color_uniforms(gl::Program& program, const PreparedOperation& draw, std
                                     flag(t.vibrance != 0.0F || t.saturation != 0.0F)}, error) &&
             program.setVec4("bright0", {curve.s, curve.e, curve.x0, curve.alpha}, error) &&
             program.setVec4("bright1", {flag(t.brightness_on), flag(curve.raise), flag(curve.hermite), 0.0F}, error) &&
+            program.setVec4("bright2", {t.brightness_slopes[0], t.brightness_slopes[1], 0.0F, 0.0F}, error) &&
             program.setVec4("tone0", {t.style, 0.0F, 0.0F, 0.0F}, error) &&
             program.setVec4("tone1", {t.highlights, t.shadows, t.whites, t.blacks}, error) &&
             program.setVec4("tone2", {t.local, 0.0F, 0.0F, 0.0F}, error) &&

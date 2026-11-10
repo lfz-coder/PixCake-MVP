@@ -67,6 +67,7 @@ uniform vec4 cr0;      // Camera Raw stage 1 gains rgb; w = 1 when it applies
 uniform vec4 cr1;      // contrast strength (slider / 100 * 0.6), vibrance, saturation, presence on
 uniform vec4 bright0;  // brightness curve: s, e, x0, alpha
 uniform vec4 bright1;  // brightness on, raise, hermite, -
+uniform vec4 bright2;  // end slopes past 0 and past 1 (lut_extended), -, -
 uniform vec4 tone0;    // style, -, -, -
 uniform vec4 tone1;    // highlights, shadows, whites, blacks (legacy)
 uniform vec4 tone2;    // local contrast (legacy), -, -, -
@@ -193,7 +194,9 @@ float bright_raised(float x) {
 // The CPU samples modern_lut; here the curve itself: raised directly, lowered as the inverse
 // of the raised curve by 32 bisection steps (test_brightness_port checks the two agree).
 float modern_brightness(float v) {
-  v = clamp(v, 0.0, 1.0);
+  // Past 0..1 the curve continues along the CPU table's end slopes (PhotoCraft lut_extended).
+  if (v < 0.0) return v * bright2.x;
+  if (v > 1.0) return 1.0 + (v - 1.0) * bright2.y;
   if (bright1.y > 0.5) return bright_raised(v);
   if (v <= 0.0 || v >= 1.0) return v;
   float lo = 0.0, hi = 1.0;

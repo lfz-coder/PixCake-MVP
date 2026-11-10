@@ -68,7 +68,7 @@ p = p + lift
 
 结论：当前公式是清楚的，但 0.45、0.20、中灰分界和三角权重都是旧 PixCake `legacy-provisional`。highlights/shadows/whites/blacks 都有 PhotoCraft Camera Raw 目标（A）：高光/阴影是按引导滤波基底加权的局部曝光变化（`algo/src/camera_raw/local_tone.rs`），白色/黑色是按图像黑白点自适应的全局曲线（`algo/src/camera_raw/whites_blacks.rs`、`per_pixel::white_black_points`）。这两类都依赖整幅图像统计，移植时必须让预览代理和全分辨率导出共用同一统计。
 
-brightness 例外：Camera Raw（PV2012）没有亮度滑杆。2026-11-09 用户裁决按 Photoshop 来做：来源是 `photocraft-target`（B），状态 `photocraft-ported`。公式是 Photoshop 现代亮度/对比度中的亮度部分 `modern_brightness`（`third_party/photocraft/crates/compose/src/adjust/tone.rs:155`）：`modern_lut(brightness, 0)`（`tone.rs:230`）生成 4096 点查找表，逐通道作用于编码值，保持纯黑和纯白不动；不使用 legacy 线性亮度（`compose/src/adjust.rs` 的 `legacy: true` 分支）。单位：Photoshop 现代亮度范围 −150..150，PixCake −100..100 直接取同值。提亮分支是膝点 126/255 以下的直线 `s·x` 加 Hermite 或幂函数尾段；压暗分支是提亮曲线的单调逆。它在 A 管线中的位置是 `PixCake-specific` 顺序：阶段 1 之后（管线第 3 步），待像素蛋糕黑盒测量确认。
+brightness 例外：Camera Raw（PV2012）没有亮度滑杆。2026-11-09 用户裁决按 Photoshop 来做：来源是 `photocraft-target`（B），状态 `photocraft-ported`。公式是 Photoshop 现代亮度/对比度中的亮度部分 `modern_brightness`（`third_party/photocraft/crates/compose/src/adjust/tone.rs:155`）：`modern_lut(brightness, 0)`（`tone.rs:230`）生成 4096 点查找表，逐通道作用于编码值，保持纯黑和纯白不动；不使用 legacy 线性亮度（`compose/src/adjust.rs` 的 `legacy: true` 分支）。单位：Photoshop 现代亮度范围 −150..150，PixCake −100..100 直接取同值。提亮分支是膝点 126/255 以下的直线 `s·x` 加 Hermite 或幂函数尾段；压暗分支是提亮曲线的单调逆。管线里亮度之前的白平衡/曝光可能把值推出 0..1，因此表外按 PhotoCraft `lut_extended`（`tone.rs:134`）沿表两端 16 步的斜率外推，不在中途裁剪（`test_brightness_is_continuous_past_white`）。它在 A 管线中的位置是 `PixCake-specific` 顺序：阶段 1 之后（管线第 3 步），待像素蛋糕黑盒测量确认。
 
 实现：CPU `brightness::modernLut/sampleLut`（与 PhotoCraft 650 个采样最大差 1.19e-7）；GPU 不建表，`modern_brightness()` 直接求曲线，压暗用 32 步二分求逆（`brightness::curve/raised`，`test_curve_matches_lut` 证明二者差 ≤1e-4）。
 
