@@ -55,6 +55,19 @@ float quantileOf(const std::vector<float>& v, float q);
 // The 1st and 99th percentiles of a log-luminance plane, on a copy at most 256 px across.
 std::array<float, 2> localToneRange(const std::vector<float>& u, std::size_t w, std::size_t h);
 
+// Whites/Blacks building blocks, shared with the GPU port (camera_raw_gl.cpp).
+// whites_row / blacks_row (whites_blacks.rs row_at): the curve at internal amount x as one row
+// over grey levels 0, 1/32, ..., 1.
+std::array<float, 33> whitesRow(float x);
+std::array<float, 33> blacksRow(float x);
+// whites / blacks (whites_blacks.rs): the curve at internal amount x of grey level v.
+float whitesCurve(float v, float x);
+float blacksCurve(float v, float x);
+// amounts: the internal amounts for sliders whites/blacks (-100..100) and points bp, wp.
+std::array<float, 2> whitesBlacksAmounts(float whites, float blacks, float bp, float wp);
+// luminancePoints from the copy's cells: each cell's mean linear RGB (clamped to 0..1).
+std::array<float, 2> whiteBlackPointsOfCells(const std::vector<std::array<float, 3>>& cells);
+
 // Building blocks, exposed for tests.
 std::array<std::size_t, 3> gaussBoxRadii(float sigma);
 std::vector<float> boxMean(const std::vector<float>& v, std::size_t w, std::size_t h, std::size_t r);

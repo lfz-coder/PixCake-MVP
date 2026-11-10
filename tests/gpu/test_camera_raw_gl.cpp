@@ -229,9 +229,55 @@ void test_local_tone_gl_tiny(crgl::Gl& g) {
   }
 }
 
+void test_whites_blacks_gl(crgl::Gl& g) {
+  struct Case {
+    const char* name;
+    float whites, blacks;
+  };
+  const Case cases[] = {{"whites 100", 100, 0}, {"whites -100", -100, 0}, {"blacks 100", 0, 100}, {"blacks -100", 0, -100},
+                        {"whites 50 blacks -50", 50, -50}, {"whites -50 blacks 50", -50, 50}};
+  for (const char* frame : kFrames) {
+    for (const auto& c : cases) {
+      expect_frame(g, c.name, frame, [&](crgl::Plane& p) { return crgl::whitesBlacks(g, p, c.whites, c.blacks); },
+                   [&](cr::Frame& f) { cr::whitesBlacks(f, c.whites, c.blacks); });
+    }
+  }
+}
+
+// The GPU interpolates one row (row_at) per amount; that is the same curve within 1e-6.
+void test_whites_blacks_rows() {
+  float worst = 0.0F;
+  std::uint32_t s = 12345U;
+  for (const float amount : {-100.0F, -73.5F, -10.0F, 0.0F, 25.0F, 100.0F, 187.25F, 270.0F}) {
+    const auto wr = cr::whitesRow(amount), br = cr::blacksRow(std::clamp(amount, -100.0F, 100.0F));
+    const auto at = [](const std::array<float, 33>& row, float v) {
+      if (v >= 1.0F) return 1.0F;
+      const float p = std::fmax(v, 0.0F) * 32.0F;
+      const auto j = std::min<std::size_t>(static_cast<std::size_t>(p), 31);
+      return row[j] + (row[j + 1] - row[j]) * (p - static_cast<float>(j));
+    };
+    for (int k = 0; k < 1033; ++k) {
+      float v;
+      if (k < 33) {
+        v = static_cast<float>(k) / 32.0F;
+      } else {
+        s ^= s << 13;
+        s ^= s >> 17;
+        s ^= s << 5;
+        v = static_cast<float>(s % 100000U) / 100000.0F;
+      }
+      worst = std::max(worst, std::fabs(at(wr, v) - cr::whitesCurve(v, amount)));
+      worst = std::max(worst, std::fabs(at(br, v) - cr::blacksCurve(v, std::clamp(amount, -100.0F, 100.0F))));
+    }
+  }
+  std::printf("whites/blacks rows vs curve worst %.3g\n", worst);
+  CHECK(worst <= 1e-6F);
+}
+
 }  // namespace
 
 int main() {
+  test_whites_blacks_rows();
   if (!pixcake::gl::native::available()) {
     std::printf("test_camera_raw_gl: skipped (no native GL)\n");
     return 0;
@@ -253,6 +299,7 @@ int main() {
     test_tone_detail_gl(g);
     test_local_tone_gl(g);
     test_local_tone_gl_tiny(g);
+    test_whites_blacks_gl(g);
     if (!g.ok()) std::fprintf(stderr, "GL error: %s\n", g.error().c_str());
     CHECK(g.ok());
   }

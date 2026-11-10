@@ -852,15 +852,43 @@ std::array<float, 2> luminancePoints(const Frame& frame) {
       }
     }
   });
-  std::vector<float> lum, brightest;
+  std::vector<std::array<float, 3>> cells;
   for (const auto& s : sum) {
     if (!(s[3] > 0.0)) continue;
-    const float c0 = static_cast<float>(s[0] / s[3]), c1 = static_cast<float>(s[1] / s[3]), c2 = static_cast<float>(s[2] / s[3]);
-    lum.push_back(luma3(c0, c1, c2));
-    brightest.push_back(std::fmax(std::fmax(c0, c1), c2));
+    cells.push_back({static_cast<float>(s[0] / s[3]), static_cast<float>(s[1] / s[3]), static_cast<float>(s[2] / s[3])});
+  }
+  return whiteBlackPointsOfCells(cells);
+}
+
+std::array<float, 2> whiteBlackPointsOfCells(const std::vector<std::array<float, 3>>& cells) {
+  std::vector<float> lum, brightest;
+  for (const auto& c : cells) {
+    lum.push_back(luma3(c[0], c[1], c[2]));
+    brightest.push_back(std::fmax(std::fmax(c[0], c[1]), c[2]));
   }
   if (lum.empty()) return {0.0F, 1.0F};
   return {linearToSrgb(percentile(lum, 0.03F)), linearToSrgb(percentile(brightest, 0.995F))};
+}
+
+namespace {
+template <std::size_t Rows>
+std::array<float, kSteps> row_at(const float (&rows)[Rows][kSteps], float from, float x) {
+  const float r = std::clamp((x - from) / 10.0F, 0.0F, static_cast<float>(Rows - 1));
+  const std::size_t i = std::min(static_cast<std::size_t>(r), Rows - 2);
+  const float t = r - static_cast<float>(i);
+  std::array<float, kSteps> out{};
+  for (std::size_t j = 0; j < kSteps; ++j) out[j] = rows[i][j] * (1.0F - t) + rows[i + 1][j] * t;
+  return out;
+}
+}  // namespace
+
+std::array<float, 33> whitesRow(float x) { return row_at(wb::kWhites, kWhitesFrom, x); }
+std::array<float, 33> blacksRow(float x) { return row_at(wb::kBlacks, kBlacksFrom, x); }
+float whitesCurve(float v, float x) { return curve(wb::kWhites, kWhitesFrom, x, v); }
+float blacksCurve(float v, float x) { return curve(wb::kBlacks, kBlacksFrom, x, v); }
+std::array<float, 2> whitesBlacksAmounts(float whites, float blacks, float bp, float wp) {
+  const auto a = amounts(whites, blacks, bp, wp);
+  return {a.first, a.second};
 }
 
 void whitesBlacks(Frame& frame, float whites, float blacks) {

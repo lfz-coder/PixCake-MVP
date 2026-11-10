@@ -371,4 +371,50 @@ void main() {
 }
 )";
 
+// ---- Whites / Blacks (camera_raw/whites_blacks.rs)
+inline constexpr const char* kLinearClamped = R"(
+float srgb_to_linear(float v) { return v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4); }
+void main() {
+  vec4 q = texelFetch(t0, here(), 0);
+  color = vec4(clamp(srgb_to_linear(q.r), 0.0, 1.0), clamp(srgb_to_linear(q.g), 0.0, 1.0), clamp(srgb_to_linear(q.b), 0.0, 1.0), 1.0);
+}
+)";
+// t0 = frame, t1 = the curves as rows (33 x 2: whites, blacks).
+inline constexpr const char* kWhitesBlacks = R"(
+uniform int has_whites;
+uniform int has_blacks;
+uniform int per_channel;
+float srgb_to_linear(float v) { return v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4); }
+float linear_to_srgb(float v) { return v <= 0.0031308 ? v * 12.92 : 1.055 * pow(v, 1.0 / 2.4) - 0.055; }
+float row_curve(int row, float v) {
+  if (v >= 1.0) return 1.0;
+  float p = max(v, 0.0) * 32.0;
+  int j = min(int(p), 31);
+  float a = texelFetch(t1, ivec2(j, row), 0).r, b = texelFetch(t1, ivec2(j + 1, row), 0).r;
+  return a + (b - a) * (p - float(j));
+}
+float grey(float v) {
+  v = has_whites != 0 ? row_curve(0, v) : v;
+  return has_blacks != 0 ? row_curve(1, v) : v;
+}
+void main() {
+  vec4 q = texelFetch(t0, here(), 0);
+  vec3 lin = vec3(srgb_to_linear(q.r), srgb_to_linear(q.g), srgb_to_linear(q.b));
+  if (per_channel != 0) {
+    for (int c = 0; c < 3; ++c) {
+      float over = max(lin[c] - 1.0, 0.0);
+      q[c] = linear_to_srgb(srgb_to_linear(grey(linear_to_srgb(min(lin[c], 1.0)))) + over);
+    }
+  } else {
+    float y = max(0.2126 * lin.r + 0.7152 * lin.g + 0.0722 * lin.b, 0.0);
+    if (y > 1e-7) {
+      float y2 = srgb_to_linear(grey(linear_to_srgb(min(y, 1.0)))) + max(y - 1.0, 0.0);
+      float k = y2 / y;
+      for (int c = 0; c < 3; ++c) q[c] = linear_to_srgb(lin[c] * k);
+    }
+  }
+  color = q;
+}
+)";
+
 }  // namespace pixcake::gpu::camera_raw_gl::shaders

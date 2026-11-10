@@ -69,5 +69,8 @@ bool toneDetail(Gl&, Plane& rgba, float contrast, float texture, float clarity, 
 // Highlights and Shadows: the pyramids on the GPU; ranges, quantiles and shifts on the CPU from
 // read-back work planes (at most localToneConstants().work_side across).
 bool localTone(Gl&, Plane& rgba, float shadows, float highlights);
+// Whites and Blacks: the black and white points from a read-back <= 256 px copy, the curves as
+// one interpolated row each (whitesRow / blacksRow).
+bool whitesBlacks(Gl&, Plane& rgba, float whites, float blacks);
 
 }  // namespace pixcake::gpu::camera_raw_gl

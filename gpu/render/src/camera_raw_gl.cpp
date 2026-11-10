@@ -571,4 +571,37 @@ bool localTone(Gl& gl_, Plane& rgba, float shadows, float highlights) {
   return true;
 }
 
+bool whitesBlacks(Gl& gl_, Plane& rgba, float whites, float blacks) {
+  if (whites == 0.0F && blacks == 0.0F) return true;
+  auto& g = gl_.impl();
+  // luminancePoints: cell means of the clamped linear light on a copy at most 256 px across.
+  const std::size_t f = std::max<std::size_t>(div_ceil(std::max(rgba.w, rgba.h), 256), 1);
+  Plane lin, cells;
+  std::vector<std::array<float, 4>> cell_v;
+  if (!same_size_plane(g, rgba, PixelFormat::Rgba32F, lin) || !g.draw(shaders::kLinearClamped, lin, {&rgba}) ||
+      !block_mean(g, lin, static_cast<std::uint32_t>(f), PixelFormat::Rgba32F, cells) || !read_rgba(g, cells, cell_v)) {
+    return false;
+  }
+  std::vector<std::array<float, 3>> cell_rgb;
+  cell_rgb.reserve(cell_v.size());
+  for (const auto& c : cell_v) cell_rgb.push_back({c[0], c[1], c[2]});
+  const auto points = camera_raw::whiteBlackPointsOfCells(cell_rgb);
+  const auto amount = camera_raw::whitesBlacksAmounts(std::clamp(whites, -100.0F, 100.0F), std::clamp(blacks, -100.0F, 100.0F), points[0], points[1]);
+  const float w = amount[0], b = amount[1];
+  if (w == 0.0F && b == 0.0F) return true;
+  const auto wr = camera_raw::whitesRow(w), br = camera_raw::blacksRow(b);
+  std::vector<float> rows(wr.begin(), wr.end());
+  rows.insert(rows.end(), br.begin(), br.end());
+  Plane curves, out;
+  if (!upload(gl_, rows, 33, 2, curves) || !same_size_plane(g, rgba, PixelFormat::Rgba32F, out) ||
+      !g.draw(shaders::kWhitesBlacks, out, {&rgba, &curves}, [&](gl::Program& p, std::string& e) {
+        return p.setInt("has_whites", w != 0.0F ? 1 : 0, e) && p.setInt("has_blacks", b != 0.0F ? 1 : 0, e) &&
+               p.setInt("per_channel", w > 0.0F || b < 0.0F ? 1 : 0, e);
+      })) {
+    return false;
+  }
+  rgba = out;
+  return true;
+}
+
 }  // namespace pixcake::gpu::camera_raw_gl
