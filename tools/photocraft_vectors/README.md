@@ -19,3 +19,7 @@ CARGO_TARGET_DIR=tools/photocraft_vectors/target \
 ```
 
 The settings in each row follow the order of `settings()` in `src/main.rs` (44 values).
+
+`cargo run ... -- brightness > tests/gpu/data/modern_brightness_vectors.inc` writes samples of
+PhotoCraft's `compose::adjust::modern_lut(b, 0)` (Photoshop modern brightness) for ten slider
+values, checked by `tests/gpu/test_brightness_port.cpp`.
