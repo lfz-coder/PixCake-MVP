@@ -110,7 +110,8 @@ void test_c31_every_registered_capability_has_a_module() {
   }
   EXPECT(pixcake::find_capability_module("layer") == nullptr);
   EXPECT(pixcake::find_capability_module("grain") == nullptr);
-  EXPECT(module("detail").parameter_modes().size() == 7);
+  // 颗粒 7 项，加锐化与降噪 7 项（Camera Raw 阶段 8，2026-11-10）。
+  EXPECT(module("detail").parameter_modes().size() == 14);
 }
 
 // C-31：写回只写本能力的参数；未知参数与未知记录原样带上（架构 7.2“未知字段留在片段里”）。

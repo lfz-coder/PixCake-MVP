@@ -195,9 +195,46 @@ void test_spatial_local_masked() {
       }
 }
 
+// Camera Raw stage 8 (detail) on the whole frame, then grain (stage 9) on its float result, in
+// one detail operation.
+void test_detail_then_grain() {
+  const auto input = scene(48, 32);
+  const auto d = op("detail", "pixcake.detail",
+                    {value("sharpen_amount", 100), value("sharpen_radius", 1.5), value("sharpen_detail", 40), value("noise_luminance", 40),
+                     value("noise_luminance_detail", 30), value("noise_color", 50), value("noise_color_detail", 60),
+                     value("grain_amount", 30), value("grain_color", 0)});
+  CHECK(PassRegistry::classify(d.operations[0]) == PassStatus::Implemented);
+  const auto result = run(d, input);
+  cr::Frame f = spatial_frames::frame_of_image(input);
+  cr::DetailSettings s;
+  s.sharpen_amount = 100;
+  s.sharpen_radius = 1.5F;
+  s.sharpen_detail = 40;
+  s.noise_luminance = 40;
+  s.noise_luminance_detail = 30;
+  s.noise_color = 50;
+  s.noise_color_detail = 60;
+  cr::detail(f, s, 1.0F);
+  const cr::Grain g = cr::grainOf(30, 10, 15, 0, 1.0F);  // size and roughness at their defaults
+  for (std::size_t i = 0; i < f.px.size(); ++i) {
+    const auto x = static_cast<float>(i % input.width), y = static_cast<float>(i / input.width);
+    const cr::Rgb c = cr::applyGrain({f.px[i][0], f.px[i][1], f.px[i][2]}, g, x, y);
+    for (int k = 0; k < 3; ++k) {
+      if (result.image.pixels[i * 4 + k] != q(c[k])) {
+        std::printf("detail pixel %zu c%d: got %d want %d\n", i, k, result.image.pixels[i * 4 + k], q(c[k]));
+        CHECK(false);
+      }
+    }
+  }
+  // Sharpening alone (grain off) still draws.
+  const auto sharpen = run(op("detail", "pixcake.detail", {value("sharpen_amount", 150)}), input);
+  CHECK(sharpen.image.pixels != input.pixels);
+}
+
 }  // namespace
 
 int main() {
+  test_detail_then_grain();
   test_spatial_classified_for_gpu();
   test_spatial_order_matches_develop();
   test_spatial_tiny_frames();

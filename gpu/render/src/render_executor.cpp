@@ -399,6 +399,21 @@ Grain grain_of(const Values& v, float pixel_scale) {
   g.colour = param(v, cap, "grain_color") / 100.0F;
   return g;
 }
+// Camera Raw stage 8, sharpening and noise reduction (Camera Raw units; defaults from the
+// parameter modes).
+cr::DetailSettings detail_of(const Values& v) {
+  const char* cap = "detail";
+  cr::DetailSettings s;
+  s.sharpen_amount = param(v, cap, "sharpen_amount");
+  s.sharpen_radius = param(v, cap, "sharpen_radius");
+  s.sharpen_detail = param(v, cap, "sharpen_detail");
+  s.sharpen_masking = 0.0F;  // not on the official panel, not registered
+  s.noise_luminance = param(v, cap, "noise_luminance");
+  s.noise_luminance_detail = param(v, cap, "noise_luminance_detail");
+  s.noise_color = param(v, cap, "noise_color");
+  s.noise_color_detail = param(v, cap, "noise_color_detail");
+  return s;
+}
 float grain_zone(float l, float shadows, float midtones, float highlights) {
   return std::max(0.0F, 1.0F - l / 0.5F) * shadows + std::max(0.0F, 1.0F - std::abs(l - 0.5F) / 0.5F) * midtones +
          std::max(0.0F, 1.0F - (1.0F - l) / 0.5F) * highlights;
@@ -504,7 +519,7 @@ const std::set<std::string_view>& tone_channels() {
   return channels;
 }
 bool gpu_channel(std::string_view capability, std::string_view channel) {
-  if (capability == "detail") return has_prefix(channel, "grain_");
+  if (capability == "detail") return has_prefix(channel, "grain_") || has_prefix(channel, "sharpen_") || has_prefix(channel, "noise_");
   if (capability == "color.local" || capability == "color.post") return tone_channels().count(channel) != 0;
   if (capability == "color.style") return channel == "amount";
   if (capability == "color.match") return channel == "amount" || channel == "precise";
@@ -551,6 +566,8 @@ struct PreparedOperation {
   bool color_active = false, tone_active = false;
   ColorGroups groups;
   Grain grain;
+  cr::DetailSettings detail;  // Camera Raw stage 8, before the grain
+  bool detail_on = false;
   ToneColor tone_color;
   Blend blend = Blend::Normal;
   float pixel_scale = 1.0F;  // RenderInputs::pixel_scale (texture and grain)
@@ -643,8 +660,12 @@ bool prepare(const pixcake::render::RenderDescription& description, const RgbaIm
       // so its offsets have nothing to act on yet.
       result.diagnostics.push_back({operation.capability_id, "色彩编辑器还没有目标颜色参数，偏移暂不绘制", false});
     }
-    if (draw.is_detail) draw.grain = grain_of(values, inputs.pixel_scale);
-    if (draw.is_detail && !draw.grain.on) continue;
+    if (draw.is_detail) {
+      draw.grain = grain_of(values, inputs.pixel_scale);
+      draw.detail = detail_of(values);
+      draw.detail_on = !cr::detailNeutral(draw.detail);
+    }
+    if (draw.is_detail && !draw.grain.on && !draw.detail_on) continue;
     draw.tone_color = tone_color_of(values);
     draw.color_active = color_is_active(draw.tone_color);
     draw.tone_active = tone_is_active(draw.tone_color);
@@ -703,7 +724,41 @@ void draw_spatial(const PreparedOperation& draw, RgbaImage& frame) {
   });
 }
 
+// A detail operation with sharpening or noise reduction: stage 8 on the whole frame, then the
+// grain (stage 9) on its float result, blended back by coverage.
+void draw_detail(const PreparedOperation& draw, RgbaImage& frame) {
+  cr::Frame f;
+  f.width = frame.width;
+  f.height = frame.height;
+  f.px.resize(static_cast<std::size_t>(frame.width) * frame.height);
+  std::vector<Pixel> before(f.px.size());
+  for_rows(frame.width, frame.height, [&](std::uint32_t first, std::uint32_t end) {
+    for (std::uint32_t y = first; y < end; ++y) for (std::uint32_t x = 0; x < frame.width; ++x) {
+      const std::size_t i = static_cast<std::size_t>(y) * frame.width + x;
+      before[i] = read(frame, x, y);
+      f.px[i] = {before[i].r, before[i].g, before[i].b, before[i].a};
+    }
+  });
+  cr::detail(f, draw.detail, draw.pixel_scale);
+  for_rows(frame.width, frame.height, [&](std::uint32_t first, std::uint32_t end) {
+    for (std::uint32_t y = first; y < end; ++y) for (std::uint32_t x = 0; x < frame.width; ++x) {
+      const std::size_t i = static_cast<std::size_t>(y) * frame.width + x;
+      Pixel after{f.px[i][0], f.px[i][1], f.px[i][2], before[i].a};
+      if (draw.grain.on) after = apply_grain(after, x, y, draw.grain);
+      if (draw.masks.empty() && draw.blend == Blend::Normal && before[i].a >= 1.0F) {
+        write(frame, x, y, after);
+      } else {
+        write(frame, x, y, blend_back(before[i], after, coverage(draw, i), draw.blend));
+      }
+    }
+  });
+}
+
 void draw_reference(const PreparedOperation& draw, RgbaImage& frame) {
+  if (draw.is_detail && draw.detail_on) {
+    draw_detail(draw, frame);
+    return;
+  }
   if (!draw.has_lut && draw.tone_active && draw.tone_color.spatial) {
     draw_spatial(draw, frame);
     return;
@@ -1075,7 +1130,7 @@ bool RenderExecutor::execute(gl::Context& context, const pixcake::render::Render
   }
   // Camera Raw's whole-frame stages need the whole frame in one GPU tile.
   bool spatial = false;
-  for (const auto& draw : draws) spatial = spatial || (draw.tone_active && draw.tone_color.spatial);
+  for (const auto& draw : draws) spatial = spatial || (draw.tone_active && draw.tone_color.spatial) || (draw.is_detail && draw.detail_on);
   const std::uint32_t spatial_edge = std::max<std::uint32_t>(1, gpu_tile_);
   const bool spatial_too_large = gpu_supported && spatial &&
                                  (input.width > spatial_edge || input.height > spatial_edge ||
@@ -1163,6 +1218,25 @@ bool RenderExecutor::execute(gl::Context& context, const pixcake::render::Render
                set_spatial_part(program, draw, true, error) && context.drawTriangles(3, error) && run_spatial_stages(sg, spatial_frame, draw);
           if (!ok && !sg.ok()) error = sg.error();
         }
+        // Stage 8 (the frame is one tile here): the frame as it is into a float plane (kColor with
+        // every step off, stage0.w), sharpening and noise reduction on it, then the grain pass
+        // below reads it from unit 3.
+        const bool detail_draw = grain && draw.detail_on;
+        if (ok && detail_draw) {
+          namespace crgl = pixcake::gpu::camera_raw_gl;
+          if (!cache.spatial) cache.spatial = std::make_unique<crgl::Gl>(context);
+          auto& sg = *cache.spatial;
+          gl::Program& copy = cache.color_program;
+          ok = ready_program(context, cache, copy, shaders::kColor, error) &&
+               crgl::allocate(sg, tile.width, tile.height, gl::PixelFormat::Rgba32F, spatial_frame) && copy.use(error) &&
+               crgl::framebufferOf(spatial_frame).bind(error) && context.setViewport(tile.width, tile.height, error) &&
+               cache.textures[current].bind(0, error) && cache.textures[current].bind(1, error) &&
+               cache.textures[current].bind(4, error) && copy.setTextureUnit("source", 0, error) &&
+               copy.setTextureUnit("masks", 1, error) && copy.setVec4("blend0", {0.0F, 0.0F, 0.0F, 0.0F}, error) &&
+               set_color_uniforms(copy, draw, error) && copy.setVec4("stage0", {0.0F, 0.0F, 0.0F, 1.0F}, error) &&
+               context.drawTriangles(3, error) && crgl::detail(sg, spatial_frame, draw.detail, draw.pixel_scale);
+          if (!ok && !sg.ok()) error = sg.error();
+        }
         const auto masks = static_cast<float>(draw.masks.size());
         // Upload first, bind after: an upload binds its texture to the active unit.
         const bool curves = !grain && draw.has_groups && draw.groups.curves;
@@ -1176,7 +1250,12 @@ bool RenderExecutor::execute(gl::Context& context, const pixcake::render::Render
           return program.setTextureUnit("masks", 1, error) &&
                  program.setVec4("blend0", {masks, static_cast<float>(draw.blend), 0.0F, 0.0F}, error) &&
                  (grain ? set_grain_uniforms(program, draw, error) &&
-                              program.setVec4("grain2", {static_cast<float>(tile.x), static_cast<float>(tile.y), 0.0F, 0.0F}, error)
+                              program.setVec4("grain2", {static_cast<float>(tile.x), static_cast<float>(tile.y), 0.0F, 0.0F}, error) &&
+                              // Bound here, after the mask upload (an upload binds to the active unit).
+                              (detail_draw ? pixcake::gpu::camera_raw_gl::textureOf(spatial_frame).bind(3, error) &&
+                                                 program.setTextureUnit("spatial", 3, error)
+                                           : program.setTextureUnit("spatial", 0, error)) &&
+                              program.setVec4("grain3", {detail_draw ? 1.0F : 0.0F, draw.grain.on ? 1.0F : 0.0F, 0.0F, 0.0F}, error)
                         : set_color_uniforms(program, draw, error) &&
                               // Bound here, after the mask upload (an upload binds to the active unit).
                               (!spatial_draw || (pixcake::gpu::camera_raw_gl::textureOf(spatial_frame).bind(3, error) &&

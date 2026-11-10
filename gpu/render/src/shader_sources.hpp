@@ -452,6 +452,8 @@ inline constexpr const char* kGrain = R"(
 uniform vec4 grain0;  // Camera Raw grain: cell, roughness, amount, scale (full-resolution px per px)
 uniform vec4 grain1;  // PixCake zones shadows, midtones, highlights; colour
 uniform vec4 grain2;  // the tile's origin in the frame: x, y
+uniform vec4 grain3;  // x: read the frame after Camera Raw's detail stage (unit 3), y: grain on
+uniform sampler2D spatial;
 
 // PhotoCraft photo_util.rs hash01 in 64-bit words emulated as (low, high), as camera_raw.wgsl.
 uvec2 mul_wide(uint a, uint b) {
@@ -497,10 +499,10 @@ float grain_zone(float l, float s, float m, float h) {
 void main() {
   float x = float(uint(gl_FragCoord.x) + uint(grain2.x)), y = float(uint(gl_FragCoord.y) + uint(grain2.y));
   vec4 before = texelFetch(source, ivec2(gl_FragCoord.xy), 0);
-  vec3 p = before.rgb;
+  vec3 p = grain3.x > 0.5 ? texelFetch(spatial, ivec2(gl_FragCoord.xy), 0).rgb : before.rgb;
   float l = clamp(luminance(p), 0.0, 1.0);
   float zone = grain_zone(l, grain1.x, grain1.y, grain1.z) / grain_zone(l, 0.30, 0.50, 0.15);
-  if (zone > 0.0) {
+  if (grain3.y > 0.5 && zone > 0.0) {
     float w = (0.4 + 2.4 * l * (1.0 - l)) * zone;
     float mono = grain_noise(x, y, 0u);
     vec3 n = vec3(mono);

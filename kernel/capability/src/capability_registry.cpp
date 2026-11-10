@@ -248,6 +248,33 @@ std::vector<ParameterMode> make_parameter_modes() {
     // 只有颗粒效果不为 0 时，下面各项才可以调节（2026-11-05 用户给出）。
     if (i > 0) grain.disable_rules.push_back({"detail", "grain_amount", "", "颗粒效果为 0 时不可调节", true});
   }
+  // 锐化与降噪：PhotoCraft Camera Raw 阶段 8（camera_raw.rs detail），在颗粒之前执行。官方“细节”分组有
+  // 锐化（半径、细节）、噪点消除（对比度、细节）、减少杂色（平滑度、细节）（2026-11-05 页面图名称，范围未实测）。
+  // 对应：噪点消除 = Camera Raw 明亮度降噪（只有它带“对比”），减少杂色 = 颜色降噪（只有它带“平滑度”）。
+  // 范围、默认值取 Camera Raw（PhotoCraft 默认）：锐化 0..150、半径 0.5..3.0（步进 0.1）默认 1.0、细节默认 25；
+  // 降噪 0..100、细节默认 50。PhotoCraft 没有的“对比度”“平滑度”和官方没有的“蒙版”不登记。数量为 0 时子项不可调。
+  const struct {
+    const char* id;
+    double minimum, maximum, step, default_value;
+    const char* amount;  // 子项所属的数量；数量本身为空
+    const char* reason;
+  } detail_modes[] = {
+      {"sharpen_amount", 0.0, 150.0, 1.0, 0.0, "", ""},
+      {"sharpen_radius", 0.5, 3.0, 0.1, 1.0, "sharpen_amount", "锐化为 0 时不可调节"},
+      {"sharpen_detail", 0.0, 100.0, 1.0, 25.0, "sharpen_amount", "锐化为 0 时不可调节"},
+      {"noise_luminance", 0.0, 100.0, 1.0, 0.0, "", ""},
+      {"noise_luminance_detail", 0.0, 100.0, 1.0, 50.0, "noise_luminance", "噪点消除为 0 时不可调节"},
+      {"noise_color", 0.0, 100.0, 1.0, 0.0, "", ""},
+      {"noise_color_detail", 0.0, 100.0, 1.0, 50.0, "noise_color", "减少杂色为 0 时不可调节"},
+  };
+  std::uint32_t detail_order = 87;
+  for (const auto& m : detail_modes) {
+    ParameterMode& mode = add("detail", m.id, m.minimum, m.maximum, m.step, m.default_value, "detail.sharpen",
+                              "pixcake.detail", m.id, detail_order++);
+    mode.step_confirmed = false;
+    mode.default_confirmed = m.default_value == 0.0;
+    if (*m.amount != '\0') mode.disable_rules.push_back({"detail", m.amount, "", m.reason, true});
+  }
   // 黑白档禁用影调里的鲜艳度和饱和度（需求第 10.3 节、第 24 节第 9 条）。
   for (auto& mode : modes) {
     if (mode.capability_id == "color.global" && (mode.parameter_id == "vibrance" || mode.parameter_id == "saturation")) {

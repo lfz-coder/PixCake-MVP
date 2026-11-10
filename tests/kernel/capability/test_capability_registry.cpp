@@ -443,7 +443,30 @@ void test_calibration_registered_as_photocraft_stage1b() {
   EXPECT(pixcake::find_parameter_mode("color.global", "calibration_shadows_tint") == nullptr);
 }
 
+// 细节（PhotoCraft Camera Raw 阶段 8）：锐化（数量、半径、细节）、噪点消除 = 明亮度降噪（数量、细节）、
+// 减少杂色 = 颜色降噪（数量、细节），范围与默认值取 Camera Raw；数量为 0 时子项不可调。
+void test_detail_registered_as_photocraft_stage8() {
+  const struct { const char* id; double min, max, def; } modes[] = {
+      {"sharpen_amount", 0, 150, 0},  {"sharpen_radius", 0.5, 3.0, 1.0},         {"sharpen_detail", 0, 100, 25},
+      {"noise_luminance", 0, 100, 0}, {"noise_luminance_detail", 0, 100, 50}, {"noise_color", 0, 100, 0},
+      {"noise_color_detail", 0, 100, 50}};
+  for (const auto& m : modes) {
+    const auto* mode = pixcake::find_parameter_mode("detail", m.id);
+    EXPECT(mode != nullptr && mode->minimum == m.min && mode->maximum == m.max && mode->default_value == m.def);
+  }
+  EXPECT(pixcake::validate_parameter_display_value("detail", "sharpen_radius", "2.5"));
+  EXPECT(!pixcake::validate_parameter_display_value("detail", "sharpen_radius", "3.5"));
+  EXPECT(pixcake::find_parameter_mode("detail", "sharpen_masking") == nullptr);
+  const auto* radius = pixcake::find_parameter_mode("detail", "sharpen_radius");
+  EXPECT(radius != nullptr && radius->disable_rules.size() == 1 && radius->disable_rules[0].when_parameter_id == "sharpen_amount" &&
+         radius->disable_rules[0].when_zero);
+  const auto* color_detail = pixcake::find_parameter_mode("detail", "noise_color_detail");
+  EXPECT(color_detail != nullptr && color_detail->disable_rules.size() == 1 &&
+         color_detail->disable_rules[0].when_parameter_id == "noise_color");
+}
+
 int main() {
+  test_detail_registered_as_photocraft_stage8();
   test_calibration_registered_as_photocraft_stage1b();
   test_curves_registered_as_photocraft_stage5();
   test_q02_grain_sub_parameters_need_nonzero_amount();

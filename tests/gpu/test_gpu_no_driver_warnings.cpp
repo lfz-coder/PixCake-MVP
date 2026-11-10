@@ -64,6 +64,7 @@ int main(int, char** argv) {
       {"masked local", {op("color.local", {v("exposure", 0.5)}, {"m"})}, frame(64, 48), &masked},
       {"spatial", {op("color.global", {v("shadows", 40), v("clarity", 20), v("vibrance", 10)})}, frame(64, 48), nullptr},
       {"grain", {op("detail", {v("grain_amount", 30)})}, frame(64, 48), nullptr},
+      {"sharpen + grain", {op("detail", {v("sharpen_amount", 80), v("noise_luminance", 30), v("grain_amount", 20)})}, frame(64, 48), nullptr},
       {"layers", {op("color.global", {v("exposure", 0.2)})}, frame(64, 48), &layered},
       {"curves", {op("color.global", {RenderValue{"curve_points_rgb", "curve_points_rgb", "0,0;128,160;255,255", 0.0}})}, frame(64, 48), nullptr},
   };

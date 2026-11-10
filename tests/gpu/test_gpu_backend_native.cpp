@@ -252,6 +252,12 @@ int main() {
        &extras, true, false},
       {"spatial then grain", {global({v("texture", 40), v("blacks", -30), v("hsl_hue_red", 20)}), grain({v("grain_amount", 40)})},
        nullptr, true, false},
+      // Camera Raw stage 8 (sharpening, noise reduction) on the whole frame, then grain on its result.
+      {"sharpen + nr", {grain({v("sharpen_amount", 100), v("sharpen_radius", 1.5), v("noise_luminance", 40), v("noise_color", 50)})},
+       nullptr, true, false},
+      {"colour, detail + grain", {global({v("exposure", 0.3), v("hsl_hue_red", 30)}),
+                                  grain({v("sharpen_amount", 80), v("sharpen_detail", 60), v("noise_color", 30), v("grain_amount", 30)})},
+       nullptr, true, false},
       // Camera Raw stage 1b, the calibration primaries, in the colour step.
       {"calibration", {global({v("calibration_red_hue", 50), v("calibration_green_hue", -40), v("calibration_blue_hue", 70),
                                v("calibration_red_saturation", -30), v("calibration_green_saturation", 60),
