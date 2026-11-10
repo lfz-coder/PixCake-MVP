@@ -1144,6 +1144,9 @@ bool RenderExecutor::execute(gl::Context& context, const pixcake::render::Render
       }
     }
   }
+  // The whole-frame stages' float planes are reused within a render only: a long-lived renderd
+  // or exportd sees many frame sizes, and a pool kept per size would only grow.
+  if (cache.spatial) cache.spatial->trim();
   if (ok) {
     result.success = true;
   } else {
@@ -1156,6 +1159,9 @@ bool RenderExecutor::execute(gl::Context& context, const pixcake::render::Render
 
 void RenderExecutor::setGpuTileSize(std::uint32_t edge) { gpu_tile_ = edge; }
 void RenderExecutor::setSpatialGpuMinPixels(std::uint64_t pixels) { spatial_gpu_min_pixels_ = pixels; }
+std::size_t RenderExecutor::gpuPooledBytes() const {
+  return gpu_cache_ != nullptr && gpu_cache_->spatial != nullptr ? gpu_cache_->spatial->pooledBytes() : 0;
+}
 
 ResultCode RenderExecutor::validate(const render::RenderDescription& description,
                                     std::string& error) {

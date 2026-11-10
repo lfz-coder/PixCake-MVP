@@ -107,6 +107,8 @@ class RenderExecutor {
   // (bench_reference_render, 2026-11-10: 600 x 450 GPU 94 ms vs 89 ms, 800 x 600 125 vs 148).
   static constexpr std::uint64_t kDefaultSpatialGpuMinPixels = 320000;
   void setSpatialGpuMinPixels(std::uint64_t pixels);
+  // Bytes of float planes the GPU path holds between renders (diagnostics and tests).
+  std::size_t gpuPooledBytes() const;
 
  private:
   mutable std::shared_ptr<GpuCache> gpu_cache_;

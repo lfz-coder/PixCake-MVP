@@ -429,6 +429,14 @@ int main() {
     std::size_t off = 0;
     const int worst = drawn && !on_gpu.reference_fallback ? worst_of(on_gpu.image, on_cpu.image, off) : 999;
     std::printf("gpu readback %-20s max diff %d, %zu differ\n", "scene 1000x750", worst, off);
+    // The float planes go back to the GPU when the render ends: renderd and exportd live long
+    // and see many frame sizes (crops, other photos), so a pool kept per size would only grow.
+    const std::size_t pooled = executor.gpuPooledBytes();
+    std::printf("gpu pooled after spatial render: %zu bytes\n", pooled);
+    if (pooled != 0) {
+      std::fprintf(stderr, "FAIL spatial pool: %zu bytes still held after the render\n", pooled);
+      ++failures;
+    }
     if (worst > 1) {
       std::fprintf(stderr, "FAIL scene 1000x750: GPU differs from reference by %d (%s)\n", worst, error.c_str());
       ++failures;

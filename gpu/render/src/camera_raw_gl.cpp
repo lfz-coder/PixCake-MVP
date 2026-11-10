@@ -138,6 +138,12 @@ struct Gl::Impl {
 Gl::Gl(const gl::Context& context) : impl_(std::make_unique<Impl>(context)) {}
 Gl::~Gl() = default;
 bool Gl::ok() const { return !impl_->failed; }
+void Gl::trim() { impl_->pool->free.clear(); }
+std::size_t Gl::pooledBytes() const {
+  std::size_t bytes = 0;
+  for (const auto& entry : impl_->pool->free) bytes += std::size_t{entry.second->w} * entry.second->h * gl::bytesPerPixel(entry.second->format);
+  return bytes;
+}
 const std::string& Gl::error() const { return impl_->error; }
 
 namespace {

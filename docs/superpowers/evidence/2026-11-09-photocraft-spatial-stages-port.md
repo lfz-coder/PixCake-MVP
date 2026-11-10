@@ -124,6 +124,8 @@ C++ reference 已与 PhotoCraft 同速；剩下的耗时是算法本身（局部
 
 交叉点约在 31 万像素，所以 `kDefaultSpatialGpuMinPixels` 取 32 万：拖动滑杆时的 600 px 帧继续走 reference，提交后的预览（≥800 px）走 GPU。
 
+浮点平面只在一次渲染内复用，`execute()` 结束时全部释放（`RenderExecutor::gpuPooledBytes()` 渲染后为 0，`test_gpu_backend_native`）。所以常驻的 renderd/exportd 不会因为帧尺寸变化而累积 GPU 内存。一次 4000×3000 渲染期间的峰值，比不含整帧参数时约多 1 GB（最终审查实测）。改为每次渲染释放后，耗时不变（4000×3000 GPU 215 ms）。
+
 ## 门禁（移植规范第 8 节）
 
 1. 来源与许可证：文件头与 `check_photocraft_license.cmake` 已登记，满足。

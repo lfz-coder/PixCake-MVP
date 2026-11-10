@@ -40,6 +40,10 @@ class Gl {
   Gl& operator=(const Gl&) = delete;
   bool ok() const;
   const std::string& error() const;
+  // Bytes of the free planes kept for reuse.
+  std::size_t pooledBytes() const;
+  // Frees the free planes (planes still held stay valid and are freed when dropped).
+  void trim();
 
   struct Impl;
   Impl& impl() { return *impl_; }
