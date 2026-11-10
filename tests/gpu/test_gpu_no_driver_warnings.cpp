@@ -1,28 +1,26 @@
 // The GPU path leaves no sampler on an unloadable texture: macOS's GL driver logs
 // "... is unloadable and bound to sampler type ..." (once per process) when a draw samples, or
-// merely declares, a unit with no complete texture.  A colour draw without curves, then one
-// with, in a fresh process, with stderr captured.
+// merely declares, a unit with no complete texture.  The warning is logged once per process, so
+// each kind of draw runs in a fresh process of its own (this program with the draw's index), with
+// stderr captured; an earlier draw cannot leave a unit bound for a later one.
 #include <pixcake/gl/native_backend.hpp>
 #include <pixcake/gpu/render_executor.hpp>
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <sstream>
 #include <string>
 #include <unistd.h>
 #include <vector>
 
-int main(int, char** argv) {
+int main(int argc, char** argv) {
   auto context = pixcake::gl::native::create_context();
   if (!context.valid() || !context.makeCurrent()) {
     std::printf("no native GL context, skipped\n");
     return 0;
   }
-  const std::string log = std::string(argv[0]) + ".stderr";
-  std::fflush(stderr);
-  const int saved = dup(fileno(stderr));
-  if (std::freopen(log.c_str(), "w", stderr) == nullptr) return 2;
 
   using pixcake::render::RenderValue;
   const auto v = [](const char* channel, double n) { return RenderValue{channel, channel, std::to_string(n), n}; };
@@ -72,8 +70,29 @@ int main(int, char** argv) {
   executor.setSpatialGpuMinPixels(0);
   pixcake::gpu::RenderResult result;
   std::string error;
+  const std::size_t count = sizeof draws / sizeof draws[0];
+  if (argc < 2) {
+    // The parent: one child per draw.
+    bool all = true;
+    for (std::size_t k = 0; k < count; ++k) {
+      const std::string log = std::string(argv[0]) + "." + std::to_string(k) + ".stderr";
+      const std::string command = "'" + std::string(argv[0]) + "' " + std::to_string(k) + " 2> '" + log + "'";
+      const int status = std::system(command.c_str());
+      std::ifstream in(log);
+      std::stringstream text;
+      text << in.rdbuf();
+      const bool warned = text.str().find("unloadable") != std::string::npos;
+      std::printf("%-16s %s%s\n", draws[k].name, status == 0 ? "drawn" : "FAILED", warned ? ", driver warning" : "");
+      if (warned) std::printf("  %s", text.str().c_str());
+      all = all && status == 0 && !warned;
+    }
+    return all ? 0 : 1;
+  }
   bool ok = true;
-  for (const auto& item : draws) {
+  const std::size_t only = static_cast<std::size_t>(std::atoi(argv[1]));
+  for (std::size_t k = 0; k < count; ++k) {
+    if (k != only) continue;
+    const auto& item = draws[k];
     pixcake::render::RenderDescription d;
     d.document_revision = 3;
     d.operations = item.ops;
@@ -85,12 +104,5 @@ int main(int, char** argv) {
     std::fflush(stderr);
   }
 
-  std::fflush(stderr);
-  dup2(saved, fileno(stderr));
-  std::ifstream in(log);
-  std::stringstream text;
-  text << in.rdbuf();
-  const bool warned = text.str().find("unloadable") != std::string::npos;
-  std::printf("gpu draws %s, driver warning %s\n", ok ? "ok" : error.c_str(), warned ? text.str().c_str() : "none");
-  return ok && !warned ? 0 : 1;
+  return ok ? 0 : 1;
 }

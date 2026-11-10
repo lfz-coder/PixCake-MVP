@@ -1213,6 +1213,7 @@ bool RenderExecutor::execute(gl::Context& context, const pixcake::render::Render
           ok = crgl::allocate(sg, tile.width, tile.height, gl::PixelFormat::Rgba32F, spatial_frame) && program.use(error) &&
                crgl::framebufferOf(spatial_frame).bind(error) && context.setViewport(tile.width, tile.height, error) &&
                cache.textures[current].bind(0, error) && cache.textures[current].bind(1, error) &&
+               cache.textures[current].bind(4, error) &&  // the curves sampler needs a complete texture too
                program.setTextureUnit("source", 0, error) && program.setTextureUnit("masks", 1, error) &&
                program.setVec4("blend0", {0.0F, 0.0F, 0.0F, 0.0F}, error) && set_color_uniforms(program, draw, error) &&
                set_spatial_part(program, draw, true, error) && context.drawTriangles(3, error) && run_spatial_stages(sg, spatial_frame, draw);
