@@ -74,6 +74,8 @@ bool downloadFrame(Gl&, const Plane& rgba, camera_raw::Frame& out);
 // The stages of camera_raw_spatial.hpp on an Rgba32F frame, in place.  Image statistics
 // (dehaze's atmospheric light and means) are read back and computed on the CPU.
 bool dehaze(Gl&, Plane& rgba, float amount);
+// Stage 8 (camera_raw::detail): noise reduction and sharpening.
+bool detail(Gl&, Plane& rgba, const camera_raw::DetailSettings& s, float pixel_scale);
 bool toneDetail(Gl&, Plane& rgba, float contrast, float texture, float clarity, float pixel_scale);
 // Highlights and Shadows: the pyramids on the GPU; ranges, quantiles and shifts on the CPU from
 // read-back work planes (at most localToneConstants().work_side across).

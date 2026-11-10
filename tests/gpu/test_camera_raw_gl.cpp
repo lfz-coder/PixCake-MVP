@@ -191,6 +191,38 @@ void test_tone_detail_gl(crgl::Gl& g) {
   }
 }
 
+void test_detail_gl(crgl::Gl& g) {
+  struct Case {
+    const char* name;
+    cr::DetailSettings s;
+    float pixel_scale;
+  };
+  const auto d = [](float sa, float sr, float sd, float sm, float nl, float nld, float nc, float ncd) {
+    cr::DetailSettings s;
+    s.sharpen_amount = sa;
+    s.sharpen_radius = sr;
+    s.sharpen_detail = sd;
+    s.sharpen_masking = sm;
+    s.noise_luminance = nl;
+    s.noise_luminance_detail = nld;
+    s.noise_color = nc;
+    s.noise_color_detail = ncd;
+    return s;
+  };
+  const Case cases[] = {{"sharpen 100", d(100, 1, 25, 0, 0, 50, 0, 50), 1},
+                        {"sharpen 150 radius 3 detail 100", d(150, 3, 100, 0, 0, 50, 0, 50), 1},
+                        {"sharpen masking 60", d(120, 1.5F, 40, 60, 0, 50, 0, 50), 1},
+                        {"luminance nr 100 detail 0", d(0, 1, 25, 0, 100, 0, 0, 50), 1},
+                        {"color nr 80", d(0, 1, 25, 0, 0, 50, 80, 30), 1},
+                        {"all scale 0.5", d(90, 2, 60, 20, 60, 30, 50, 40), 0.5F}};
+  for (const char* frame : kFrames) {
+    for (const auto& c : cases) {
+      expect_frame(g, c.name, frame, [&](crgl::Plane& p) { return crgl::detail(g, p, c.s, c.pixel_scale); },
+                   [&](cr::Frame& f) { cr::detail(f, c.s, c.pixel_scale); });
+    }
+  }
+}
+
 void test_local_tone_gl(crgl::Gl& g) {
   struct Case {
     const char* name;
@@ -297,6 +329,7 @@ int main() {
     test_rank_filter_gl(g);
     test_dehaze_gl(g);
     test_tone_detail_gl(g);
+    test_detail_gl(g);
     test_local_tone_gl(g);
     test_local_tone_gl_tiny(g);
     test_whites_blacks_gl(g);

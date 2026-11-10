@@ -133,6 +133,61 @@ void main() {
 }
 )";
 
+// ---- Detail (camera_raw.rs stage 8)
+// Y + chroma: (BT.709 luma, B - Y, R - Y, alpha).
+inline constexpr const char* kYcc = R"(
+void main() {
+  vec4 q = texelFetch(t0, here(), 0);
+  float y = 0.2126 * q.r + 0.7152 * q.g + 0.0722 * q.b;
+  color = vec4(y, q.b - y, q.r - y, q.a);
+}
+)";
+// Noise reduction keeps part of the residual: s + (v - s) * keep, on the luma (t0 = v, t1 = s).
+inline constexpr const char* kLumaKeep = R"(
+uniform float keep;
+void main() {
+  float v = texelFetch(t0, here(), 0).r, s = texelFetch(t1, here(), 0).r;
+  color = vec4(s + (v - s) * keep);
+}
+)";
+// The same on the chroma of a Y + chroma plane (t0), its Gaussian in t1.
+inline constexpr const char* kChromaKeep = R"(
+uniform float keep;
+void main() {
+  vec4 c = texelFetch(t0, here(), 0), b = texelFetch(t1, here(), 0);
+  color = vec4(c.x, b.y + (c.y - b.y) * keep, b.z + (c.z - b.z) * keep, c.w);
+}
+)";
+// Sharpening's Masking: a smoothstep of the gradient of the smoothed luma (edges clamped).
+inline constexpr const char* kEdgeMask = R"(
+uniform float t;
+void main() {
+  ivec2 p = here(), n = size0() - 1;
+  float gx = texelFetch(t0, ivec2(min(p.x + 1, n.x), p.y), 0).r - texelFetch(t0, ivec2(max(p.x - 1, 0), p.y), 0).r;
+  float gy = texelFetch(t0, ivec2(p.x, min(p.y + 1, n.y)), 0).r - texelFetch(t0, ivec2(p.x, max(p.y - 1, 0)), 0).r;
+  float e0 = t * 0.5, e1 = t + 1e-4;
+  float u = clamp((sqrt(gx * gx + gy * gy) - e0) / (e1 - e0), 0.0, 1.0);
+  color = vec4(u * u * (3.0 - 2.0 * u));
+}
+)";
+// RGB from the luma (t1), its blur (t2) and edge mask (t3) when sharpening, and the chroma (t0).
+inline constexpr const char* kDetailOut = R"(
+uniform int has_sharpen, has_mask;
+uniform float amt, det;
+void main() {
+  vec4 c = texelFetch(t0, here(), 0);
+  float l = texelFetch(t1, here(), 0).r;
+  if (has_sharpen != 0) {
+    float limit = 0.03 + det * 0.3;
+    float hp = clamp(l - texelFetch(t2, here(), 0).r, -limit, limit) * (0.5 + 0.5 * det);
+    float m = has_mask != 0 ? texelFetch(t3, here(), 0).r : 1.0;
+    l += amt * hp * m;
+  }
+  float rr = c.z + l, bb = c.y + l;
+  color = vec4(rr, (l - 0.2126 * rr - 0.0722 * bb) / 0.7152, bb, c.w);
+}
+)";
+
 // ---- Dehaze (camera_raw.rs stage 2)
 inline constexpr const char* kChannelMin = R"(
 void main() {

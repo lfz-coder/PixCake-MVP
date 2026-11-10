@@ -380,6 +380,57 @@ bool dehaze(Gl& gl_, Plane& rgba, float amount) {
   return true;
 }
 
+bool detail(Gl& gl_, Plane& rgba, const camera_raw::DetailSettings& s, float pixel_scale) {
+  if (camera_raw::detailNeutral(s)) return true;
+  auto& g = gl_.impl();
+  const float ps = std::clamp(pixel_scale, 0.01F, 1.0F);
+  Plane ycc, y;
+  if (!same_size_plane(g, rgba, PixelFormat::Rgba32F, ycc) || !g.draw(shaders::kYcc, ycc, {&rgba}) || !luma(g, rgba, false, y)) return false;
+  if (s.noise_luminance > 0.0F) {
+    const float k = s.noise_luminance / 100.0F, e = k * 0.06F;
+    const auto r = static_cast<std::size_t>(std::fmax(std::round((1.0F + 3.0F * k) * ps), 1.0F));
+    const float keep = s.noise_luminance_detail / 100.0F * 0.5F;
+    Plane smooth, kept;
+    if (!guided(gl_, y, y, r, e * e + 1e-6F, smooth) || !same_size_plane(g, y, PixelFormat::R32F, kept) ||
+        !g.draw(shaders::kLumaKeep, kept, {&y, &smooth}, [keep](gl::Program& p, std::string& err) { return p.setFloat("keep", keep, err); })) {
+      return false;
+    }
+    y = kept;
+  }
+  if (s.noise_color > 0.0F) {
+    const float sigma = std::fmax(s.noise_color / 100.0F * 6.0F * ps, 0.3F);
+    const float keep = s.noise_color_detail / 100.0F * 0.3F;
+    Plane blurred, kept;
+    if (!gauss(gl_, ycc, sigma, blurred) || !same_size_plane(g, ycc, PixelFormat::Rgba32F, kept) ||
+        !g.draw(shaders::kChromaKeep, kept, {&ycc, &blurred}, [keep](gl::Program& p, std::string& err) { return p.setFloat("keep", keep, err); })) {
+      return false;
+    }
+    ycc = kept;
+  }
+  const bool sharpen = s.sharpen_amount > 0.0F, masked = sharpen && s.sharpen_masking > 0.0F;
+  Plane blur = y, mask = y;
+  if (sharpen && !gauss(gl_, y, std::fmax(std::clamp(s.sharpen_radius, 0.5F, 3.0F) * ps, 0.3F), blur)) return false;
+  if (masked) {
+    const float t = s.sharpen_masking / 100.0F * 0.08F;
+    Plane sm;
+    if (!gauss(gl_, y, 1.0F * std::fmax(ps, 0.5F), sm) || !same_size_plane(g, y, PixelFormat::R32F, mask) ||
+        !g.draw(shaders::kEdgeMask, mask, {&sm}, [t](gl::Program& p, std::string& err) { return p.setFloat("t", t, err); })) {
+      return false;
+    }
+  }
+  const float amt = s.sharpen_amount / 100.0F * 1.2F, det = s.sharpen_detail / 100.0F;
+  Plane out;
+  if (!same_size_plane(g, rgba, PixelFormat::Rgba32F, out) ||
+      !g.draw(shaders::kDetailOut, out, {&ycc, &y, &blur, &mask}, [&](gl::Program& p, std::string& err) {
+        return p.setInt("has_sharpen", sharpen ? 1 : 0, err) && p.setInt("has_mask", masked ? 1 : 0, err) &&
+               p.setFloat("amt", amt, err) && p.setFloat("det", det, err);
+      })) {
+    return false;
+  }
+  rgba = out;
+  return true;
+}
+
 bool toneDetail(Gl& gl_, Plane& rgba, float contrast, float texture, float clarity, float pixel_scale) {
   if (contrast == 0.0F && texture == 0.0F && clarity == 0.0F) return true;
   auto& g = gl_.impl();
