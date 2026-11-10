@@ -180,6 +180,14 @@ std::vector<ParameterMode> make_parameter_modes() {
       hsl.disable_rules.push_back({"color.global", "profile", "monochrome", "黑白配置文件下 HSL 换成黑白组"});
     }
   }
+  // 校准：PhotoCraft Camera Raw 阶段 1b（camera_raw.rs calibrate）。官方面板是红、绿、蓝原色各一对色相、
+  // 饱和度滑杆（2026-11-05 页面图名称；范围按滑杆惯例填写，未实测），PhotoCraft 也把它们夹在 -100..100，
+  // 默认 0，步进待确认。官方面板没有“阴影-色调”，不登记。
+  for (const char* primary : {"red", "green", "blue"}) {
+    for (const char* item : {"hue", "saturation"}) {
+      add_global(std::string("calibration_") + primary + "_" + item, -100.0, 100.0, 1.0, 0.0).step_confirmed = false;
+    }
+  }
   // 曲线：PhotoCraft Camera Raw 第 5 阶段（camera_raw.rs parametric_lut、curve_lut）。官方面板有参数曲线
   // （高光、亮调、暗调、阴影）和 RGB、红、绿、蓝通道曲线（2026-11-06 读到入口和控件，范围未实测），
   // 这里按 PhotoCraft 的范围登记：参数曲线 -100 到 100、默认 0，步进待确认；分割点不登记，固定为

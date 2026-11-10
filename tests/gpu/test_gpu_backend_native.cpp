@@ -252,6 +252,15 @@ int main() {
        &extras, true, false},
       {"spatial then grain", {global({v("texture", 40), v("blacks", -30), v("hsl_hue_red", 20)}), grain({v("grain_amount", 40)})},
        nullptr, true, false},
+      // Camera Raw stage 1b, the calibration primaries, in the colour step.
+      {"calibration", {global({v("calibration_red_hue", 50), v("calibration_green_hue", -40), v("calibration_blue_hue", 70),
+                               v("calibration_red_saturation", -30), v("calibration_green_saturation", 60),
+                               v("calibration_blue_saturation", 100)})}},
+      {"calibration after balance", {global({v("temperature", -40), v("exposure", 1.5), v("calibration_red_hue", -60),
+                                             v("calibration_blue_saturation", -80), v("brightness", 20), v("hsl_hue_red", 30)})}},
+      {"spatial + calibration", {global({v("dehaze", 30), v("shadows", 40), v("calibration_green_hue", 50),
+                                         v("calibration_red_saturation", 40)})},
+       nullptr, true, false},
       // Camera Raw stage 5: the curve tables on an R32F texture (unit 4).
       {"curves", {global({v("curve_highlights", -40), v("curve_lights", 30), v("curve_darks", -20), v("curve_shadows", 50),
                           pts("curve_points_rgb", "0,0;64,40;192,220;255,255"), pts("curve_points_red", "0,20;128,150;255,240"),

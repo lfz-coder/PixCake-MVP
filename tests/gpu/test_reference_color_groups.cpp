@@ -296,6 +296,24 @@ void test_curves() {
   assert(a.image.pixels == b.image.pixels);
 }
 
+// Camera Raw stage 1b: the calibration primaries right after white balance and exposure, before
+// brightness and Contrast.
+void test_calibration() {
+  const std::array<float, 3> hue{30, -40, 20}, sat{-20, 50, -60};
+  const auto gains = cr::balanceGains(25, 0, 0.3F);
+  const auto description = global({value("temperature", 25), value("exposure", 0.3), value("calibration_red_hue", 30),
+                                   value("calibration_green_hue", -40), value("calibration_blue_hue", 20),
+                                   value("calibration_red_saturation", -20), value("calibration_green_saturation", 50),
+                                   value("calibration_blue_saturation", -60), value("contrast", 20)});
+  for (const auto& px : {std::array<int, 3>{200, 120, 40}, std::array<int, 3>{30, 60, 90}, std::array<int, 3>{40, 200, 90},
+                         std::array<int, 3>{128, 128, 128}}) {
+    const cr::Rgb c = cr::applyContrast(cr::applyCalibration(cr::applyBalance(unit(px[0], px[1], px[2]), gains), hue, sat), 20);
+    assert(near(render(description, image(static_cast<std::uint8_t>(px[0]), static_cast<std::uint8_t>(px[1]),
+                                          static_cast<std::uint8_t>(px[2]))),
+                quantize(c), 0));
+  }
+}
+
 void test_hsl() {
   cr::Settings turn;
   turn.hsl_hue[0] = 100;
@@ -448,6 +466,7 @@ void test_document_to_pixels() {
 }  // namespace
 
 int main() {
+  test_calibration();
   test_curves();
   test_document_to_pixels();
   test_global_uses_camera_raw();

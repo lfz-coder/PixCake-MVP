@@ -429,7 +429,22 @@ void test_curves_registered_as_photocraft_stage5() {
   EXPECT(pixcake::encode_curve_points(points) == "0,0;64,40;255,255");
 }
 
+// 校准（PhotoCraft Camera Raw 阶段 1b）：红/绿/蓝原色的色相、饱和度，-100..100，默认 0；没有阴影色调。
+void test_calibration_registered_as_photocraft_stage1b() {
+  for (const char* primary : {"red", "green", "blue"}) {
+    for (const char* item : {"hue", "saturation"}) {
+      const std::string id = std::string("calibration_") + primary + "_" + item;
+      const auto* mode = pixcake::find_parameter_mode("color.global", id);
+      EXPECT(mode != nullptr && mode->minimum == -100.0 && mode->maximum == 100.0 && mode->default_value == 0.0);
+      EXPECT(pixcake::validate_parameter_display_value("color.global", id, "-100"));
+      EXPECT(!pixcake::validate_parameter_display_value("color.global", id, "100.5"));
+    }
+  }
+  EXPECT(pixcake::find_parameter_mode("color.global", "calibration_shadows_tint") == nullptr);
+}
+
 int main() {
+  test_calibration_registered_as_photocraft_stage1b();
   test_curves_registered_as_photocraft_stage5();
   test_q02_grain_sub_parameters_need_nonzero_amount();
   test_q06_layer_ranges_come_from_parameter_modes();

@@ -92,6 +92,8 @@ inline constexpr const char* kColor = R"(
 uniform vec4 stage0;   // colour step, tone step, spatial input, raw output
 uniform sampler2D spatial;  // stage0.z: the frame after Camera Raw's whole-frame stages (Rgba32F)
 uniform vec4 cr0;      // Camera Raw stage 1 gains rgb; w = 1 when it applies
+uniform vec4 cal0;     // Camera Raw stage 1b: red, green, blue primary Hue; w = 1 when it applies
+uniform vec4 cal1;     // red, green, blue primary Saturation, -
 uniform vec4 cr1;      // contrast strength (slider / 100 * 0.6), vibrance, saturation, presence on
 uniform vec4 bright0;  // brightness curve: s, e, x0, alpha
 uniform vec4 bright1;  // brightness on, raise, hermite, -
@@ -254,8 +256,31 @@ vec3 cr_presence(vec3 c) {
   return l + (c - l) * max(k, 0.0);
 }
 
+// Stage 1b, calibration primaries in linear light (camera_raw.cpp applyCalibration).
+vec3 cr_calibration(vec3 p) {
+  vec3 c = vec3(srgb_to_linear(p.r), srgb_to_linear(p.g), srgb_to_linear(p.b));
+  vec3 o = c;
+  vec3 hsv = rgb_to_hsv(max(c, vec3(0.0)));
+  if (!(hsv.y <= 1e-5 || hsv.z <= 1e-6)) {
+    float h = rem_euclid(hsv.x, 360.0);
+    vec3 w;
+    for (int i = 0; i < 3; ++i) {
+      float d = min(abs(h - 120.0 * float(i)), 360.0 - abs(h - 120.0 * float(i)));
+      w[i] = max(1.0 - d / 120.0, 0.0);
+    }
+    float sum = w.x + w.y + w.z;
+    w = sum > 1e-6 ? w / sum : vec3(1.0, 0.0, 0.0);
+    float dh = dot(w, clamp(cal0.xyz, -100.0, 100.0)), ds = dot(w, clamp(cal1.xyz, -100.0, 100.0));
+    o = hsv_to_rgb(hsv.x + dh / 100.0 * 30.0, clamp(hsv.y * (1.0 + ds / 100.0), 0.0, 1.0), hsv.z);
+    float l0 = luminance(c), l1 = luminance(o);
+    if (l1 > 1e-6) o = o * l0 / l1;
+  }
+  o = max(o, vec3(0.0));
+  return vec3(linear_to_srgb(o.r), linear_to_srgb(o.g), linear_to_srgb(o.b));
+}
 vec3 colour_step(vec3 p) {
   if (cr0.w > 0.5) p = cr_balance(p);
+  if (cal0.w > 0.5) p = cr_calibration(p);
   p.r += tone0.x * 0.04;
   p.g += tone0.x * 0.01;
   p.b -= tone0.x * 0.03;

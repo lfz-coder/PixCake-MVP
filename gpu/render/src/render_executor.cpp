@@ -85,6 +85,8 @@ Pixel with_rgb(Pixel p, const cr::Rgb& c) {
 struct ToneColor {
   bool balance = false;
   cr::Rgb gains{1.0F, 1.0F, 1.0F};
+  bool calibration = false;  // Camera Raw stage 1b, red/green/blue primaries
+  std::array<float, 3> calibration_hue{}, calibration_sat{};
   float style = 0;
   bool brightness_on = false;
   std::vector<float> brightness_lut;
@@ -102,6 +104,12 @@ ToneColor tone_color_of(const std::map<std::string, float>& v) {
   const float exposure = get(v, "exposure");
   t.balance = temperature != 0.0F || tint != 0.0F || exposure != 0.0F;
   if (t.balance) t.gains = cr::balanceGains(temperature, tint, exposure);
+  const char* primaries[3] = {"red", "green", "blue"};
+  for (int i = 0; i < 3; ++i) {
+    t.calibration_hue[i] = get(v, (std::string("calibration_") + primaries[i] + "_hue").c_str());
+    t.calibration_sat[i] = get(v, (std::string("calibration_") + primaries[i] + "_saturation").c_str());
+  }
+  t.calibration = !cr::calibrationNeutral(t.calibration_hue, t.calibration_sat);
   // 程度 100 是默认强度：AI 色彩风格 0..100，AI 追色 0..200（200 为两倍强度），与参数模式一致。
   t.style = std::clamp(get(v, "amount") / 100.0F, 0.0F, 2.0F);
   t.brightness = get(v, "brightness");
@@ -125,7 +133,7 @@ ToneColor tone_color_of(const std::map<std::string, float>& v) {
   return t;
 }
 bool color_is_active(const ToneColor& t) {
-  return t.balance || std::abs(t.style) > 1e-7F;
+  return t.balance || t.calibration || std::abs(t.style) > 1e-7F;
 }
 bool tone_is_active(const ToneColor& t) {
   return t.brightness_on || t.spatial || t.contrast != 0.0F || t.vibrance != 0.0F || t.saturation != 0.0F;
@@ -133,6 +141,7 @@ bool tone_is_active(const ToneColor& t) {
 // Steps 1 and 2.
 Pixel color(Pixel p, const ToneColor& t) {
   if (t.balance) p = with_rgb(p, cr::applyBalance(rgb_of(p), t.gains));
+  if (t.calibration) p = with_rgb(p, cr::applyCalibration(rgb_of(p), t.calibration_hue, t.calibration_sat));
   p.r += t.style * 0.04F; p.g += t.style * 0.01F; p.b -= t.style * 0.03F;
   return p;
 }
@@ -503,7 +512,7 @@ bool gpu_channel(std::string_view capability, std::string_view channel) {
       "amount", "profile", "selective_mode", "color_editor_hue_shift", "color_editor_saturation_shift",
       "color_editor_luminance_shift"};
   if (tone_channels().count(channel) != 0 || global.count(channel) != 0) return true;
-  for (const char* prefix : {"levels_rgb_", "curve_", "hsl_", "bw_mix_", "selective_", "grading_"}) {
+  for (const char* prefix : {"calibration_", "levels_rgb_", "curve_", "hsl_", "bw_mix_", "selective_", "grading_"}) {
     if (has_prefix(channel, prefix)) return true;
   }
   return false;
@@ -899,6 +908,8 @@ bool set_color_uniforms(gl::Program& program, const PreparedOperation& draw, std
   const br::Curve curve = br::curve(t.brightness);
   bool ok = program.setVec4("stage0", {flag(colour_step), flag(tone_step), 0.0F, 0.0F}, error) &&
             program.setVec4("cr0", {t.gains[0], t.gains[1], t.gains[2], flag(t.balance)}, error) &&
+            program.setVec4("cal0", {t.calibration_hue[0], t.calibration_hue[1], t.calibration_hue[2], flag(t.calibration)}, error) &&
+            program.setVec4("cal1", {t.calibration_sat[0], t.calibration_sat[1], t.calibration_sat[2], 0.0F}, error) &&
             program.setVec4("cr1", {t.contrast / 100.0F * 0.6F, t.vibrance, t.saturation,
                                     flag(t.vibrance != 0.0F || t.saturation != 0.0F)}, error) &&
             program.setVec4("bright0", {curve.s, curve.e, curve.x0, curve.alpha}, error) &&
