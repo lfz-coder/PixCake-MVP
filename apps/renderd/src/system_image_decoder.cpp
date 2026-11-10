@@ -2,6 +2,8 @@
 
 #ifdef __APPLE__
 #include "pixcake/platform/mac_image_decoder.hpp"
+
+#include <algorithm>
 #endif
 
 namespace pixcake::renderd {
@@ -49,6 +51,7 @@ class MacImageDecoder final : public ImageDecoder {
     decoded.width = image.width;
     decoded.height = image.height;
     decoded.stride = image.stride;
+    decoded.source_long_edge = std::max(image.source_width, image.source_height);
     decoded.bytes = std::move(image.rgba);
     code = validate_decoded_image(decoded, request.limits, diagnostic);
     if (code != ResultCode::Ok) return code;

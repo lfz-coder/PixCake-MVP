@@ -44,6 +44,9 @@ struct RgbaInput {
   std::uint32_t height = 0;
   std::uint32_t stride = 0;
   std::vector<std::uint8_t> bytes;
+  // Long edge of the full-resolution image this frame was decoded from (0: the frame is full
+  // resolution); grain samples full-resolution coordinates from it.
+  std::uint32_t source_long_edge = 0;
 };
 
 using DecodedImage = RgbaInput;

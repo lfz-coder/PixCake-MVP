@@ -175,6 +175,10 @@ PreviewResult RenderService::render_operations(std::uint64_t sequence, const std
   inputs.masks = std::move(batch.masks);
   inputs.preview = true;
   inputs.preview_max_dimension = max_edge;
+  const std::uint32_t frame_long_edge = std::max(input.width, input.height);
+  if (input.source_long_edge > frame_long_edge) {
+    inputs.pixel_scale = static_cast<float>(frame_long_edge) / static_cast<float>(input.source_long_edge);
+  }
 
   // 几何（翻转、旋转、拉直、比例裁剪）在颜色绘制之前整张图做完，蒙版同步；缩略图和预览走这里，导出走同一个函数。
   gpu::apply_geometry(gpu::geometry_of(description), image, inputs.masks);

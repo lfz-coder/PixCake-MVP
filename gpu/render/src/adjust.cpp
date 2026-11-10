@@ -1,4 +1,4 @@
-// Ported from PhotoCraft crates/compose/src/adjust/tone.rs, adjust/color.rs and psblend.rs, and
+// Ported from PhotoCraft crates/compose/src/adjust/tone.rs, adjust/color.rs, psblend.rs and composite.rs, and
 // crates/color/src/blend.rs, @ 885a6ddf27cc58c07faf1722e5c327cd38953657,
 // MIT (elected from MIT OR Apache-2.0).
 // Copyright (c) 2026 ArtCraft Team and the PhotoCraft contributors.
@@ -119,7 +119,11 @@ Rgb selectiveColor(const Rgb& c, bool relative, const std::array<std::array<floa
 }
 
 Rgb lut3dSample(const std::vector<float>& lut, std::size_t n, const Rgb& c, bool tetrahedral) {
-  if (n < 2 || lut.size() / 3 / n / n < n) return c;
+  return lut3dSample(lut.data(), lut.size(), n, c, tetrahedral);
+}
+
+Rgb lut3dSample(const float* lut, std::size_t count, std::size_t n, const Rgb& c, bool tetrahedral) {
+  if (lut == nullptr || n < 2 || count / 3 / n / n < n) return c;
   const float m = static_cast<float>(n - 1);
   Rgb pos{}, f{};
   std::array<std::size_t, 3> i0{};
@@ -183,6 +187,19 @@ Rgba composite(BlendMode mode, const Rgba& backdrop, const Rgba& source, float o
   }
   out[3] = ao;
   return out;
+}
+
+Rgb blendRgb(BlendMode mode, const Rgb& cb, const Rgb& cs) {
+  return {channel(mode, cb[0], cs[0]), channel(mode, cb[1], cs[1]), channel(mode, cb[2], cs[2])};
+}
+
+Rgba blendBack(BlendMode mode, const Rgba& b, const Rgb& adjusted, float k) {
+  if (k <= 0.0F) return b;
+  // Normal is the source as it is.
+  const Rgb blended = mode == BlendMode::Normal ? adjusted : blendRgb(mode, {b[0], b[1], b[2]}, adjusted);
+  // b*(1-k) + s*k, not b + (s-b)*k (PhotoCraft #9483).
+  const float j = 1.0F - k;
+  return {b[0] * j + blended[0] * k, b[1] * j + blended[1] * k, b[2] * j + blended[2] * k, b[3]};
 }
 
 }  // namespace pixcake::gpu::adjust

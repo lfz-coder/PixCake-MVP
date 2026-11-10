@@ -48,7 +48,16 @@ class ResourceProvider {
     return false;
   }
 };
-struct RenderInputs { std::vector<RenderMask> masks; std::vector<RenderLayer> layers; std::uint32_t preview_max_dimension = 4000; bool preview = true; const ResourceProvider* resources = nullptr; };
+struct RenderInputs {
+  std::vector<RenderMask> masks;
+  std::vector<RenderLayer> layers;
+  std::uint32_t preview_max_dimension = 4000;
+  bool preview = true;
+  const ResourceProvider* resources = nullptr;
+  // Frame pixels per full-resolution output pixel (long edge over long edge, 0.01..1): grain
+  // samples its noise in full-resolution coordinates so a preview shows the export's grain.
+  float pixel_scale = 1.0F;
+};
 struct ExecutionDiagnostic { std::string capability_id; std::string reason; bool blocking = false; };
 enum class PassStatus { Implemented, ReferenceOnly, MissingResource, Unregistered, Disabled, InvalidInput };
 struct PassStatusRecord { std::string capability_id; std::string program; PassStatus status = PassStatus::Unregistered; std::string reason; };

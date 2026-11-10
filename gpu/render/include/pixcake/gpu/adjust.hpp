@@ -4,7 +4,7 @@
 // Levels (adjust/tone.rs levels_q, levels_gamma, tone_luts_q, lut), Selective Color
 // (adjust/color.rs selective_color_weights, selective_color), 3D LUT sampling
 // (adjust/color.rs lut3d_sample) and the normal / multiply / screen composite (psblend.rs
-// composite, normal_rgb; photocraft_color::blend channel)
+// composite, normal_rgb; composite.rs blend_back; photocraft_color::blend channel)
 // @ 885a6ddf27cc58c07faf1722e5c327cd38953657, MIT (elected from MIT OR Apache-2.0).
 // Copyright (c) 2026 ArtCraft Team and the PhotoCraft contributors.
 // Licence text: third_party/photocraft-LICENSES/LICENSE-MIT.
@@ -43,9 +43,16 @@ Rgb selectiveColor(const Rgb& c, bool relative, const std::array<std::array<floa
 
 // n^3 RGB triplets, red fastest; a short or degenerate table leaves c alone.
 Rgb lut3dSample(const std::vector<float>& table, std::size_t n, const Rgb& c, bool tetrahedral);
+// The same on `count` floats the caller owns.
+Rgb lut3dSample(const float* table, std::size_t count, std::size_t n, const Rgb& c, bool tetrahedral);
 
 enum class BlendMode { Normal, Multiply, Screen };
 // Straight-alpha source over straight-alpha backdrop (W3C general formula).
 Rgba composite(BlendMode mode, const Rgba& backdrop, const Rgba& source, float opacity);
+// B(cb, cs) per channel (photocraft_color::blend).
+Rgb blendRgb(BlendMode mode, const Rgb& cb, const Rgb& cs);
+// An adjustment's result blended back into the backdrop it was made from, by coverage
+// k = opacity x mask, alpha kept (composite.rs blend_back at Fill 100%).
+Rgba blendBack(BlendMode mode, const Rgba& backdrop, const Rgb& adjusted, float k);
 
 }  // namespace pixcake::gpu::adjust

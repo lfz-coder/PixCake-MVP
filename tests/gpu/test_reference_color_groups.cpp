@@ -295,19 +295,21 @@ void test_monochrome() {
   assert(near(render(global({value("bw_mix_red", 100)}), image(255, 0, 0)), {255, 0, 0}, 0));
 }
 
+// Selective color: PhotoCraft's Photoshop Selective Color (adjust.cpp; vectors in test_adjust_port).
 void test_selective_color() {
-  // (200, 50, 50) belongs to red by (max - mid) = 150/255.  Cyan +100 acts on the red channel.
+  // (200, 50, 50) belongs to red by (max - mid) = 150/255.  Cyan +100 acts on the red channel:
+  // relative scales the ink there (0.216), absolute adds by the room it has, min(1, 2(1 - ink)).
   assert(near(render(global({value("selective_red_cyan", 100)}), image(200, 50, 50)), {168, 50, 50}));
   assert(near(render(global({value("selective_red_cyan", 100), choice("selective_mode", "absolute", 1)}),
                      image(200, 50, 50)),
-              {82, 50, 50}));
+              {50, 50, 50}));
   // Relative mode scales ink that is there: pure red has no cyan ink to scale.
   assert(near(render(global({value("selective_red_cyan", 100)}), image(255, 0, 0)), {255, 0, 0}, 0));
   // A blue is not red.
   assert(near(render(global({value("selective_red_cyan", 100)}), image(50, 50, 200)), {50, 50, 200}, 0));
-  // Neutral black +100 darkens mid grey to (nearly) black.
+  // Neutral black +100 darkens mid grey.
   const Rgb grey = render(global({value("selective_neutral_black", 100)}), image(128, 128, 128));
-  assert(grey.r <= 2 && grey.g <= 2 && grey.b <= 2);
+  assert(grey.r < 128 && grey.r == grey.g && grey.g == grey.b);
 }
 
 // Camera Raw's Color Grading: wheels add a tint of zero luminance, luminance is a gain.

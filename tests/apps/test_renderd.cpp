@@ -60,6 +60,35 @@ int main() {
   if (gpu) probe.doneCurrent();
   assert(rendered.drawn_on_gpu == gpu);
 
+  // Grain samples full-resolution coordinates: a half-size preview of a 16 px wide source shows,
+  // at (x, y), the grain the full-resolution frame has at (2x, 2y).
+  {
+    const auto grey = [](std::uint64_t sequence, std::uint32_t width, std::uint32_t height) {
+      auto value = work(sequence, 128);
+      value.request.capability_id = "detail";
+      value.request.parameter_id = "grain_amount";
+      value.input.width = width;
+      value.input.height = height;
+      value.input.stride = width * 4;
+      value.input.bytes.assign(static_cast<std::size_t>(width) * height * 4, 128);
+      value.input.source_long_edge = 16;
+      value.description.operations.push_back({"detail", "detail.grain", "pixcake.detail", 1,
+                                              {{"grain_amount", "grain_amount", "100", 100.0},
+                                               {"grain_size", "grain_size", "40", 40.0},
+                                               {"grain_color", "grain_color", "0", 0.0}},
+                                              {}, "normal", true, {}});
+      return value;
+    };
+    assert(service.submit(grey(40, 16, 8), diagnostic) == pixcake::ResultCode::Ok);
+    const auto full = service.render_latest();
+    assert(service.submit(grey(41, 8, 4), diagnostic) == pixcake::ResultCode::Ok);
+    const auto half = service.render_latest();
+    assert(full.code == pixcake::ResultCode::Ok && half.code == pixcake::ResultCode::Ok);
+    for (std::uint32_t y = 0; y < 4; ++y)
+      for (std::uint32_t x = 0; x < 8; ++x)
+        assert(half.rgba[(y * half.header.stride) + x * 4] == full.rgba[(2 * y * full.header.stride) + 2 * x * 4]);
+  }
+
   auto unregistered = work(31, 1);
   unregistered.description.operations.push_back({"portrait.skin", "portrait", "pixcake.portrait.skin", 1, {}, {},
                                                  "normal", true, {}});

@@ -1,6 +1,7 @@
 #include "pixcake/gpu/render_executor.hpp"
 
 #include "pixcake/capability/capability_registry.hpp"
+#include "pixcake/gpu/adjust.hpp"
 #include "pixcake/gpu/brightness.hpp"
 #include "pixcake/gpu/camera_raw.hpp"
 #include "shader_sources.hpp"
@@ -54,6 +55,7 @@ void write(RgbaImage& image, std::uint32_t x, std::uint32_t y, Pixel p) {
 }
 namespace cr = pixcake::gpu::camera_raw;
 namespace br = pixcake::gpu::brightness;
+namespace adj = pixcake::gpu::adjust;
 
 cr::Rgb rgb_of(const Pixel& p) { return {p.r, p.g, p.b}; }
 Pixel with_rgb(Pixel p, const cr::Rgb& c) {
@@ -221,12 +223,14 @@ float band_value(const float values[8], float hue) {
 
 struct ColorGroups {
   bool levels = false;
+  std::vector<float> levels_lut;  // PhotoCraft Levels, master = PixCake's RGB composite, 8-bit
   float in_black = 0, in_white = 1, gamma = 1, out_black = 0, out_white = 1;
   bool hsl = false;  // Camera Raw stage 6, Color Mixer (slider units)
   std::array<float, 8> hue{}, saturation{}, lightness{};
   bool monochrome = false;
   float mix[8]{};
   bool selective = false, absolute = false;
+  std::array<std::array<float, 4>, 9> selective_percent{};  // PhotoCraft selective_color amounts
   float selective_ink[9][4]{};  // target x (cyan, magenta, yellow, black), -1..1
   std::array<std::uint8_t, 9> selective_targets{};
   std::size_t selective_target_count = 0;
@@ -249,6 +253,7 @@ ColorGroups color_groups(const Values& v) {
   g.out_black = param(v, cap, "levels_rgb_output_black") / 255.0F;
   g.out_white = param(v, cap, "levels_rgb_output_white") / 255.0F;
   g.levels = g.in_black != 0.0F || g.in_white != 1.0F || g.gamma != 1.0F || g.out_black != 0.0F || g.out_white != 1.0F;
+  if (g.levels) g.levels_lut = adj::levelsLut({g.in_black, g.in_white, g.gamma, g.out_black, g.out_white}, 255.0F);
   for (int i = 0; i < 8; ++i) {
     const std::string band = kBandName[i];
     g.hue[i] = param(v, cap, "hsl_hue_" + band);
@@ -263,7 +268,8 @@ ColorGroups color_groups(const Values& v) {
   for (int t = 0; t < 9; ++t) {
     bool target_active = false;
     for (int k = 0; k < 4; ++k) {
-      g.selective_ink[t][k] = param(v, cap, std::string("selective_") + targets[t] + "_" + inks[k]) / 100.0F;
+      g.selective_percent[t][k] = param(v, cap, std::string("selective_") + targets[t] + "_" + inks[k]);
+      g.selective_ink[t][k] = g.selective_percent[t][k] / 100.0F;
       g.selective = g.selective || g.selective_ink[t][k] != 0.0F;
       target_active = target_active || g.selective_ink[t][k] != 0.0F;
     }
@@ -287,13 +293,9 @@ ColorGroups color_groups(const Values& v) {
   return g;
 }
 
+// Levels: PhotoCraft's Photoshop Levels table (adjust.cpp), sampled like PhotoCraft's lut().
 Pixel apply_levels(Pixel p, const ColorGroups& g) {
-  const float span = std::max(g.in_white - g.in_black, 1.0F / 255.0F);
-  const auto map = [&](float c) {
-    const float x = std::pow(clamp01((c - g.in_black) / span), 1.0F / g.gamma);
-    return g.out_black + x * (g.out_white - g.out_black);
-  };
-  return {map(p.r), map(p.g), map(p.b), p.a};
+  return {adj::sampleLut(g.levels_lut, p.r), adj::sampleLut(g.levels_lut, p.g), adj::sampleLut(g.levels_lut, p.b), p.a};
 }
 
 // HSL: PhotoCraft's Camera Raw Color Mixer (camera_raw.cpp).
@@ -314,45 +316,9 @@ Pixel apply_monochrome(Pixel p, const ColorGroups& g) {
   return {grey, grey, grey, p.a};
 }
 
-// Selective color, in the shape of the CMYK "selective color" adjustment.
-// How much a pixel belongs to each target: colour targets by how far their
-// primary/secondary leads (max - mid for red/green/blue when that channel is
-// the largest, mid - min for cyan/magenta/yellow when its complement is the
-// smallest); white above mid grey, black below it, neutral by closeness of
-// both extremes to mid grey.  Each channel's ink is 1 - value: cyan acts on
-// red, magenta on green, yellow on blue.  Relative scales the ink already
-// there, absolute adds to it; black adds (or removes) ink in all channels.
+// Selective color: PhotoCraft's Photoshop Selective Color (adjust.cpp).
 Pixel apply_selective(Pixel p, const ColorGroups& g) {
-  const float r = p.r, gr = p.g, b = p.b;
-  const float high = std::max({r, gr, b}), low = std::min({r, gr, b});
-  const float mid = r + gr + b - high - low;
-  float weight[9] = {
-      r == high ? high - mid : 0.0F,   // red
-      b == low ? mid - low : 0.0F,     // yellow
-      gr == high ? high - mid : 0.0F,  // green
-      r == low ? mid - low : 0.0F,     // cyan
-      b == high ? high - mid : 0.0F,   // blue
-      gr == low ? mid - low : 0.0F,    // magenta
-      low > 0.5F ? (low - 0.5F) * 2.0F : 0.0F,
-      std::max(0.0F, 1.0F - (std::abs(high - 0.5F) + std::abs(low - 0.5F))),
-      high < 0.5F ? (0.5F - high) * 2.0F : 0.0F,
-  };
-  float channel[3] = {r, gr, b};
-  float out[3];
-  for (int c = 0; c < 3; ++c) {
-    const float ink = 1.0F - channel[c];
-    float change = 0;
-    for (std::size_t active = 0; active < g.selective_target_count; ++active) {
-      const int t = g.selective_targets[active];
-      if (weight[t] <= 0.0F) continue;
-      const float s = g.selective_ink[t][c], k = g.selective_ink[t][3];
-      float next = clamp01(g.absolute ? ink + s : ink * (1.0F + s));
-      next += k * (k > 0.0F ? 1.0F - next : next);
-      change += weight[t] * (next - ink);
-    }
-    out[c] = clamp01(channel[c] - change);
-  }
-  return {out[0], out[1], out[2], p.a};
+  return with_rgb(p, adj::selectiveColor(rgb_of(p), !g.absolute, g.selective_percent));
 }
 
 // Color grading: PhotoCraft's Camera Raw Color Grading (camera_raw.cpp).
@@ -370,69 +336,54 @@ Pixel apply_color_groups(Pixel p, const ColorGroups& g) {
   return p;
 }
 
-// Grain (detail).  Value noise on a lattice whose cell follows the image size
-// (so a <= 4000 px preview and the full-resolution export look alike), mixed
-// with per-pixel noise by roughness; colour mixes monochrome noise toward
-// independent per-channel noise.  Shadows/midtones/highlights weight it by
-// luminance zone (triangular, radius 0.5).  Deterministic per position: the
-// same frame renders the same grain every time.
+// Grain (detail): PhotoCraft's Camera Raw stage 9 (camera_raw.cpp) for amount, size and
+// roughness, sampled in full-resolution coordinates (RenderInputs::pixel_scale).  PixCake's
+// own sub-sliders on top (PixCake-specific): shadows / midtones / highlights scale the strength
+// by their triangular zones relative to the defaults 30 / 50 / 15 (so at the defaults the
+// grain is PhotoCraft's), and colour mixes in an independent noise per channel.
 struct Grain {
   bool on = false;
-  float amount = 0, shadows = 0, midtones = 0, highlights = 0, size = 0, roughness = 0, colour = 0;
-  float inv_cell = 1;  // 1 / lattice cell; a multiply rounds the same on CPU and GPU, a divide may not
+  cr::Grain base;
+  std::array<cr::Grain, 3> channel{};  // the same grain, seeds 1..3 (colour)
+  float shadows = 0, midtones = 0, highlights = 0, colour = 0;
 };
-Grain grain_of(const Values& v, std::uint32_t width, std::uint32_t height) {
+constexpr float kGrainZoneDefault[3] = {0.30F, 0.50F, 0.15F};
+Grain grain_of(const Values& v, float pixel_scale) {
   const char* cap = "detail";
   Grain g;
-  g.amount = param(v, cap, "grain_amount") / 100.0F;
-  g.on = g.amount > 0.0F;
+  const float amount = param(v, cap, "grain_amount");
+  g.on = amount > 0.0F;
+  g.base = cr::grainOf(amount, param(v, cap, "grain_size"), param(v, cap, "grain_roughness"), 0, pixel_scale);
+  for (std::uint64_t c = 0; c < 3; ++c) {
+    g.channel[c] = g.base;
+    g.channel[c].seed = c + 1;
+  }
   g.shadows = param(v, cap, "grain_shadows") / 100.0F;
   g.midtones = param(v, cap, "grain_midtones") / 100.0F;
   g.highlights = param(v, cap, "grain_highlights") / 100.0F;
-  g.size = param(v, cap, "grain_size") / 100.0F;
-  g.roughness = param(v, cap, "grain_roughness") / 100.0F;
   g.colour = param(v, cap, "grain_color") / 100.0F;
-  g.inv_cell = 1.0F / std::max(1.0F, static_cast<float>(std::min(width, height)) * (0.0008F + 0.006F * g.size));
   return g;
 }
-float hash01(std::uint32_t x, std::uint32_t y, std::uint32_t channel) {
-  std::uint32_t h = x * 0x8da6b343U ^ y * 0xd8163841U ^ channel * 0xcb1ab31fU;
-  h ^= h >> 16;
-  h *= 0x7feb352dU;
-  h ^= h >> 15;
-  h *= 0x846ca68bU;
-  h ^= h >> 16;
-  return static_cast<float>(h & 0xFFFFFFU) / 16777216.0F;
-}
-float value_noise_grid(std::uint32_t ix, std::uint32_t iy, float tx, float ty, std::uint32_t channel) {
-  const float top = hash01(ix, iy, channel) + (hash01(ix + 1, iy, channel) - hash01(ix, iy, channel)) * tx;
-  const float bottom =
-      hash01(ix, iy + 1, channel) + (hash01(ix + 1, iy + 1, channel) - hash01(ix, iy + 1, channel)) * tx;
-  return top + (bottom - top) * ty;
+float grain_zone(float l, float shadows, float midtones, float highlights) {
+  return std::max(0.0F, 1.0F - l / 0.5F) * shadows + std::max(0.0F, 1.0F - std::abs(l - 0.5F) / 0.5F) * midtones +
+         std::max(0.0F, 1.0F - (1.0F - l) / 0.5F) * highlights;
 }
 Pixel apply_grain(Pixel p, std::uint32_t x, std::uint32_t y, const Grain& g) {
-  const float l = luminance(p);
-  const float zone = std::max(0.0F, 1.0F - l / 0.5F) * g.shadows +
-                     std::max(0.0F, 1.0F - std::abs(l - 0.5F) / 0.5F) * g.midtones +
-                     std::max(0.0F, 1.0F - (1.0F - l) / 0.5F) * g.highlights;
-  const float strength = g.amount * zone * 0.5F;
-  if (strength <= 0.0F) return p;
-  const float grid_x = static_cast<float>(x) * g.inv_cell;
-  const float grid_y = static_cast<float>(y) * g.inv_cell;
-  const float grid_fx = std::floor(grid_x), grid_fy = std::floor(grid_y);
-  const auto grid_ix = static_cast<std::uint32_t>(static_cast<std::int64_t>(grid_fx));
-  const auto grid_iy = static_cast<std::uint32_t>(static_cast<std::int64_t>(grid_fy));
-  float tx = grid_x - grid_fx, ty = grid_y - grid_fy;
-  tx = tx * tx * (3.0F - 2.0F * tx);
-  ty = ty * ty * (3.0F - 2.0F * ty);
-  const auto noise = [&](std::uint32_t channel) {
-    const float smooth = value_noise_grid(grid_ix, grid_iy, tx, ty, channel);
-    return smooth + (hash01(x, y, channel + 8U) - smooth) * g.roughness - 0.5F;
-  };
-  const float mono = noise(0);
-  p.r += strength * (mono + (noise(1) - mono) * g.colour);
-  p.g += strength * (mono + (noise(2) - mono) * g.colour);
-  p.b += strength * (mono + (noise(3) - mono) * g.colour);
+  const cr::Rgb c = rgb_of(p);
+  const float l = std::clamp(cr::luma(c), 0.0F, 1.0F);
+  const float zone = grain_zone(l, g.shadows, g.midtones, g.highlights) /
+                     grain_zone(l, kGrainZoneDefault[0], kGrainZoneDefault[1], kGrainZoneDefault[2]);
+  if (!(zone > 0.0F)) return p;
+  const float fx = static_cast<float>(x), fy = static_cast<float>(y);
+  const float w = cr::grainWeight(c) * zone;
+  const float mono = cr::grainNoise(g.base, fx, fy);
+  float n[3] = {mono, mono, mono};
+  if (g.colour > 0.0F) {
+    for (int k = 0; k < 3; ++k) n[k] = mono + (cr::grainNoise(g.channel[k], fx, fy) - mono) * g.colour;
+  }
+  p.r += (n[0] - 0.5F) * 2.0F * g.base.amount * w;
+  p.g += (n[1] - 0.5F) * 2.0F * g.base.amount * w;
+  p.b += (n[2] - 0.5F) * 2.0F * g.base.amount * w;
   return p;
 }
 
@@ -443,12 +394,18 @@ Blend blend_of(const std::string& mode) {
   if (mode == "screen") return Blend::Screen;
   return Blend::Normal;
 }
-Pixel composite(Pixel base, Pixel top, float opacity, Blend mode) {
-  opacity = clamp01(opacity) * top.a;
-  Pixel mixed = top;
-  if (mode == Blend::Multiply) mixed = {base.r * top.r, base.g * top.g, base.b * top.b, top.a};
-  if (mode == Blend::Screen) mixed = {1.0F - (1.0F - base.r) * (1.0F - top.r), 1.0F - (1.0F - base.g) * (1.0F - top.g), 1.0F - (1.0F - base.b) * (1.0F - top.b), top.a};
-  return mix(base, mixed, opacity);
+adj::BlendMode blend_mode_of(Blend mode) {
+  return mode == Blend::Multiply ? adj::BlendMode::Multiply : mode == Blend::Screen ? adj::BlendMode::Screen : adj::BlendMode::Normal;
+}
+// An operation's result back into the pixel it was made from, by coverage (PhotoCraft blend_back).
+Pixel blend_back(Pixel before, Pixel after, float coverage, Blend mode) {
+  const auto out = adj::blendBack(blend_mode_of(mode), {before.r, before.g, before.b, before.a}, rgb_of(after), clamp01(coverage));
+  return {out[0], out[1], out[2], out[3]};
+}
+// A layer over the frame (PhotoCraft psblend::composite, straight alpha).
+Pixel composite_layer(Pixel base, Pixel top, float opacity, Blend mode) {
+  const auto out = adj::composite(blend_mode_of(mode), {base.r, base.g, base.b, base.a}, {top.r, top.g, top.b, top.a}, clamp01(opacity));
+  return {out[0], out[1], out[2], out[3]};
 }
 
 // Runs body(first_row, end_row) over the frame's rows, split across the
@@ -485,30 +442,9 @@ bool valid_lut(const Lut3DView& lut) {
   for (std::size_t i = 0; i < required; ++i) if (!std::isfinite(lut.rgb[i])) return false;
   return true;
 }
+// PhotoCraft's lut3d_sample (adjust.cpp), trilinear.
 Pixel lut_sample(const Lut3DView& lut, Pixel input) {
-  const float coordinate[3] = {clamp01(input.r) * (lut.size - 1), clamp01(input.g) * (lut.size - 1), clamp01(input.b) * (lut.size - 1)};
-  const std::uint32_t base[3] = {static_cast<std::uint32_t>(coordinate[0]), static_cast<std::uint32_t>(coordinate[1]), static_cast<std::uint32_t>(coordinate[2])};
-  const float fraction[3] = {coordinate[0] - base[0], coordinate[1] - base[1], coordinate[2] - base[2]};
-  auto sample = [&](std::uint32_t r, std::uint32_t g, std::uint32_t b) {
-    const auto index = (static_cast<std::size_t>(b) * lut.size * lut.size + static_cast<std::size_t>(g) * lut.size + r) * 3;
-    return Pixel{lut.rgb[index], lut.rgb[index + 1], lut.rgb[index + 2], input.a};
-  };
-  const std::uint32_t hi[3] = {std::min(base[0] + 1, lut.size - 1), std::min(base[1] + 1, lut.size - 1), std::min(base[2] + 1, lut.size - 1)};
-  Pixel c000 = sample(base[0], base[1], base[2]);
-  Pixel c100 = sample(hi[0], base[1], base[2]);
-  Pixel c010 = sample(base[0], hi[1], base[2]);
-  Pixel c110 = sample(hi[0], hi[1], base[2]);
-  Pixel c001 = sample(base[0], base[1], hi[2]);
-  Pixel c101 = sample(hi[0], base[1], hi[2]);
-  Pixel c011 = sample(base[0], hi[1], hi[2]);
-  Pixel c111 = sample(hi[0], hi[1], hi[2]);
-  const Pixel x00 = mix(c000, c100, fraction[0]);
-  const Pixel x10 = mix(c010, c110, fraction[0]);
-  const Pixel x01 = mix(c001, c101, fraction[0]);
-  const Pixel x11 = mix(c011, c111, fraction[0]);
-  const Pixel y0 = mix(x00, x10, fraction[1]);
-  const Pixel y1 = mix(x01, x11, fraction[1]);
-  return mix(y0, y1, fraction[2]);
+  return with_rgb(input, adj::lut3dSample(lut.rgb, lut.sample_count, lut.size, rgb_of(input), false));
 }
 
 }  // namespace
@@ -665,7 +601,7 @@ bool prepare(const pixcake::render::RenderDescription& description, const RgbaIm
       // so its offsets have nothing to act on yet.
       result.diagnostics.push_back({operation.capability_id, "色彩编辑器还没有目标颜色参数，偏移暂不绘制", false});
     }
-    if (draw.is_detail) draw.grain = grain_of(values, input.width, input.height);
+    if (draw.is_detail) draw.grain = grain_of(values, inputs.pixel_scale);
     if (draw.is_detail && !draw.grain.on) continue;
     draw.tone_color = tone_color_of(values);
     draw.color_active = color_is_active(draw.tone_color);
@@ -699,7 +635,7 @@ void draw_reference(const PreparedOperation& draw, RgbaImage& frame) {
         } else {
           for (const auto* mask : draw.masks) weight *= mask->alpha[pixel] / 255.0F;
         }
-        write(frame, x, y, composite(before, after, weight, draw.blend));
+        write(frame, x, y, blend_back(before, after, weight, draw.blend));
       }
     }
   });
@@ -757,7 +693,7 @@ void draw_scalar_tone(const PreparedOperation& draw, RgbaImage& frame) {
         if (pixel[3] != 255) {
           const Pixel before = read(frame, x, y);
           const Pixel top{after[0][pixel[0]], after[1][pixel[1]], after[2][pixel[2]], before.a};
-          write(frame, x, y, composite(before, top, 1.0F, Blend::Normal));
+          write(frame, x, y, blend_back(before, top, 1.0F, Blend::Normal));
           continue;
         }
         pixel[0] = lut[0][pixel[0]];
@@ -810,7 +746,7 @@ void draw_layer_reference(const PreparedLayer& prepared, RgbaImage& frame) {
   for_rows(frame.width, frame.height, [&](std::uint32_t first, std::uint32_t end) {
     for (std::uint32_t y = first; y < end; ++y) for (std::uint32_t x = 0; x < frame.width; ++x) {
       const float amount = layer.opacity * (mask == nullptr ? 1.0F : mask->alpha[static_cast<std::size_t>(y) * frame.width + x] / 255.0F);
-      write(frame, x, y, composite(read(frame, x, y), read(layer.image, x, y), amount, prepared.blend));
+      write(frame, x, y, composite_layer(read(frame, x, y), read(layer.image, x, y), amount, prepared.blend));
     }
   });
 }
@@ -881,8 +817,8 @@ bool set_color_uniforms(gl::Program& program, const PreparedOperation& draw, std
 }
 bool set_grain_uniforms(gl::Program& program, const PreparedOperation& draw, std::string& error) {
   const Grain& g = draw.grain;
-  return program.setVec4("grain0", {g.amount, g.shadows, g.midtones, g.highlights}, error) &&
-         program.setVec4("grain1", {g.inv_cell, g.roughness, g.colour, 0.0F}, error);
+  return program.setVec4("grain0", {g.base.cell, g.base.roughness, g.base.amount, g.base.scale}, error) &&
+         program.setVec4("grain1", {g.shadows, g.midtones, g.highlights, g.colour}, error);
 }
 
 }  // namespace
