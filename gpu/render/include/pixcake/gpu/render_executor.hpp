@@ -102,9 +102,15 @@ class RenderExecutor {
   // the texture limit of any Mac GPU.  Tests set a small edge.
   static constexpr std::uint32_t kDefaultGpuTile = 4096;
   void setGpuTileSize(std::uint32_t edge);
+  // An operation with Camera Raw's whole-frame controls draws on the GPU only on frames of at
+  // least this many pixels (and at most one GPU tile); below it the reference is faster
+  // (bench_reference_render, 2026-11-10: 600 x 450 GPU 94 ms vs 89 ms, 800 x 600 125 vs 148).
+  static constexpr std::uint64_t kDefaultSpatialGpuMinPixels = 320000;
+  void setSpatialGpuMinPixels(std::uint64_t pixels);
 
  private:
   mutable std::shared_ptr<GpuCache> gpu_cache_;
   std::uint32_t gpu_tile_ = kDefaultGpuTile;
+  std::uint64_t spatial_gpu_min_pixels_ = kDefaultSpatialGpuMinPixels;
 };
 }  // namespace pixcake::gpu

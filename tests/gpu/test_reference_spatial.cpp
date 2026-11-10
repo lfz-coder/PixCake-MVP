@@ -169,9 +169,10 @@ void test_spatial_tiny_frames() {
   }
 }
 
-void test_spatial_falls_back_to_reference() {
+// The GPU draws the whole-frame stages (camera_raw_gl.cpp) when the frame fits one GPU tile.
+void test_spatial_classified_for_gpu() {
   for (const char* channel : {"dehaze", "shadows", "highlights", "clarity", "texture", "whites", "blacks"}) {
-    CHECK(PassRegistry::classify(global({value(channel, 30)}).operations[0]) == PassStatus::ReferenceOnly);
+    CHECK(PassRegistry::classify(global({value(channel, 30)}).operations[0]) == PassStatus::Implemented);
     CHECK(PassRegistry::classify(global({value(channel, 0), value("exposure", 0.3)}).operations[0]) == PassStatus::Implemented);
   }
 }
@@ -197,7 +198,7 @@ void test_spatial_local_masked() {
 }  // namespace
 
 int main() {
-  test_spatial_falls_back_to_reference();
+  test_spatial_classified_for_gpu();
   test_spatial_order_matches_develop();
   test_spatial_tiny_frames();
   test_spatial_local_masked();

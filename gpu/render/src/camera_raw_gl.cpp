@@ -39,8 +39,8 @@ struct Pool {
 }  // namespace
 
 struct Gl::Impl {
-  explicit Impl(gl::Context& c) : context(c) {}
-  gl::Context& context;
+  explicit Impl(const gl::Context& c) : context(c) {}
+  gl::Context context;  // copies share one context
   std::string error;
   bool failed = false;
   gl::Shader vertex{nullptr};
@@ -135,7 +135,7 @@ struct Gl::Impl {
   }
 };
 
-Gl::Gl(gl::Context& context) : impl_(std::make_unique<Impl>(context)) {}
+Gl::Gl(const gl::Context& context) : impl_(std::make_unique<Impl>(context)) {}
 Gl::~Gl() = default;
 bool Gl::ok() const { return !impl_->failed; }
 const std::string& Gl::error() const { return impl_->error; }
@@ -220,6 +220,10 @@ bool read_rgba(Gl::Impl& g, const Plane& p, std::vector<std::array<float, 4>>& o
 std::size_t div_ceil(std::size_t a, std::size_t b) { return (a + b - 1) / b; }
 
 }  // namespace
+
+bool allocate(Gl& gl_, std::uint32_t w, std::uint32_t h, gl::PixelFormat format, Plane& out) { return gl_.impl().acquire(w, h, format, out); }
+gl::Framebuffer& framebufferOf(const Plane& p) { return p.slot->fb; }
+gl::Texture2D& textureOf(const Plane& p) { return p.slot->tex; }
 
 bool upload(Gl& gl_, const std::vector<float>& v, std::uint32_t w, std::uint32_t h, Plane& out) {
   auto& g = gl_.impl();

@@ -34,7 +34,7 @@ struct Plane {
 
 class Gl {
  public:
-  explicit Gl(gl::Context& context);
+  explicit Gl(const gl::Context& context);
   ~Gl();
   Gl(const Gl&) = delete;
   Gl& operator=(const Gl&) = delete;
@@ -47,6 +47,11 @@ class Gl {
  private:
   std::unique_ptr<Impl> impl_;
 };
+
+// A plane from the pool, and its texture and framebuffer (for the executor's own passes).
+bool allocate(Gl&, std::uint32_t w, std::uint32_t h, gl::PixelFormat format, Plane& out);
+gl::Framebuffer& framebufferOf(const Plane&);
+gl::Texture2D& textureOf(const Plane&);
 
 bool upload(Gl&, const std::vector<float>& v, std::uint32_t w, std::uint32_t h, Plane& out);
 bool download(Gl&, const Plane& p, std::vector<float>& out);

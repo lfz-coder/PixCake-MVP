@@ -4,6 +4,8 @@
 #include <pixcake/gl/native_backend.hpp>
 #include <pixcake/gpu/render_executor.hpp>
 
+#include "spatial_frames.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -134,6 +136,7 @@ int main() {
   description.operations.push_back(operation);
 
   pixcake::gpu::RenderExecutor executor;
+  executor.setSpatialGpuMinPixels(0);  // the test frames are small; the default sends them to the reference
   pixcake::gpu::RenderInputs inputs;
   pixcake::gpu::RenderResult gpu_result;
   pixcake::gpu::RenderResult reference;
@@ -227,16 +230,27 @@ int main() {
     std::vector<pixcake::render::RenderOperation> operations;
     const pixcake::gpu::RenderInputs* inputs = nullptr;
     bool on_gpu = true;
+    // Camera Raw's whole-frame stages need the whole frame on one tile: a frame larger than
+    // the GPU tile (the 32 px tiled run here) falls back to the reference, whole.
+    bool tiles_on_gpu = true;
   };
   const Case cases[] = {
       {"tone", {global({v("temperature", -30), v("exposure", 0.4), v("brightness", 10), v("contrast", 25),
                         v("vibrance", 40), v("saturation", -20)})}},
       // Camera Raw's whole-frame stages have no shader yet: the operation runs on the reference,
       // over the whole frame even when the export is drawn in tiles.
-      {"tone, whole-frame (reference)", {global({v("exposure", 0.4), v("contrast", 25), v("highlights", -40),
-                                                 v("shadows", 35), v("whites", 20), v("blacks", -15),
-                                                 v("clarity", 30), v("texture", 10), v("dehaze", 5)})},
-       nullptr, false},
+      {"tone, whole-frame", {global({v("exposure", 0.4), v("contrast", 25), v("highlights", -40),
+                                     v("shadows", 35), v("whites", 20), v("blacks", -15),
+                                     v("clarity", 30), v("texture", 10), v("dehaze", 5)})},
+       nullptr, true, false},
+      {"exposure 2 + spatial", {global({v("exposure", 2.0), v("dehaze", 30), v("shadows", 50), v("highlights", -40),
+                                         v("clarity", 20)})},
+       nullptr, true, false},
+      {"local spatial, 2 masks", {colour("color.local", "pixcake.color.local", {v("shadows", 60), v("whites", 30)},
+                                         {"m1", "m2"}, "multiply")},
+       &extras, true, false},
+      {"spatial then grain", {global({v("texture", 40), v("blacks", -30), v("hsl_hue_red", 20)}), grain({v("grain_amount", 40)})},
+       nullptr, true, false},
       {"levels", {global({v("levels_rgb_input_black", 20), v("levels_rgb_input_white", 230),
                           v("levels_rgb_input_gray", 0.3), v("levels_rgb_output_black", 10),
                           v("levels_rgb_output_white", 240)})}},
@@ -300,6 +314,7 @@ int main() {
   // whose rows are padded: tiles must join without seams (grain included).
   pixcake::gpu::RenderExecutor tiled;
   tiled.setGpuTileSize(32);
+  tiled.setSpatialGpuMinPixels(0);
   pixcake::gpu::RgbaImage padded = frame;
   padded.row_stride = frame.row_stride + 12;
   padded.pixels.assign(static_cast<std::size_t>(padded.row_stride) * frame.height, 0);
@@ -351,7 +366,7 @@ int main() {
                 on_cpu.image.pixels.size());
     if (worst > 1) std::fprintf(stderr, "FAIL %s: GPU differs from reference by %d (%s)\n", item.name, worst, error.c_str());
     if (worst > 1) ++failures;
-    if (item.on_gpu) {
+    if (item.on_gpu && item.tiles_on_gpu) {
       pixcake::gpu::RenderResult in_tiles;
       std::string tile_error;
       const bool tiles_drawn = tiled.execute(context, multi, padded, case_inputs, in_tiles, tile_error);
@@ -381,6 +396,66 @@ int main() {
                       on_gpu.statuses[i].capability_id == on_cpu.statuses[i].capability_id;
     }
     EXPECT(same_statuses);
+  }
+  // With the default minimum, a frame this small draws whole-frame operations on the reference.
+  {
+    pixcake::render::RenderDescription d;
+    d.document_revision = 19;
+    d.operations = {global({v("shadows", 50), v("dehaze", 20)})};
+    pixcake::gpu::RenderExecutor defaults;
+    pixcake::gpu::RenderResult on_gpu, on_cpu;
+    const bool drawn = defaults.execute(context, d, frame, inputs, on_gpu, error);
+    EXPECT(defaults.renderReference(d, frame, inputs, on_cpu));
+    std::size_t off = 0;
+    const int worst = drawn && on_gpu.reference_fallback ? worst_of(on_gpu.image, on_cpu.image, off) : 999;
+    std::printf("gpu readback %-20s max diff %d (reference)\n", "spatial, small frame", worst);
+    if (worst != 0) {
+      std::fprintf(stderr, "FAIL spatial, small frame: expected the reference, diff %d\n", worst);
+      ++failures;
+    }
+  }
+  // A 1000 x 750 scene: dehaze's proxy (k = 2) and Clarity's subsampled guided filter (s = 2) in
+  // the executor path.
+  {
+    pixcake::gpu::RgbaImage scene = spatial_frames::scene(1000, 750);
+    scene.revision = 19;
+    pixcake::render::RenderDescription d;
+    d.document_revision = 19;
+    d.operations = {global({v("exposure", 0.3), v("dehaze", 40), v("shadows", 50), v("highlights", -50), v("texture", 30),
+                            v("clarity", 40), v("contrast", 20), v("whites", 25), v("blacks", -25), v("vibrance", 20)})};
+    pixcake::gpu::RenderResult on_gpu, on_cpu;
+    const bool drawn = executor.execute(context, d, scene, inputs, on_gpu, error);
+    EXPECT(executor.renderReference(d, scene, inputs, on_cpu));
+    std::size_t off = 0;
+    const int worst = drawn && !on_gpu.reference_fallback ? worst_of(on_gpu.image, on_cpu.image, off) : 999;
+    std::printf("gpu readback %-20s max diff %d, %zu differ\n", "scene 1000x750", worst, off);
+    if (worst > 1) {
+      std::fprintf(stderr, "FAIL scene 1000x750: GPU differs from reference by %d (%s)\n", worst, error.c_str());
+      ++failures;
+    }
+  }
+  // A 7 x 1 frame with every whole-frame control: the stages' early outs on the GPU.
+  {
+    pixcake::gpu::RgbaImage tiny;
+    tiny.width = 7;
+    tiny.height = 1;
+    tiny.row_stride = 28;
+    tiny.pixels.assign(frame.pixels.begin(), frame.pixels.begin() + 28);
+    pixcake::render::RenderDescription d;
+    d.document_revision = 19;
+    d.operations = {global({v("dehaze", 40), v("shadows", 40), v("highlights", -40), v("texture", 40), v("clarity", 40),
+                            v("whites", 40), v("blacks", -40), v("contrast", 20)})};
+    tiny.revision = 19;
+    pixcake::gpu::RenderResult on_gpu, on_cpu;
+    const bool drawn = executor.execute(context, d, tiny, inputs, on_gpu, error);
+    EXPECT(executor.renderReference(d, tiny, inputs, on_cpu));
+    std::size_t off = 0;
+    const int worst = drawn && !on_gpu.reference_fallback ? worst_of(on_gpu.image, on_cpu.image, off) : 999;
+    std::printf("gpu readback %-20s max diff %d\n", "tiny 7x1", worst);
+    if (worst > 1) {
+      std::fprintf(stderr, "FAIL tiny 7x1: GPU differs from reference by %d (%s)\n", worst, error.c_str());
+      ++failures;
+    }
   }
   std::printf("native GPU backend active\n");
   return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

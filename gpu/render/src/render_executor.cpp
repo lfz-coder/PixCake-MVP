@@ -4,6 +4,7 @@
 #include "pixcake/gpu/adjust.hpp"
 #include "pixcake/gpu/brightness.hpp"
 #include "pixcake/gpu/camera_raw.hpp"
+#include "pixcake/gpu/camera_raw_gl.hpp"
 #include "pixcake/gpu/camera_raw_spatial.hpp"
 #include "shader_sources.hpp"
 
@@ -463,10 +464,12 @@ bool has_prefix(std::string_view text, std::string_view prefix) {
 // outside this list falls back to the reference.  The colour editor's offsets
 // are drawn by neither path (no target colour yet), so they do not block it.
 // Camera Raw's whole-frame controls (dehaze, Highlights/Shadows, Texture/Clarity,
-// Whites/Blacks) have no shader yet: an operation that moves one runs on the reference.
+// Whites/Blacks) are drawn by camera_raw_gl.cpp when the frame fits one GPU tile; a larger
+// frame falls back to the reference, whole (execute()).
 const std::set<std::string_view>& tone_channels() {
-  static const std::set<std::string_view> channels = {"temperature", "tint",     "exposure",  "contrast",
-                                                      "brightness",  "vibrance", "saturation"};
+  static const std::set<std::string_view> channels = {
+      "temperature", "tint",       "exposure", "contrast", "brightness", "vibrance", "saturation",
+      "dehaze",      "highlights", "shadows",  "texture",  "clarity",    "whites",   "blacks"};
   return channels;
 }
 bool gpu_channel(std::string_view capability, std::string_view channel) {
@@ -486,6 +489,7 @@ bool gpu_channel(std::string_view capability, std::string_view channel) {
 
 // Masks of one operation fit the four channels of one mask texture.
 constexpr std::size_t kGpuMasksPerOperation = 4;
+
 
 bool gpu_formula_supported(const pixcake::render::RenderOperation& operation) {
   static const std::set<std::pair<std::string_view, std::string_view>> programs = {
@@ -833,6 +837,33 @@ void pack_masks(const std::vector<const RenderMask*>& masks, std::uint32_t frame
 }
 
 // Uniforms of one GPU pass, set from the prepared operation.
+bool set_color_uniforms(gl::Program& program, const PreparedOperation& draw, std::string& error);
+
+// An operation with whole-frame controls, around camera_raw_gl.cpp as draw_spatial does it.
+// before: the colour step and brightness only, written unclipped (stage0.w).  After: Presence
+// and the groups on the whole-frame result (stage0.z, unit 3), blended back.  Contrast is
+// toneDetail's, so it is off in both.
+bool set_spatial_part(gl::Program& program, const PreparedOperation& draw, bool before, std::string& error) {
+  const ToneColor& t = draw.tone_color;
+  const br::Curve curve = br::curve(t.brightness);
+  const float presence = before ? 0.0F : (t.vibrance != 0.0F || t.saturation != 0.0F ? 1.0F : 0.0F);
+  return program.setVec4("stage0", {before && draw.is_color ? 1.0F : 0.0F, 1.0F, before ? 0.0F : 1.0F, before ? 1.0F : 0.0F}, error) &&
+         program.setVec4("cr1", {0.0F, t.vibrance, t.saturation, presence}, error) &&
+         program.setVec4("bright1", {before && t.brightness_on ? 1.0F : 0.0F, curve.raise ? 1.0F : 0.0F, curve.hermite ? 1.0F : 0.0F, 0.0F}, error) &&
+         (before || program.setTextureUnit("spatial", 3, error));
+}
+
+// Dehaze, Highlights/Shadows, Contrast + Texture + Clarity and Whites/Blacks on the float frame.
+bool run_spatial_stages(pixcake::gpu::camera_raw_gl::Gl& g, pixcake::gpu::camera_raw_gl::Plane& frame, const PreparedOperation& draw) {
+  namespace crgl = pixcake::gpu::camera_raw_gl;
+  const ToneColor& t = draw.tone_color;
+  return (t.dehaze == 0.0F || crgl::dehaze(g, frame, t.dehaze / 100.0F)) &&
+         ((t.shadows == 0.0F && t.highlights == 0.0F) || crgl::localTone(g, frame, t.shadows, t.highlights)) &&
+         ((t.contrast == 0.0F && t.texture == 0.0F && t.clarity == 0.0F) ||
+          crgl::toneDetail(g, frame, t.contrast, t.texture, t.clarity, draw.pixel_scale)) &&
+         ((t.whites == 0.0F && t.blacks == 0.0F) || crgl::whitesBlacks(g, frame, t.whites, t.blacks));
+}
+
 bool set_color_uniforms(gl::Program& program, const PreparedOperation& draw, std::string& error) {
   const ToneColor& t = draw.tone_color;
   const ColorGroups& g = draw.groups;
@@ -903,6 +934,7 @@ bool PassRegistry::gpuSupported(const pixcake::render::RenderOperation& operatio
 
 struct GpuCache {
   const void* context = nullptr;
+  std::unique_ptr<pixcake::gpu::camera_raw_gl::Gl> spatial;  // float planes and programs
   gl::Shader vertex{nullptr};
   gl::Program color_program{nullptr};
   gl::Program grain_program{nullptr};
@@ -981,10 +1013,19 @@ bool RenderExecutor::execute(gl::Context& context, const pixcake::render::Render
     gpu_supported = gpu_supported && !draw.has_lut && draw.masks.size() <= kGpuMasksPerOperation &&
                     gpu_formula_supported(*draw.operation);
   }
-  if (!gpu_supported) {
+  // Camera Raw's whole-frame stages need the whole frame in one GPU tile.
+  bool spatial = false;
+  for (const auto& draw : draws) spatial = spatial || (draw.tone_active && draw.tone_color.spatial);
+  const std::uint32_t spatial_edge = std::max<std::uint32_t>(1, gpu_tile_);
+  const bool spatial_too_large = gpu_supported && spatial &&
+                                 (input.width > spatial_edge || input.height > spatial_edge ||
+                                  static_cast<std::uint64_t>(input.width) * input.height < spatial_gpu_min_pixels_);
+  if (!gpu_supported || spatial_too_large) {
     const bool ok = renderReference(description, input, inputs, result);
     result.reference_fallback = true;
-    result.diagnostics.push_back({"", "当前绘制描述包含 GPU 路径未覆盖的内容（3D LUT、超过四个蒙版、Camera Raw 整帧参数或未登记的参数），已回退 reference", false});
+    result.diagnostics.push_back({"", spatial_too_large ? "当前绘制描述含 Camera Raw 整帧参数，且帧大于 GPU 分块或小于 GPU 更快的尺寸，已回退 reference"
+                                                        : "当前绘制描述包含 GPU 路径未覆盖的内容（3D LUT、超过四个蒙版或未登记的参数），已回退 reference",
+                                  false});
     context.doneCurrent();
     if (!ok) error = "reference render failed";
     return ok;
@@ -1046,6 +1087,22 @@ bool RenderExecutor::execute(gl::Context& context, const pixcake::render::Render
         const bool grain = draw.is_detail;
         gl::Program& program = grain ? cache.grain_program : cache.color_program;
         ok = ready_program(context, cache, program, grain ? shaders::kGrain : shaders::kColor, error);
+        // Whole-frame stages (the frame is one tile here): the first part into a float frame,
+        // the stages on it, then the second part below reads it back from unit 3.
+        const bool spatial_draw = !grain && draw.tone_active && draw.tone_color.spatial;
+        pixcake::gpu::camera_raw_gl::Plane spatial_frame;
+        if (ok && spatial_draw) {
+          namespace crgl = pixcake::gpu::camera_raw_gl;
+          if (!cache.spatial) cache.spatial = std::make_unique<crgl::Gl>(context);
+          auto& sg = *cache.spatial;
+          ok = crgl::allocate(sg, tile.width, tile.height, gl::PixelFormat::Rgba32F, spatial_frame) && program.use(error) &&
+               crgl::framebufferOf(spatial_frame).bind(error) && context.setViewport(tile.width, tile.height, error) &&
+               cache.textures[current].bind(0, error) && cache.textures[current].bind(1, error) &&
+               program.setTextureUnit("source", 0, error) && program.setTextureUnit("masks", 1, error) &&
+               program.setVec4("blend0", {0.0F, 0.0F, 0.0F, 0.0F}, error) && set_color_uniforms(program, draw, error) &&
+               set_spatial_part(program, draw, true, error) && context.drawTriangles(3, error) && run_spatial_stages(sg, spatial_frame, draw);
+          if (!ok && !sg.ok()) error = sg.error();
+        }
         const auto masks = static_cast<float>(draw.masks.size());
         // Upload first, bind after: an upload binds its texture to the active unit.
         ok = ok && (draw.masks.empty() || upload_masks(cache, context, draw.masks, input.width, tile, error)) &&
@@ -1055,7 +1112,10 @@ bool RenderExecutor::execute(gl::Context& context, const pixcake::render::Render
                  program.setVec4("blend0", {masks, static_cast<float>(draw.blend), 0.0F, 0.0F}, error) &&
                  (grain ? set_grain_uniforms(program, draw, error) &&
                               program.setVec4("grain2", {static_cast<float>(tile.x), static_cast<float>(tile.y), 0.0F, 0.0F}, error)
-                        : set_color_uniforms(program, draw, error));
+                        : set_color_uniforms(program, draw, error) &&
+                              // Bound here, after the mask upload (an upload binds to the active unit).
+                              (!spatial_draw || (pixcake::gpu::camera_raw_gl::textureOf(spatial_frame).bind(3, error) &&
+                                                 set_spatial_part(program, draw, false, error))));
         });
       }
       for (const auto& layer : layers) {
@@ -1095,6 +1155,7 @@ bool RenderExecutor::execute(gl::Context& context, const pixcake::render::Render
 }
 
 void RenderExecutor::setGpuTileSize(std::uint32_t edge) { gpu_tile_ = edge; }
+void RenderExecutor::setSpatialGpuMinPixels(std::uint64_t pixels) { spatial_gpu_min_pixels_ = pixels; }
 
 ResultCode RenderExecutor::validate(const render::RenderDescription& description,
                                     std::string& error) {

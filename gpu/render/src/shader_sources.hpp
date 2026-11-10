@@ -81,13 +81,16 @@ void main() {
 // The colour and tone steps and the global tool's sub-groups, in the order of
 // draw_reference (render_executor.cpp): Camera Raw white balance and exposure,
 // AI style tint, Photoshop modern brightness, Camera Raw Contrast and Presence
-// (the whole-frame controls run on the reference only); then levels, black-and-white or the Camera
+// (an operation with whole-frame controls runs in two parts around camera_raw_gl.cpp, as
+// draw_spatial does: stage0.w writes the value before them, stage0.z reads it back after); then
+// levels, black-and-white or the Camera
 // Raw Color Mixer, selective colour, Camera Raw Color Grading.  The Camera Raw
 // and brightness functions are line-for-line ports of camera_raw.cpp and
 // brightness.cpp (PhotoCraft 885a6ddf27cc58c07faf1722e5c327cd38953657, MIT;
 // third_party/photocraft-LICENSES/LICENSE-MIT).  stage0 says which steps run.
 inline constexpr const char* kColor = R"(
-uniform vec4 stage0;   // colour step, tone step, -, -
+uniform vec4 stage0;   // colour step, tone step, spatial input, raw output
+uniform sampler2D spatial;  // stage0.z: the frame after Camera Raw's whole-frame stages (Rgba32F)
 uniform vec4 cr0;      // Camera Raw stage 1 gains rgb; w = 1 when it applies
 uniform vec4 cr1;      // contrast strength (slider / 100 * 0.6), vibrance, saturation, presence on
 uniform vec4 bright0;  // brightness curve: s, e, x0, alpha
@@ -374,9 +377,14 @@ vec3 grading(vec3 c) {
 
 void main() {
   vec4 before = texelFetch(source, ivec2(gl_FragCoord.xy), 0);
-  vec3 p = before.rgb;
+  vec3 p = stage0.z > 0.5 ? texelFetch(spatial, ivec2(gl_FragCoord.xy), 0).rgb : before.rgb;
   if (stage0.x > 0.5) p = colour_step(p);
   if (stage0.y > 0.5) p = tone(p);
+  // Before the whole-frame stages: the unclipped value into the float frame.
+  if (stage0.w > 0.5) {
+    color = vec4(p, before.a);
+    return;
+  }
   if (groups0.x > 0.5) p = levels(p);
   if (groups0.y > 0.5) {
     p = monochrome(p);

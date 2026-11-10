@@ -5,6 +5,7 @@
 #include <pixcake/gl/native_backend.hpp>
 #include <pixcake/gpu/render_executor.hpp>
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -141,11 +142,37 @@ int main() {
   const auto spatial = op("color.global", "tone", "pixcake.color.global",
                           {value("dehaze", 30), value("shadows", 50), value("highlights", -40), value("texture", 20),
                            value("clarity", 30), value("whites", 20), value("blacks", -20)});
+  const auto spatial_gpu = [&](const pixcake::gpu::RgbaImage& frame, bool best) {
+    if (!gpu) return -1.0;
+    const auto render = [&] {
+      std::string error;
+      return executor.execute(context, spatial, frame, {}, result, error) && !result.reference_fallback;
+    };
+    if (best) return best_ms(render);
+    render();  // programs and float planes are made once
+    const auto t0 = std::chrono::steady_clock::now();
+    if (!render()) return -1.0;
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+  };
   const double spatial_interactive = best_ms([&] { return pixcake::gpu::RenderExecutor{}.renderReference(spatial, interactive, {}, result); });
-  std::printf("%-20s %7.1f ms %7.1f ms\n", "interactive 600px, spatial", spatial_interactive, -1.0);
+  std::printf("%-20s %7.1f ms %7.1f ms\n", "interactive 600px, spatial", spatial_interactive, spatial_gpu(interactive, true));
   const auto start = std::chrono::steady_clock::now();
   const bool spatial_ok = pixcake::gpu::RenderExecutor{}.renderReference(spatial, input, {}, result);
   const double spatial_preview = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
-  std::printf("%-20s %7.1f ms %7.1f ms\n", "4000px, spatial (1 run)", spatial_ok ? spatial_preview : -1.0, -1.0);
+  std::printf("%-20s %7.1f ms %7.1f ms\n", "4000px, spatial (1 run)", spatial_ok ? spatial_preview : -1.0, spatial_gpu(input, false));
+  // Where the GPU's whole-frame stages overtake the reference (kSpatialGpuMinPixels).
+  for (const auto size : {std::array<std::uint32_t, 2>{800, 600}, std::array<std::uint32_t, 2>{1000, 750},
+                          std::array<std::uint32_t, 2>{1200, 900}, std::array<std::uint32_t, 2>{1600, 1200}}) {
+    pixcake::gpu::RgbaImage frame;
+    frame.width = size[0];
+    frame.height = size[1];
+    frame.row_stride = frame.width * 4;
+    frame.pixels.resize(static_cast<std::size_t>(frame.row_stride) * frame.height);
+    for (std::size_t i = 0; i < frame.pixels.size(); ++i) frame.pixels[i] = static_cast<std::uint8_t>((i * 2654435761u) >> 24);
+    const double on_cpu = best_ms([&] { return pixcake::gpu::RenderExecutor{}.renderReference(spatial, frame, {}, result); });
+    char name[40];
+    std::snprintf(name, sizeof name, "%ux%u, spatial", size[0], size[1]);
+    std::printf("%-20s %7.1f ms %7.1f ms\n", name, on_cpu, spatial_gpu(frame, true));
+  }
   return 0;
 }
