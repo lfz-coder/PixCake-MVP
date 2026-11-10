@@ -256,6 +256,46 @@ void test_scalar_tone_fast_path_matches_general_reference() {
 // Camera Raw's Color Mixer: hue turns up to 30 degrees, saturation scales HSV saturation,
 // and both keep the pixel's luminance; luminance is a gain weighted by saturation.
 Rgb developed(const cr::Settings& s, int r, int g, int b) { return quantize(cr::developPixel(unit(r, g, b), s)); }
+// Camera Raw stage 5: the parametric curve, then the master, red, green and blue point curves,
+// after Presence and levels, before the Color Mixer.  Point curves arrive as their text.
+RenderValue points(const char* channel, const char* text) { return {channel, channel, text, 0.0}; }
+void test_curves() {
+  cr::CurveSettings s;
+  s.highlights = -40;
+  s.lights = 30;
+  s.shadows = 50;
+  s.points[0] = {{0, 0}, {64, 40}, {192, 220}, {255, 255}};
+  s.points[1] = {{0, 20}, {128, 150}, {255, 240}};
+  s.points[3] = {{0, 0}, {128, 100}, {255, 230}};
+  const auto curves = cr::resolveCurves(s);
+  const auto description = global({value("vibrance", 30), value("curve_highlights", -40), value("curve_lights", 30),
+                                   value("curve_shadows", 50), points("curve_points_rgb", "0,0;64,40;192,220;255,255"),
+                                   points("curve_points_red", "0,20;128,150;255,240"),
+                                   points("curve_points_blue", "0,0;128,100;255,230"), value("hsl_hue_red", 40)});
+  std::array<float, 8> hue{}, none{};
+  hue[0] = 40;
+  for (const auto& px : {std::array<int, 3>{200, 120, 40}, std::array<int, 3>{30, 60, 90}, std::array<int, 3>{240, 230, 220},
+                         std::array<int, 3>{128, 128, 128}}) {
+    cr::Rgb c = cr::applyPresence(unit(px[0], px[1], px[2]), 30, 0);
+    c = cr::applyColorMixer(cr::applyCurves(c, curves), hue, none, none);
+    assert(near(render(description, image(static_cast<std::uint8_t>(px[0]), static_cast<std::uint8_t>(px[1]),
+                                          static_cast<std::uint8_t>(px[2]))),
+                quantize(c), 0));
+  }
+  // A curve on the diagonal and a lone text that is not a curve change nothing.
+  assert(near(render(global({points("curve_points_rgb", "0,0;255,255")}), image(64, 128, 192)), {64, 128, 192}, 0));
+  assert(near(render(global({points("curve_points_rgb", "0,0")}), image(64, 128, 192)), {64, 128, 192}, 0));
+  // Per-channel curves take the scalar fast path; it matches the general one.
+  const auto input = image(17, 93, 221, 8);
+  const auto fast = global({value("exposure", 0.4), value("curve_darks", -30), points("curve_points_green", "0,0;100,140;255,255")});
+  const auto general = global({value("exposure", 0.4), value("curve_darks", -30), points("curve_points_green", "0,0;100,140;255,255"),
+                               value("hsl_hue_red", 0)});
+  RenderResult a, b;
+  assert(RenderExecutor{}.renderReference(fast, input, RenderInputs{}, a));
+  assert(RenderExecutor{}.renderReference(general, input, RenderInputs{}, b));
+  assert(a.image.pixels == b.image.pixels);
+}
+
 void test_hsl() {
   cr::Settings turn;
   turn.hsl_hue[0] = 100;
@@ -408,6 +448,7 @@ void test_document_to_pixels() {
 }  // namespace
 
 int main() {
+  test_curves();
   test_document_to_pixels();
   test_global_uses_camera_raw();
   test_brightness_after_balance();

@@ -101,6 +101,9 @@ uniform vec4 groups0;  // levels, monochrome, hsl, selective (1 = on)
 uniform vec4 groups1;  // grading, absolute selective mode, grading blend, grading balance
 uniform vec4 levels0;  // Levels master (0..1): input black, input white, gamma, output black
 uniform vec4 levels1;  // output white, -, -, -
+uniform vec4 curves0;  // Camera Raw stage 5 tables on: parametric, master, red, green
+uniform vec4 curves1;  // blue, -, -, -
+uniform sampler2D curves;  // R32F, 1024 x 5 rows (unit 4)
 uniform vec4 hue_a;    // Color Mixer sliders per band (red, orange, yellow, green)
 uniform vec4 hue_b;    //                              (aqua, blue, purple, magenta)
 uniform vec4 sat_a;
@@ -296,6 +299,27 @@ float levels_sample(float v) {
   return levels_entry(i) * (1.0 - f) + levels_entry(j) * f;
 }
 vec3 levels(vec3 p) { return vec3(levels_sample(p.r), levels_sample(p.g), levels_sample(p.b)); }
+
+// PhotoCraft lut_eval on one curve row: linear inside 0..1, extended linearly outside.
+float curve_eval(int row, float v) {
+  if (!(v >= 0.0 && v <= 1.0)) {
+    return v < 0.0 ? v + texelFetch(curves, ivec2(0, row), 0).r : texelFetch(curves, ivec2(1023, row), 0).r + (v - 1.0);
+  }
+  float x = v * 1023.0;
+  int i = min(int(x), 1022);
+  float t = x - float(i);
+  float a = texelFetch(curves, ivec2(i, row), 0).r;
+  return a + (texelFetch(curves, ivec2(i + 1, row), 0).r - a) * t;
+}
+// Camera Raw stage 5: the parametric curve, the master curve, then each channel's.
+vec3 tone_curves(vec3 p) {
+  if (curves0.x > 0.5) p = vec3(curve_eval(0, p.r), curve_eval(0, p.g), curve_eval(0, p.b));
+  if (curves0.y > 0.5) p = vec3(curve_eval(1, p.r), curve_eval(1, p.g), curve_eval(1, p.b));
+  if (curves0.z > 0.5) p.r = curve_eval(2, p.r);
+  if (curves0.w > 0.5) p.g = curve_eval(3, p.g);
+  if (curves1.x > 0.5) p.b = curve_eval(4, p.b);
+  return p;
+}
 // Stage 6, Color Mixer; greys come back unchanged.
 float band_of(vec4 a, vec4 b, int k) { return k < 4 ? a[k] : b[k - 4]; }
 vec3 hsl(vec3 c) {
@@ -386,6 +410,7 @@ void main() {
     return;
   }
   if (groups0.x > 0.5) p = levels(p);
+  p = tone_curves(p);
   if (groups0.y > 0.5) {
     p = monochrome(p);
   } else if (groups0.z > 0.5) {

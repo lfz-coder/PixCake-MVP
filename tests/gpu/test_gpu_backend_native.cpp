@@ -172,6 +172,7 @@ int main() {
   const auto v = [](const char* channel, double number) {
     return RenderValue{channel, channel, std::to_string(number), number};
   };
+  const auto pts = [](const char* channel, const char* text) { return RenderValue{channel, channel, text, 0.0}; };
   const auto global = [](std::vector<RenderValue> values) {
     pixcake::render::RenderOperation op;
     op.capability_id = "color.global";
@@ -251,6 +252,20 @@ int main() {
        &extras, true, false},
       {"spatial then grain", {global({v("texture", 40), v("blacks", -30), v("hsl_hue_red", 20)}), grain({v("grain_amount", 40)})},
        nullptr, true, false},
+      // Camera Raw stage 5: the curve tables on an R32F texture (unit 4).
+      {"curves", {global({v("curve_highlights", -40), v("curve_lights", 30), v("curve_darks", -20), v("curve_shadows", 50),
+                          pts("curve_points_rgb", "0,0;64,40;192,220;255,255"), pts("curve_points_red", "0,20;128,150;255,240"),
+                          pts("curve_points_blue", "0,0;128,100;255,230")})}},
+      {"exposure 2 + curves", {global({v("exposure", 2.0), v("curve_shadows", 40), pts("curve_points_green", "0,0;100,90;255,255")})}},
+      {"curves, levels, hsl", {global({v("vibrance", 30), v("levels_rgb_input_black", 20), v("curve_lights", 40),
+                                       pts("curve_points_rgb", "0,30;255,255"), v("hsl_hue_red", 40), v("grading_shadows_saturation", 40),
+                                       v("grading_shadows_hue", 200)})}},
+      {"spatial + curves", {global({v("shadows", 40), v("clarity", 20), pts("curve_points_rgb", "0,0;64,40;192,220;255,255"),
+                                    v("curve_highlights", -30)})},
+       nullptr, true, false},
+      {"local curves (reference only)", {colour("color.local", "pixcake.color.local", {v("exposure", 0.3), pts("curve_points_rgb", "0,0;128,160;255,255")},
+                                         {"m1"}, "normal")},
+       &extras, false},
       {"levels", {global({v("levels_rgb_input_black", 20), v("levels_rgb_input_white", 230),
                           v("levels_rgb_input_gray", 0.3), v("levels_rgb_output_black", 10),
                           v("levels_rgb_output_white", 240)})}},

@@ -1,6 +1,7 @@
 #include "pixcake/gpu/render_executor.hpp"
 
 #include "pixcake/capability/capability_registry.hpp"
+#include "pixcake/capability/curve_points.hpp"
 #include "pixcake/gpu/adjust.hpp"
 #include "pixcake/gpu/brightness.hpp"
 #include "pixcake/gpu/camera_raw.hpp"
@@ -227,6 +228,8 @@ float band_value(const float values[8], float hue) {
 struct ColorGroups {
   bool levels = false;
   std::vector<float> levels_lut;  // PhotoCraft Levels, master = PixCake's RGB composite, 8-bit
+  bool curves = false;  // Camera Raw stage 5, the tone curves
+  cr::Curves curve_tables;
   float in_black = 0, in_white = 1, gamma = 1, out_black = 0, out_white = 1;
   bool hsl = false;  // Camera Raw stage 6, Color Mixer (slider units)
   std::array<float, 8> hue{}, saturation{}, lightness{};
@@ -242,9 +245,26 @@ struct ColorGroups {
   bool editor_offsets = false;
 };
 
-ColorGroups color_groups(const Values& v) {
+ColorGroups color_groups(const Values& v, const pixcake::render::RenderOperation& operation) {
   const char* cap = "color.global";
   ColorGroups g;
+  // Camera Raw's tone curves: the parametric sliders, and point curves as their text (a text
+  // that is not a valid curve leaves that curve linear; the capability layer disables the step).
+  cr::CurveSettings curves;
+  curves.highlights = param(v, cap, "curve_highlights");
+  curves.lights = param(v, cap, "curve_lights");
+  curves.darks = param(v, cap, "curve_darks");
+  curves.shadows = param(v, cap, "curve_shadows");
+  const char* point_channels[4] = {"curve_points_rgb", "curve_points_red", "curve_points_green", "curve_points_blue"};
+  for (const auto& value : operation.values) {
+    for (int k = 0; k < 4; ++k) {
+      if (value.channel != point_channels[k]) continue;
+      std::vector<std::array<float, 2>> points;
+      if (pixcake::decode_curve_points(value.display_value, points)) curves.points[k] = std::move(points);
+    }
+  }
+  g.curves = !cr::curvesNeutral(curves);
+  if (g.curves) g.curve_tables = cr::resolveCurves(curves);
   // Levels (RGB composite).  Input black/white stretch, output black/white
   // compress, both in 0..255.  The grey box is -1..1 in 像素蛋糕; the project
   // maps it to a midtone gamma 10^grey (0.1..10, 0 = unchanged) with positive
@@ -329,6 +349,8 @@ Pixel apply_grading(Pixel p, const ColorGroups& g) { return with_rgb(p, cr::appl
 
 Pixel apply_color_groups(Pixel p, const ColorGroups& g) {
   if (g.levels) p = apply_levels(p, g);
+  // After Presence (tone) and levels, before the Color Mixer, as Camera Raw orders stages 4-6.
+  if (g.curves) p = with_rgb(p, cr::applyCurves(rgb_of(p), g.curve_tables));
   if (g.monochrome) {
     p = apply_monochrome(p, g);
   } else if (g.hsl) {
@@ -481,7 +503,7 @@ bool gpu_channel(std::string_view capability, std::string_view channel) {
       "amount", "profile", "selective_mode", "color_editor_hue_shift", "color_editor_saturation_shift",
       "color_editor_luminance_shift"};
   if (tone_channels().count(channel) != 0 || global.count(channel) != 0) return true;
-  for (const char* prefix : {"levels_rgb_", "hsl_", "bw_mix_", "selective_", "grading_"}) {
+  for (const char* prefix : {"levels_rgb_", "curve_", "hsl_", "bw_mix_", "selective_", "grading_"}) {
     if (has_prefix(channel, prefix)) return true;
   }
   return false;
@@ -501,7 +523,9 @@ bool gpu_formula_supported(const pixcake::render::RenderOperation& operation) {
     return false;
   }
   for (const auto& value : operation.values) {
-    if (!gpu_channel(operation.capability_id, value.channel) && std::abs(value.numeric_value) > 1e-9) return false;
+    // A point curve's value is its text (numeric 0), so it always counts.
+    const bool set = std::abs(value.numeric_value) > 1e-9 || pixcake::is_curve_points_parameter(value.channel);
+    if (!gpu_channel(operation.capability_id, value.channel) && set) return false;
   }
   return true;
 }
@@ -604,7 +628,7 @@ bool prepare(const pixcake::render::RenderDescription& description, const RgbaIm
     if (!draw.is_color && !draw.is_tone && !draw.is_detail && !draw.has_lut) continue;
     // Sub-groups of the global colour tool and grain, read once per operation.
     draw.has_groups = !draw.has_lut && operation.capability_id == "color.global";
-    if (draw.has_groups) draw.groups = color_groups(values);
+    if (draw.has_groups) draw.groups = color_groups(values, operation);
     if (draw.groups.editor_offsets) {
       // The colour editor's target colour (eyedropper, range) is not registered,
       // so its offsets have nothing to act on yet.
@@ -720,7 +744,8 @@ bool scalar_tone_operation(const PreparedOperation& draw) {
     // brightness curve, RGB levels).  Contrast works on luminance, so it is not here.
     const bool scalar = value.channel == "exposure" || value.channel == "brightness";
     const bool levels = draw.groups.levels && has_prefix(value.channel, "levels_rgb_");
-    if (!scalar && !levels) {
+    const bool curves = has_prefix(value.channel, "curve_");  // each table acts on one channel
+    if (!scalar && !levels && !curves) {
       return false;
     }
   }
@@ -740,6 +765,7 @@ void draw_scalar_tone(const PreparedOperation& draw, RgbaImage& frame) {
       if (draw.color_active) p = color(p, draw.tone_color);
       if (draw.tone_active) p = tone(p, draw.tone_color);
       if (draw.groups.levels) p = apply_levels(p, draw.groups);
+      if (draw.groups.curves) p = with_rgb(p, cr::applyCurves(rgb_of(p), draw.groups.curve_tables));
       const float value = channel == 0 ? p.r : channel == 1 ? p.g : p.b;
       after[channel][i] = value;
       lut[channel][i] = static_cast<std::uint8_t>(std::lround(clamp01(value) * 255.0F));
@@ -884,7 +910,13 @@ bool set_color_uniforms(gl::Program& program, const PreparedOperation& draw, std
             program.setVec4("groups1", {flag(draw.has_groups && g.grading), flag(g.absolute), g.grade.blend,
                                         g.grade.balance}, error) &&
             program.setVec4("levels0", {g.in_black, g.in_white, g.gamma, g.out_black}, error) &&
-            program.setVec4("levels1", {g.out_white, 0.0F, 0.0F, 0.0F}, error);
+            program.setVec4("levels1", {g.out_white, 0.0F, 0.0F, 0.0F}, error) &&
+            program.setVec4("curves0", {flag(draw.has_groups && g.curves && !g.curve_tables.parametric.empty()),
+                                        flag(draw.has_groups && g.curves && !g.curve_tables.point[0].empty()),
+                                        flag(draw.has_groups && g.curves && !g.curve_tables.point[1].empty()),
+                                        flag(draw.has_groups && g.curves && !g.curve_tables.point[2].empty())}, error) &&
+            program.setVec4("curves1", {flag(draw.has_groups && g.curves && !g.curve_tables.point[3].empty()), 0.0F, 0.0F, 0.0F}, error) &&
+            program.setTextureUnit("curves", 4, error);
   const auto bands = [&](const char* a, const char* b, const auto& v) {
     return program.setVec4(a, {v[0], v[1], v[2], v[3]}, error) && program.setVec4(b, {v[4], v[5], v[6], v[7]}, error);
   };
@@ -943,6 +975,8 @@ struct GpuCache {
   gl::Framebuffer framebuffers[2] = {gl::Framebuffer{nullptr}, gl::Framebuffer{nullptr}};
   gl::Texture2D masks{nullptr};
   gl::Texture2D layer{nullptr};
+  gl::Texture2D curves{nullptr};  // Camera Raw's curve tables, R32F, kCurveLut x 5 rows
+  std::vector<float> curve_rows;
   std::uint32_t width = 0, height = 0;
   std::vector<std::uint8_t> packed;  // mask upload buffer
 };
@@ -970,6 +1004,21 @@ bool upload_masks(GpuCache& cache, gl::Context& context, const std::vector<const
   const gl::ImageView view{tile.width, tile.height, tile.width * 4, gl::PixelFormat::Rgba8,
                            reinterpret_cast<const std::byte*>(cache.packed.data()), cache.packed.size()};
   return cache.masks.valid() && cache.masks.upload(view, error);
+}
+
+// Camera Raw's curve tables as five R32F rows (parametric, master, red, green, blue); a row that
+// is off stays 0 and is not read (curves0/curves1).
+bool upload_curves(GpuCache& cache, gl::Context& context, const cr::Curves& curves, std::string& error) {
+  if (!cache.curves.valid()) cache.curves = context.createTexture2D();
+  constexpr std::size_t n = cr::kCurveLut;
+  cache.curve_rows.assign(n * 5, 0.0F);
+  const std::vector<float>* rows[5] = {&curves.parametric, &curves.point[0], &curves.point[1], &curves.point[2], &curves.point[3]};
+  for (std::size_t r = 0; r < 5; ++r) {
+    if (rows[r]->size() == n) std::copy(rows[r]->begin(), rows[r]->end(), cache.curve_rows.begin() + static_cast<std::ptrdiff_t>(r * n));
+  }
+  const gl::ImageView view{static_cast<std::uint32_t>(n), 5, static_cast<std::uint32_t>(n * 4), gl::PixelFormat::R32F,
+                           reinterpret_cast<const std::byte*>(cache.curve_rows.data()), cache.curve_rows.size() * sizeof(float)};
+  return cache.curves.valid() && cache.curves.upload(view, error);
 }
 
 // The tile of an RGBA image as an upload view: rows keep the image's stride,
@@ -1105,8 +1154,10 @@ bool RenderExecutor::execute(gl::Context& context, const pixcake::render::Render
         }
         const auto masks = static_cast<float>(draw.masks.size());
         // Upload first, bind after: an upload binds its texture to the active unit.
-        ok = ok && (draw.masks.empty() || upload_masks(cache, context, draw.masks, input.width, tile, error)) &&
-             (draw.masks.empty() || cache.masks.bind(1, error));
+        const bool curves = !grain && draw.has_groups && draw.groups.curves;
+        ok = ok && (!curves || upload_curves(cache, context, draw.groups.curve_tables, error)) &&
+             (draw.masks.empty() || upload_masks(cache, context, draw.masks, input.width, tile, error)) &&
+             (draw.masks.empty() || cache.masks.bind(1, error)) && (!curves || cache.curves.bind(4, error));
         pass(program, !draw.masks.empty(), [&] {
           return program.setTextureUnit("masks", 1, error) &&
                  program.setVec4("blend0", {masks, static_cast<float>(draw.blend), 0.0F, 0.0F}, error) &&
