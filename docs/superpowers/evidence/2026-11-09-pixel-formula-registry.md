@@ -199,7 +199,7 @@ amount/size/roughness 是 PhotoCraft Camera Raw 阶段 9（`third_party/photocra
 
 ~~~text
 cell = 1 + grain_size/25（全分辨率像素）；rough = grain_roughness/100；amount = grain_amount/100·0.12；seed = 0
-scale = 1 / pixel_scale（pixel_scale = 帧长边 / 原图长边，renderd 由解码器给出的原图长边计算，导出为 1）
+scale = 1 / pixel_scale（pixel_scale = 帧长边 / 原图长边，renderd 由解码器给出的原图长边计算，导出为 1；有裁剪/旋转/翻转时预览与导出的坐标原点会错开约 1/pixel_scale 个全分辨率像素）
 fx = x·scale/cell, fy = y·scale/cell
 n = value_noise(fx, fy, seed)·(1−rough) + value_noise(2.3fx, 2.3fy, seed+7)·rough
     # value_noise：格点 hash01（splitmix 风格 64 位哈希）加 smoothstep 双线性

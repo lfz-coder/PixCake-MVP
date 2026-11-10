@@ -29,7 +29,7 @@
   - 3D LUT 17³ 确定性表，三线性与四面体 × 73 像素；
   - 合成 3 模式 × 底图 alpha {0, 0.5, 1} × 源 alpha {0.5, 1} × 不透明度 {0.3, 1} × 16 色对。
 - `tests/gpu/data/grain_vectors.inc`：PhotoCraft `develop` 只开颗粒，amount 20/100 × size 0/25/100 × roughness 0/50/100 × （pixel_scale 1、0.25，seed 12345），12×12 图块。
-- 结果：`test_adjust_port` 最大差 **1.19e-7**，`test_grain_matches_photocraft` 最大差 **5.96e-8**（容差 2e-6）。
+- 结果：`test_adjust_port` 最大差 **1.19e-7**，`test_grain_matches_photocraft` 最大差 **0**（`-ffp-contract=off` 之前为 5.96e-8）（容差 2e-6）。
 - 变异检查：色阶 toe 指数 2.2 → 2.3、颗粒第二倍频种子 +7 → +8，测试各自失败；已恢复。
 
 ## 门禁逐条（移植规范第 8 节）
@@ -48,7 +48,7 @@
 - 色阶按 Photoshop 8 位整级量化，gamma > 1 时暗部有 toe（旧公式是连续幂函数）。
 - 可选颜色 absolute 模式：红 cyan +100 作用于 (200,50,50) 从 82 变为 50（按墨量余量缩放）。
 - 带蒙版或非 normal 的操作按覆盖率（不透明度 × 蒙版）回混，alpha 不变；像素自身的 alpha 不再乘进调整强度。
-- 颗粒按全分辨率坐标采样：预览和导出在同一位置显示同样的颗粒；每张图的颗粒图案相同（seed 0）。
+- 颗粒按全分辨率坐标采样：没有裁剪/旋转/翻转时，预览像素与导出在同一全分辨率位置的颗粒值相同（`test_renderd`）；有几何时两种分辨率各自计算裁剪原点，会错开约 1/pixel_scale 个全分辨率像素，统计特性不变。预览每个像素取一次全强度噪声、不做平均，所以缩小显示的预览比同尺寸查看的导出看起来颗粒更重（PhotoCraft 同样如此）。每张图的颗粒图案相同（seed 0）。
 - 渲染库以 `-ffp-contract=off` 编译（Rust 不融合乘加），移植公式与 PhotoCraft 逐位一致。
 
 ## 仍未覆盖

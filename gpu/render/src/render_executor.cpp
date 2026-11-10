@@ -339,8 +339,9 @@ Pixel apply_color_groups(Pixel p, const ColorGroups& g) {
 // Grain (detail): PhotoCraft's Camera Raw stage 9 (camera_raw.cpp) for amount, size and
 // roughness, sampled in full-resolution coordinates (RenderInputs::pixel_scale).  PixCake's
 // own sub-sliders on top (PixCake-specific): shadows / midtones / highlights scale the strength
-// by their triangular zones relative to the defaults 30 / 50 / 15 (so at the defaults the
-// grain is PhotoCraft's), and colour mixes in an independent noise per channel.
+// by their triangular zones relative to the defaults 30 / 50 / 15, and colour mixes in an
+// independent noise per channel; at the default zones with colour 0 (its default is 10) the
+// grain is PhotoCraft's exactly.
 struct Grain {
   bool on = false;
   cr::Grain base;
