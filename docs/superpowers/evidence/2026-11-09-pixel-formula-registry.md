@@ -59,7 +59,7 @@ highlights/shadows 与 whites/blacks 是 PhotoCraft Camera Raw 的整帧阶段�
 - **高光/阴影**（`camera_raw::localTone`，PhotoCraft `algo/src/camera_raw/local_tone.rs` `apply`）：在 log2 亮度（线性 luma + 1/65536）上做快速局部拉普拉斯滤波，参考层间距 0.125、最多 96 层；高光把比周围亮的细节按超出 0.05 stop 的部分拉向（或推离）周围，再按 1 % 分位数把最暗处放回原位；阴影按“比周围暗”的程度 smoothstep 提亮，再按 99 % 分位数保住最亮处；强度随周围在图像 1–99 % 范围中的位置按 5 个结点插值。超过 1600 px 时先按块平均缩小，变化量用引导滤波（r=2、eps=0.01）放大回原尺寸；最后每像素线性光乘 `2^change`。
 - **白色/黑色**（`camera_raw::whitesBlacks`，PhotoCraft `algo/src/camera_raw/whites_blacks.rs`）：33 级灰阶上的实测曲线（白色 38 行、黑色 21 行，内部量 10 一行）。压缩方向（白色降低、黑色提高）用固定曲线、按亮度变化等比缩放像素；裁剪方向（白色提高、黑色降低）按图像黑白点自适应（`luminancePoints`：≤256 px 副本上亮度的 3 % 分位与最亮通道的 99.5 % 分位；`AW`/`AB` 表双线性插值，黑色至少 1.2 倍），逐通道作用。
 
-预览与导出都在当前帧上计算统计和滤波；PhotoCraft 的代理尺寸（256/768/1600 px）让二者接近，但不完全相同（[证据](2026-11-09-photocraft-spatial-stages-port.md)：400×300 平均 2.45 级）。旧的 lift 公式见第 11 节。
+预览与导出都在当前帧上计算统计和滤波；PhotoCraft 的代理尺寸（256/768/1600 px）让二者接近，但不完全相同（[证据](2026-11-09-photocraft-spatial-stages-port.md)：600 px 预览对 2400 px 导出平均 ≤0.33 级）。旧的 lift 公式见第 11 节。
 
 brightness 例外：Camera Raw（PV2012）没有亮度滑杆。2026-11-09 用户裁决按 Photoshop 来做：来源是 `photocraft-target`（B），状态 `photocraft-ported`。公式是 Photoshop 现代亮度/对比度中的亮度部分 `modern_brightness`（`third_party/photocraft/crates/compose/src/adjust/tone.rs:155`）：`modern_lut(brightness, 0)`（`tone.rs:230`）生成 4096 点查找表，逐通道作用于编码值，保持纯黑和纯白不动；不使用 legacy 线性亮度（`compose/src/adjust.rs` 的 `legacy: true` 分支）。单位：Photoshop 现代亮度范围 −150..150，PixCake −100..100 直接取同值。提亮分支是膝点 126/255 以下的直线 `s·x` 加 Hermite 或幂函数尾段；压暗分支是提亮曲线的单调逆。管线里亮度之前的白平衡/曝光可能把值推出 0..1，因此表外按 PhotoCraft `lut_extended`（`tone.rs:134`）沿表两端 16 步的斜率外推，不在中途裁剪（`test_brightness_is_continuous_past_white`）。它在 A 管线中的位置是 `PixCake-specific` 顺序：阶段 1 之后（管线第 3 步），待像素蛋糕黑盒测量确认。
 

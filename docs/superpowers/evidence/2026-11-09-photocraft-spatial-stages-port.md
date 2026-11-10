@@ -15,7 +15,7 @@
 | `whites` / `blacks` | `camera_raw/whites_blacks.rs` 全部实测表与 `amounts`/`apply`；`camera_raw.rs` `luminance_points` | `camera_raw::whitesBlacks`、`luminancePoints`；表在 `whites_blacks_tables.inc`（脚本从 Rust 源码原样转出） |
 | 共用滤波 | `camera_raw.rs` `box_mean`、`gauss`、`guided`、`guided_fast`；`fxutil.rs` `gauss_box_radii`；`photo_util.rs` `bilinear` | `boxMean`、`gauss`、`guided`、`guidedFast`、`gaussBoxRadii`、`bilinear` |
 
-文件：`gpu/render/include/pixcake/gpu/camera_raw_spatial.hpp`、`gpu/render/src/camera_raw_spatial.cpp`、`gpu/render/src/whites_blacks_tables.inc`。PhotoCraft 的并行行是彼此独立的，C++ 单线程逐行执行，每个求和的顺序和类型（f32/f64）与 Rust 相同。
+文件：`gpu/render/include/pixcake/gpu/camera_raw_spatial.hpp`、`gpu/render/src/camera_raw_spatial.cpp`、`gpu/render/src/whites_blacks_tables.inc`。PhotoCraft 按行并行（`par_rows`，平面 ≥ 2^15 个样本时）；C++ 用一个常驻线程池按行（盒式均值的列方向按列）分带，门槛相同，每个输出样本的求和顺序和类型（f32/f64）与 Rust 相同，所以结果逐位相同（`test_camera_raw_spatial` 把门槛设为 1 再跑全部用例，差 0；ThreadSanitizer 下 0 警告）。线程池忙时（另一线程上的渲染）在调用线程上直接执行。
 
 ## Executor 顺序
 
@@ -43,23 +43,32 @@
 | 测试 | 结果 |
 | --- | --- |
 | `test_spatial_order_matches_develop` | 全局操作同时含 temperature、exposure、dehaze、shadows、highlights、clarity、texture、contrast、whites、blacks、vibrance，逐像素等于把各阶段函数按上述顺序串起来，差 0；对调去雾与高光/阴影的顺序后失败 |
-| `test_spatial_preview_matches_export` | 400×300 合成图：4× 缩小后以 pixel_scale 0.25 渲染，与全尺寸渲染再缩小比较，平均 2.45 级、最大 5 级（1600×1200 时平均 0.75、最大 10）。单项最大：阴影 8、高光 12、去雾 20（硬边处）。差异来自 PhotoCraft 自身（金字塔层数和分位数随帧尺寸变化），测试上限为平均 ≤3、最大 ≤24，用于发现漏跑或跑错帧 |
+| `test_spatial_preview_matches_export` | 2400×1800 导出与 600×450 预览（源图 4× 缩小、pixel_scale 0.25），导出结果同样缩小后比较。六组参数（组合、阴影 100、高光 −100、白色 100/黑色 −100、清晰度+纹理 60、去雾 50）平均差 0.05–0.33 级（上限 2）。最大差只在源图平坦的 4×4 块上统计：高光/阴影、白色/黑色、纹理/清晰度 1–6 级（上限 8），去雾 16、组合 11（上限 20：透射率在块内变化，1/t 的均值不等于均值的 1/t）。跨硬边的块上，逐像素曲线作用在块均值上与先作用再平均本来就不同（白色/黑色 100 达 69 级），与移植无关。预览跳过白色/黑色的变异会失败；忽略 pixel_scale 或改工作尺寸这类只差 1–2 级的变异抓不到，那是 PhotoCraft 自身的预览/导出差距之内 |
 | `test_spatial_tiny_frames` | 1×1、1×5、7×1 不崩溃 |
 | `test_spatial_falls_back_to_reference` | 七个整帧参数任一非零时 `PassRegistry::classify` 为 `ReferenceOnly`，为 0 时仍为 `Implemented` |
 | `test_spatial_local_masked` | 带蒙版的 `color.local`：蒙版内等于整幅渲染结果，蒙版外等于输入 |
 
 `test_gpu_backend_native`：新用例“tone, whole-frame (reference)”回退 reference，与纯 reference 差 0；32 px 分块导出也回退到整幅 reference，差 0。
 
-## 耗时（Release `-O3`，Apple M 系列，单线程 reference）
+## 耗时（Release `-O3`，Apple M 系列 12 核）
 
 `bench_reference_render`，参数：去雾 30、阴影 50、高光 −40、纹理 20、清晰度 30、白色 20、黑色 −20。
 
-| 帧 | reference |
-| --- | --- |
-| 600×450（拖动滑杆时的交互尺寸） | 234 ms |
-| 4000×3000（预览上限） | 3.36 s |
+| 帧 | 单线程（第一版） | 线程池（当前） |
+| --- | --- | --- |
+| 600×450（拖动滑杆时的交互尺寸） | 234 ms | 88 ms |
+| 4000×3000（预览上限） | 3.36 s | 0.72 s |
 
-对照：同一 600 px 帧上的“全部色彩分组”为 8.6 ms。整帧阶段比逐像素路径慢一到两个数量级，主要耗时在 local_tone（每个参考层一整套高斯金字塔）。PhotoCraft 按行多线程运行，PixCake 的 C++ 目前单线程；下一步是行并行（保持求和顺序不变即可逐位一致）以及 GLSL 版本。
+与 PhotoCraft 自身（同一台机器、同一噪声帧，`develop` release 构建）对比，单阶段耗时：
+
+| 阶段 | 600×450 PixCake / PhotoCraft | 4000×3000 PixCake / PhotoCraft |
+| --- | --- | --- |
+| 去雾 30 | 33 / 45 ms | 81 / 84 ms |
+| 阴影 50 + 高光 −40 | 134 / 131 ms | 514 / 513 ms |
+| 纹理 + 清晰度 | 3 / 5 ms | 126 / 146 ms |
+| 白色/黑色 | 6 / 6 ms | 179 / 198 ms |
+
+C++ reference 已与 PhotoCraft 同速；剩下的耗时是算法本身（局部拉普拉斯每个参考层一整套高斯金字塔，最多 96 层）。同一 600 px 帧上的“全部色彩分组”为 7 ms，所以拖动高光/阴影时仍明显慢于其他滑杆；进一步提速要靠 GLSL 版本。
 
 ## 门禁（移植规范第 8 节）
 
@@ -69,5 +78,7 @@
 4. GPU readback ≤1 级：**未满足**（同上）。
 5. 预览与导出执行同一公式：满足（renderd 和 exportd 共用 `RenderExecutor`，回退也是整幅 reference）。
 6. 旧公式测试“旧 → 新”：见提交 `cda7d36` 说明。
+
+最终审查（独立 Opus 审查者）另用自己的 Rust/C++ 对照工具核对了 64 个帧×参数组合（1×1 到 1703×1301、真二维金字塔、超出 0..1 的输入），全部逐位一致。
 
 因此状态是 `photocraft-reference-only`，不是 `photocraft-ported`。

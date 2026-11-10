@@ -87,6 +87,10 @@ void test_box_radii() {  // Kovesi's triple, and one radius-1 pass below sigma ~
 int main() {
   test_box_radii();
   test_spatial_matches_photocraft();
+  // Every plane split into row/column bands across the worker threads: the same bits.
+  const std::size_t default_minimum = cr::setParallelMinimum(1);
+  test_spatial_matches_photocraft();
+  cr::setParallelMinimum(default_minimum);
   std::printf("test_camera_raw_spatial: ok\n");
   return 0;
 }

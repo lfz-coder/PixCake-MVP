@@ -105,43 +105,74 @@ void test_spatial_order_matches_develop() {
   }
 }
 
-// A quarter-size preview (pixel_scale 0.25) stays close to the full-resolution result shrunk.
+// A 600 x 450 preview (the source shrunk 4x, pixel_scale 0.25) stays close to the 2400 x 1800
+// export shrunk the same way.  The worst difference is taken where the source block is flat:
+// across a hard edge a per-pixel curve of the block's mean is not the mean of the curve
+// (whites/blacks 100 differ by up to 69 levels there), whatever the port does.
 void test_spatial_preview_matches_export() {
-  const std::uint32_t W = 400, H = 300, S = 4;
+  const std::uint32_t W = 2400, H = 1800, S = 4, w = W / S, h = H / S;
   const auto full = scene(W, H);
-  RgbaImage small;
-  small.width = W / S;
-  small.height = H / S;
-  small.row_stride = small.width * 4;
   const auto shrink = [&](const RgbaImage& img, std::uint32_t x, std::uint32_t y, int c) {
     int sum = 0;
     for (std::uint32_t dy = 0; dy < S; ++dy)
       for (std::uint32_t dx = 0; dx < S; ++dx) sum += img.pixels[((y * S + dy) * W + x * S + dx) * 4 + c];
     return static_cast<std::uint8_t>((sum + S * S / 2) / (S * S));
   };
-  for (std::uint32_t y = 0; y < small.height; ++y)
-    for (std::uint32_t x = 0; x < small.width; ++x)
-      small.pixels.insert(small.pixels.end(), {shrink(full, x, y, 0), shrink(full, x, y, 1), shrink(full, x, y, 2), 255});
-  const auto d = global({value("shadows", 60), value("highlights", -50), value("whites", 30), value("blacks", -30), value("dehaze", 20)});
-  const auto exported = run(d, full);
+  const auto flat = [&](std::uint32_t x, std::uint32_t y) {
+    for (int c = 0; c < 3; ++c) {
+      int lo = 255, hi = 0;
+      for (std::uint32_t dy = 0; dy < S; ++dy)
+        for (std::uint32_t dx = 0; dx < S; ++dx) {
+          const int v = full.pixels[((y * S + dy) * W + x * S + dx) * 4 + c];
+          lo = std::min(lo, v);
+          hi = std::max(hi, v);
+        }
+      if (hi - lo > 2) return false;
+    }
+    return true;
+  };
+  RgbaImage small;
+  small.width = w;
+  small.height = h;
+  small.row_stride = w * 4;
+  for (std::uint32_t y = 0; y < h; ++y)
+    for (std::uint32_t x = 0; x < w; ++x) small.pixels.insert(small.pixels.end(), {shrink(full, x, y, 0), shrink(full, x, y, 1), shrink(full, x, y, 2), 255});
   RenderInputs preview_inputs;
   preview_inputs.pixel_scale = 1.0F / S;
-  const auto preview = run(d, small, preview_inputs);
-  double sum = 0;
-  int worst = 0;
-  for (std::uint32_t y = 0; y < small.height; ++y)
-    for (std::uint32_t x = 0; x < small.width; ++x)
-      for (int c = 0; c < 3; ++c) {
-        const int a = preview.image.pixels[(y * small.width + x) * 4 + c], b = shrink(exported.image, x, y, c);
-        sum += std::abs(a - b);
-        worst = std::max(worst, std::abs(a - b));
+  // Dehaze divides by a transmission that varies inside a flat block near an edge, so its mean
+  // over the block is not the block's dehaze either: measured 16 (dehaze 50) and 11 (mixed).
+  // Measured mean 0.05-0.33 and flat worst 1-6 for the rest (2026-11-10).
+  const struct {
+    const char* name;
+    RenderDescription description;
+    int flat_bound;
+  } cases[] = {
+      {"mixed", global({value("shadows", 60), value("highlights", -50), value("whites", 30), value("blacks", -30), value("dehaze", 20)}), 20},
+      {"shadows 100", global({value("shadows", 100)}), 8},
+      {"highlights -100", global({value("highlights", -100)}), 8},
+      {"whites/blacks 100", global({value("whites", 100), value("blacks", -100)}), 8},
+      {"clarity+texture 60", global({value("clarity", 60), value("texture", 60)}), 8},
+      {"dehaze 50", global({value("dehaze", 50)}), 20},
+  };
+  for (const auto& item : cases) {
+    const auto exported = run(item.description, full);
+    const auto preview = run(item.description, small, preview_inputs);
+    double sum = 0;
+    int worst = 0, flat_worst = 0;
+    for (std::uint32_t y = 0; y < h; ++y)
+      for (std::uint32_t x = 0; x < w; ++x) {
+        const bool is_flat = flat(x, y);
+        for (int c = 0; c < 3; ++c) {
+          const int d = std::abs(preview.image.pixels[(y * w + x) * 4 + c] - shrink(exported.image, x, y, c));
+          sum += d;
+          worst = std::max(worst, d);
+          if (is_flat) flat_worst = std::max(flat_worst, d);
+        }
       }
-  const double mean = sum / (small.width * small.height * 3.0);
-  std::printf("spatial preview vs export: mean %.2f, worst %d levels\n", mean, worst);
-  // PhotoCraft's own preview/export gap (pyramid depth and percentiles follow the frame size;
-  // the port matches PhotoCraft bit for bit): measured mean 2.45, worst 5 here, mean 0.75 /
-  // worst 10 at 1600 x 1200.  The bound catches a stage skipped or run on the wrong frame.
-  CHECK(mean <= 3.0 && worst <= 24);
+    const double mean = sum / (w * h * 3.0);
+    std::printf("preview vs export %-20s mean %.2f, worst %d, worst on flat blocks %d levels\n", item.name, mean, worst, flat_worst);
+    CHECK(mean <= 2.0 && flat_worst <= item.flat_bound);
+  }
 }
 
 void test_spatial_tiny_frames() {

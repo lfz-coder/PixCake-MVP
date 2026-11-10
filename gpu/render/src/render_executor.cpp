@@ -637,8 +637,8 @@ void draw_spatial(const PreparedOperation& draw, RgbaImage& frame) {
   f.height = frame.height;
   f.px.resize(static_cast<std::size_t>(frame.width) * frame.height);
   std::vector<Pixel> before(f.px.size());
-  for (std::uint32_t y = 0; y < frame.height; ++y) {
-    for (std::uint32_t x = 0; x < frame.width; ++x) {
+  for_rows(frame.width, frame.height, [&](std::uint32_t first, std::uint32_t end) {
+    for (std::uint32_t y = first; y < end; ++y) for (std::uint32_t x = 0; x < frame.width; ++x) {
       const std::size_t i = static_cast<std::size_t>(y) * frame.width + x;
       before[i] = read(frame, x, y);
       Pixel p = before[i];
@@ -646,7 +646,7 @@ void draw_spatial(const PreparedOperation& draw, RgbaImage& frame) {
       p = tone_brightness(p, t);
       f.px[i] = {p.r, p.g, p.b, p.a};
     }
-  }
+  });
   if (t.dehaze != 0.0F) cr::dehaze(f, t.dehaze / 100.0F);
   if (t.shadows != 0.0F || t.highlights != 0.0F) cr::localTone(f, t.shadows, t.highlights);
   if (t.contrast != 0.0F || t.texture != 0.0F || t.clarity != 0.0F) cr::toneDetail(f, t.contrast, t.texture, t.clarity, draw.pixel_scale);

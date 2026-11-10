@@ -35,6 +35,11 @@ std::array<float, 2> luminancePoints(const Frame& frame);
 // Stage 3b: Whites and Blacks (-100..100), adapted to the frame's black and white points.
 void whitesBlacks(Frame& frame, float whites, float blacks);
 
+// Planes of at least this many samples run their rows (or columns) on a pool of worker threads,
+// as PhotoCraft's par_rows does (PAR_MIN 1 << 15); each output sample is computed exactly as on
+// one thread, so the result is the same bits.  Returns the previous value; for tests.
+std::size_t setParallelMinimum(std::size_t samples);
+
 // Building blocks, exposed for tests.
 std::array<std::size_t, 3> gaussBoxRadii(float sigma);
 std::vector<float> boxMean(const std::vector<float>& v, std::size_t w, std::size_t h, std::size_t r);

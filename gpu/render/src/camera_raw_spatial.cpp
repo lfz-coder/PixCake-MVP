@@ -3,16 +3,20 @@
 // @ 885a6ddf27cc58c07faf1722e5c327cd38953657, MIT (elected from MIT OR Apache-2.0).
 // Copyright (c) 2026 ArtCraft Team and the PhotoCraft contributors.
 // Licence text: third_party/photocraft-LICENSES/LICENSE-MIT.
-// Modified: rewritten in C++17, single-threaded (PhotoCraft's parallel rows are independent, so
-// the order of every sum is the same); sRGB encoding only.
+// Modified: rewritten in C++17; rows (or columns) run on a worker pool in bands, each sample
+// computed in the same order as on one thread, so the result is the same bits; sRGB encoding only.
 #include <pixcake/gpu/camera_raw_spatial.hpp>
 
 #include <pixcake/gpu/camera_raw.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <condition_variable>
 #include <cstring>
 #include <functional>
+#include <mutex>
+#include <thread>
 #include <limits>
 #include <numeric>
 
@@ -27,6 +31,107 @@ float luma3(float r, float g, float b) { return 0.2126F * r + 0.7152F * g + 0.07
 std::int64_t clamp_index(std::int64_t k, std::int64_t n) { return std::clamp<std::int64_t>(k, 0, n - 1); }
 std::size_t div_ceil(std::size_t a, std::size_t b) { return (a + b - 1) / b; }
 
+std::atomic<std::size_t> parallel_minimum{std::size_t{1} << 15};
+
+// A fixed pool of worker threads that runs one banded loop at a time.  A loop started while the
+// pool is busy (another render on another thread) runs on its caller's thread instead.
+class Pool {
+ public:
+  static Pool& get() {
+    static Pool pool;
+    return pool;
+  }
+  // body(first, end) over 0..n in bands, one per thread.
+  void run(std::size_t n, const std::function<void(std::size_t, std::size_t)>& body) {
+    const std::size_t bands = std::min(n, workers_.size() + 1);
+    std::unique_lock<std::mutex> busy(busy_, std::try_to_lock);
+    if (bands <= 1 || !busy.owns_lock()) {
+      body(0, n);
+      return;
+    }
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      job_ = Job{&body, n, bands, div_ceil(n, bands)};
+      next_ = 0;
+      finished_ = 0;
+      ++generation_;
+    }
+    wake_.notify_all();
+    work(job_);
+    std::unique_lock<std::mutex> lock(mutex_);
+    done_.wait(lock, [&] { return finished_ == bands && active_ == 0; });
+    job_.body = nullptr;
+  }
+  ~Pool() {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      stop_ = true;
+    }
+    wake_.notify_all();
+    for (auto& t : workers_) t.join();
+  }
+
+ private:
+  struct Job {
+    const std::function<void(std::size_t, std::size_t)>* body = nullptr;
+    std::size_t n = 0, bands = 0, band = 0;
+  };
+  Pool() {
+    const unsigned cores = std::max(1U, std::thread::hardware_concurrency());
+    for (unsigned i = 1; i < cores; ++i) workers_.emplace_back([this] { loop(); });
+  }
+  void loop() {
+    std::uint64_t seen = 0;
+    for (;;) {
+      Job job;
+      {
+        std::unique_lock<std::mutex> lock(mutex_);
+        wake_.wait(lock, [&] { return stop_ || generation_ != seen; });
+        if (stop_) return;
+        seen = generation_;
+        if (job_.body == nullptr) continue;
+        job = job_;
+        ++active_;
+      }
+      work(job);
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        --active_;
+      }
+      done_.notify_all();
+    }
+  }
+  void work(const Job& job) {
+    for (std::size_t b = next_.fetch_add(1); b < job.bands; b = next_.fetch_add(1)) {
+      const std::size_t first = b * job.band;
+      (*job.body)(std::min(first, job.n), std::min(first + job.band, job.n));
+      if (finished_.fetch_add(1) + 1 == job.bands) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        done_.notify_all();
+      }
+    }
+  }
+  std::vector<std::thread> workers_;
+  std::mutex busy_, mutex_;
+  std::condition_variable wake_, done_;
+  Job job_;
+  std::uint64_t generation_ = 0;
+  std::atomic<std::size_t> next_{0}, finished_{0};
+  std::size_t active_ = 0;
+  bool stop_ = false;
+};
+
+// body(first, end) over 0..n, in parallel bands when the plane has at least parallel_minimum
+// samples.
+template <class Body>
+void par(std::size_t n, std::size_t samples, const Body& body) {
+  if (samples < parallel_minimum.load() || n < 2) {
+    body(std::size_t{0}, n);
+    return;
+  }
+  Pool::get().run(n, body);
+}
+
 // The end of stage 3 on one pixel (camera_raw.rs tone()).
 void tone(std::array<float, 4>& q, float l0, float lc, float lv, float k_con) {
   if (k_con != 0.0F) {
@@ -39,6 +144,8 @@ void tone(std::array<float, 4>& q, float l0, float lc, float lv, float k_con) {
 }
 
 }  // namespace
+
+std::size_t setParallelMinimum(std::size_t samples) { return parallel_minimum.exchange(std::max<std::size_t>(samples, 1)); }
 
 std::array<std::size_t, 3> gaussBoxRadii(float sigma) {
   const float n = 3.0F;
@@ -61,32 +168,37 @@ std::vector<float> boxMean(const std::vector<float>& v, std::size_t w, std::size
   const double n = static_cast<double>(2 * r + 1);
   const auto ri = static_cast<std::int64_t>(r);
   std::vector<float> tmp(w * h);
-  for (std::size_t y = 0; y < h; ++y) {
-    const float* src = &v[y * w];
-    const auto at = [&](std::int64_t k) { return static_cast<double>(src[clamp_index(k, static_cast<std::int64_t>(w))]); };
-    double acc = 0.0;
-    for (std::int64_t k = -ri; k <= ri; ++k) acc += at(k);
-    for (std::size_t x = 0; x < w; ++x) {
-      tmp[y * w + x] = static_cast<float>(acc / n);
-      const auto xi = static_cast<std::int64_t>(x);
-      acc += at(xi + ri + 1) - at(xi - ri);
+  par(h, w * h, [&](std::size_t y0, std::size_t y1) {
+    for (std::size_t y = y0; y < y1; ++y) {
+      const float* src = &v[y * w];
+      const auto at = [&](std::int64_t k) { return static_cast<double>(src[clamp_index(k, static_cast<std::int64_t>(w))]); };
+      double acc = 0.0;
+      for (std::int64_t k = -ri; k <= ri; ++k) acc += at(k);
+      for (std::size_t x = 0; x < w; ++x) {
+        tmp[y * w + x] = static_cast<float>(acc / n);
+        const auto xi = static_cast<std::int64_t>(x);
+        acc += at(xi + ri + 1) - at(xi - ri);
+      }
     }
-  }
-  // Columns, with running sums whose increments are taken in f32 (as PhotoCraft does).
+  });
+  // Columns, with running sums whose increments are taken in f32 (as PhotoCraft does); the
+  // columns are independent, so they run in bands of columns.
   std::vector<float> out(w * h);
   const auto row = [&](std::int64_t y) { return &tmp[static_cast<std::size_t>(clamp_index(y, static_cast<std::int64_t>(h))) * w]; };
-  std::vector<double> acc(w, 0.0);
-  for (std::int64_t y = -ri; y <= ri; ++y) {
-    const float* p = row(y);
-    for (std::size_t x = 0; x < w; ++x) acc[x] += static_cast<double>(p[x]);
-  }
-  for (std::size_t y = 0; y < h; ++y) {
-    for (std::size_t x = 0; x < w; ++x) out[y * w + x] = static_cast<float>(acc[x] / n);
-    const auto yi = static_cast<std::int64_t>(y);
-    const float* add = row(yi + ri + 1);
-    const float* sub = row(yi - ri);
-    for (std::size_t x = 0; x < w; ++x) acc[x] += static_cast<double>(add[x] - sub[x]);
-  }
+  par(w, w * h, [&](std::size_t x0, std::size_t x1) {
+    std::vector<double> acc(x1 - x0, 0.0);
+    for (std::int64_t y = -ri; y <= ri; ++y) {
+      const float* p = row(y);
+      for (std::size_t x = x0; x < x1; ++x) acc[x - x0] += static_cast<double>(p[x]);
+    }
+    for (std::size_t y = 0; y < h; ++y) {
+      for (std::size_t x = x0; x < x1; ++x) out[y * w + x] = static_cast<float>(acc[x - x0] / n);
+      const auto yi = static_cast<std::int64_t>(y);
+      const float* add = row(yi + ri + 1);
+      const float* sub = row(yi - ri);
+      for (std::size_t x = x0; x < x1; ++x) acc[x - x0] += static_cast<double>(add[x] - sub[x]);
+    }
+  });
   return out;
 }
 
@@ -164,15 +276,17 @@ std::vector<float> guidedFast(const std::vector<float>& i, const std::vector<flo
   const auto ma = boxMean(a, sw, sh, rs), mb = boxMean(b, sw, sh, rs);
   std::vector<float> out(w * h);
   const auto sf = static_cast<float>(s);
-  for (std::size_t y = 0; y < h; ++y) {
-    const float fy = (static_cast<float>(y) + 0.5F) / sf - 0.5F;
-    for (std::size_t x = 0; x < w; ++x) {
-      const float fx = (static_cast<float>(x) + 0.5F) / sf - 0.5F;
-      const float av = bilinear(ma, sw, sh, fx, fy);
-      const float bv = bilinear(mb, sw, sh, fx, fy);
-      out[y * w + x] = av * i[y * w + x] + bv;
+  par(h, w * h, [&](std::size_t y0, std::size_t y1) {
+    for (std::size_t y = y0; y < y1; ++y) {
+      const float fy = (static_cast<float>(y) + 0.5F) / sf - 0.5F;
+      for (std::size_t x = 0; x < w; ++x) {
+        const float fx = (static_cast<float>(x) + 0.5F) / sf - 0.5F;
+        const float av = bilinear(ma, sw, sh, fx, fy);
+        const float bv = bilinear(mb, sw, sh, fx, fy);
+        out[y * w + x] = av * i[y * w + x] + bv;
+      }
     }
-  }
+  });
   return out;
 }
 
@@ -199,22 +313,26 @@ void dehaze(Frame& frame, float amount) {
     const float start = take_max ? std::numeric_limits<float>::lowest() : std::numeric_limits<float>::max();
     const auto pick = [take_max](float a, float b) { return take_max ? std::fmax(a, b) : std::fmin(a, b); };
     std::vector<float> a(n), b(n);
-    for (std::size_t y = 0; y < sh; ++y) {
-      for (std::size_t x = 0; x < sw; ++x) {
-        const std::size_t x0 = x >= r ? x - r : 0, x1 = std::min(x + r, sw - 1);
-        float acc = start;
-        for (std::size_t xx = x0; xx <= x1; ++xx) acc = pick(acc, v[y * sw + xx]);
-        a[y * sw + x] = acc;
+    par(sh, n, [&](std::size_t first, std::size_t end) {
+      for (std::size_t y = first; y < end; ++y) {
+        for (std::size_t x = 0; x < sw; ++x) {
+          const std::size_t x0 = x >= r ? x - r : 0, x1 = std::min(x + r, sw - 1);
+          float acc = start;
+          for (std::size_t xx = x0; xx <= x1; ++xx) acc = pick(acc, v[y * sw + xx]);
+          a[y * sw + x] = acc;
+        }
       }
-    }
-    for (std::size_t y = 0; y < sh; ++y) {
-      for (std::size_t x = 0; x < sw; ++x) {
-        const std::size_t y0 = y >= r ? y - r : 0, y1 = std::min(y + r, sh - 1);
-        float acc = start;
-        for (std::size_t yy = y0; yy <= y1; ++yy) acc = pick(acc, a[yy * sw + x]);
-        b[y * sw + x] = acc;
+    });
+    par(sh, n, [&](std::size_t first, std::size_t end) {
+      for (std::size_t y = first; y < end; ++y) {
+        for (std::size_t x = 0; x < sw; ++x) {
+          const std::size_t y0 = y >= r ? y - r : 0, y1 = std::min(y + r, sh - 1);
+          float acc = start;
+          for (std::size_t yy = y0; yy <= y1; ++yy) acc = pick(acc, a[yy * sw + x]);
+          b[y * sw + x] = acc;
+        }
       }
-    }
+    });
     return b;
   };
   std::vector<float> channel_min(n);
@@ -247,18 +365,20 @@ void dehaze(Frame& frame, float amount) {
   }
   const auto t = guided(guide, t_raw, sw, sh, r * 2, 1e-3F);
   const auto ks = static_cast<float>(k);
-  for (std::size_t y = 0; y < h; ++y) {
-    for (std::size_t x = 0; x < w; ++x) {
-      auto& q = frame.px[y * w + x];
-      const float tv = std::clamp(
-          bilinear(t, sw, sh, (static_cast<float>(x) + 0.5F) / ks - 0.5F, (static_cast<float>(y) + 0.5F) / ks - 0.5F), 0.1F, 1.0F);
-      for (int c = 0; c < 3; ++c) {
-        const float i = q[c];
-        const float j = (i - air[c]) / tv + air[c];
-        q[c] = amount >= 0.0F ? i + (j - i) * amount : i + (air[c] - i) * (-amount) * 0.5F * (1.0F - tv * 0.5F);
+  par(h, w * h, [&](std::size_t first, std::size_t end) {
+    for (std::size_t y = first; y < end; ++y) {
+      for (std::size_t x = 0; x < w; ++x) {
+        auto& q = frame.px[y * w + x];
+        const float tv = std::clamp(
+            bilinear(t, sw, sh, (static_cast<float>(x) + 0.5F) / ks - 0.5F, (static_cast<float>(y) + 0.5F) / ks - 0.5F), 0.1F, 1.0F);
+        for (int c = 0; c < 3; ++c) {
+          const float i = q[c];
+          const float j = (i - air[c]) / tv + air[c];
+          q[c] = amount >= 0.0F ? i + (j - i) * amount : i + (air[c] - i) * (-amount) * 0.5F * (1.0F - tv * 0.5F);
+        }
       }
     }
-  }
+  });
 }
 
 void toneDetail(Frame& frame, float contrast, float texture, float clarity, float pixel_scale) {
@@ -276,16 +396,18 @@ void toneDetail(Frame& frame, float contrast, float texture, float clarity, floa
   if (clarity != 0.0F) clar = guidedFast(lc, lc, w, h, std::max<std::size_t>(static_cast<std::size_t>(longest * 0.02F), 3), 0.005F);
   if (texture != 0.0F) tex = gauss(lc, w, h, std::fmax(longest * 0.002F, 1.5F * ps));
   const float k_con = contrast / 100.0F * 0.6F;
-  for (std::size_t i = 0; i < n; ++i) {
-    float lv = lc[i];
-    if (!clar.empty()) {
-      const float m = 2.0F * std::clamp(lv, 0.0F, 1.0F) - 1.0F;
-      const float mw = 1.0F - m * m;
-      lv += clarity / 100.0F * 0.8F * (lc[i] - clar[i]) * mw;
+  par(h, n, [&](std::size_t first, std::size_t end) {
+    for (std::size_t i = first * w; i < end * w; ++i) {
+      float lv = lc[i];
+      if (!clar.empty()) {
+        const float m = 2.0F * std::clamp(lv, 0.0F, 1.0F) - 1.0F;
+        const float mw = 1.0F - m * m;
+        lv += clarity / 100.0F * 0.8F * (lc[i] - clar[i]) * mw;
+      }
+      if (!tex.empty()) lv += texture / 100.0F * 0.9F * std::clamp(lc[i] - tex[i], -0.1F, 0.1F);
+      tone(frame.px[i], l[i], lc[i], lv, k_con);
     }
-    if (!tex.empty()) lv += texture / 100.0F * 0.9F * std::clamp(lc[i] - tex[i], -0.1F, 0.1F);
-    tone(frame.px[i], l[i], lc[i], lv, k_con);
-  }
+  });
 }
 
 // ---- Highlights and Shadows (camera_raw/local_tone.rs)
@@ -331,26 +453,30 @@ std::size_t mirror(std::ptrdiff_t i, std::size_t n) {
 Plane blur_step(const Plane& p, std::size_t step) {
   const std::size_t w2 = div_ceil(p.w, step), h2 = div_ceil(p.h, step);
   std::vector<float> tmp(p.w * h2);
-  for (std::size_t y2 = 0; y2 < h2; ++y2) {
-    const auto y = static_cast<std::ptrdiff_t>(y2 * step);
-    const float* src[5];
-    for (int k = 0; k < 5; ++k) src[k] = &p.v[mirror(y + k - 2, p.h) * p.w];
-    for (std::size_t x = 0; x < p.w; ++x) {
-      float sum = -0.0F;
-      for (int k = 0; k < 5; ++k) sum += kTaps[k] * src[k][x];
-      tmp[y2 * p.w + x] = sum;
+  par(h2, p.w * h2, [&](std::size_t first, std::size_t end) {
+    for (std::size_t y2 = first; y2 < end; ++y2) {
+      const auto y = static_cast<std::ptrdiff_t>(y2 * step);
+      const float* src[5];
+      for (int k = 0; k < 5; ++k) src[k] = &p.v[mirror(y + k - 2, p.h) * p.w];
+      for (std::size_t x = 0; x < p.w; ++x) {
+        float sum = -0.0F;
+        for (int k = 0; k < 5; ++k) sum += kTaps[k] * src[k][x];
+        tmp[y2 * p.w + x] = sum;
+      }
     }
-  }
+  });
   Plane out{w2, h2, std::vector<float>(w2 * h2)};
-  for (std::size_t y2 = 0; y2 < h2; ++y2) {
-    const float* src = &tmp[y2 * p.w];
-    for (std::size_t x2 = 0; x2 < w2; ++x2) {
-      const std::size_t x = x2 * step;
-      float sum = -0.0F;
-      for (int k = 0; k < 5; ++k) sum += kTaps[k] * src[mirror(static_cast<std::ptrdiff_t>(x) + k - 2, p.w)];
-      out.v[y2 * w2 + x2] = sum;
+  par(h2, w2 * h2, [&](std::size_t first, std::size_t end) {
+    for (std::size_t y2 = first; y2 < end; ++y2) {
+      const float* src = &tmp[y2 * p.w];
+      for (std::size_t x2 = 0; x2 < w2; ++x2) {
+        const std::size_t x = x2 * step;
+        float sum = -0.0F;
+        for (int k = 0; k < 5; ++k) sum += kTaps[k] * src[mirror(static_cast<std::ptrdiff_t>(x) + k - 2, p.w)];
+        out.v[y2 * w2 + x2] = sum;
+      }
     }
-  }
+  });
   return out;
 }
 Plane down(const Plane& p) { return blur_step(p, 2); }
@@ -367,29 +493,33 @@ bool stuffed(std::ptrdiff_t i, std::size_t n, std::size_t lim, std::size_t& at) 
 Plane up(const Plane& p, std::size_t w, std::size_t h) {
   const std::size_t lh = std::min(p.h, div_ceil(h, 2)), lw = std::min(p.w, div_ceil(w, 2));
   std::vector<float> tmp(lw * h);
-  for (std::size_t y = 0; y < h; ++y) {
-    std::size_t rows[5];
-    bool has[5];
-    for (int k = 0; k < 5; ++k) has[k] = stuffed(static_cast<std::ptrdiff_t>(y) + k - 2, h, lh, rows[k]);
-    for (std::size_t j = 0; j < lw; ++j) {
-      float sum = -0.0F;
-      for (int k = 0; k < 5; ++k)
-        if (has[k]) sum += kTaps[k] * (p.v[rows[k] * p.w + j] * 4.0F);
-      tmp[y * lw + j] = sum;
-    }
-  }
-  Plane out{w, h, std::vector<float>(w * h)};
-  for (std::size_t y = 0; y < h; ++y) {
-    const float* t = &tmp[y * lw];
-    for (std::size_t x = 0; x < w; ++x) {
-      float sum = -0.0F;
-      for (int k = 0; k < 5; ++k) {
-        std::size_t j;
-        if (stuffed(static_cast<std::ptrdiff_t>(x) + k - 2, w, lw, j)) sum += kTaps[k] * t[j];
+  par(h, lw * h, [&](std::size_t first, std::size_t end) {
+    for (std::size_t y = first; y < end; ++y) {
+      std::size_t rows[5];
+      bool has[5];
+      for (int k = 0; k < 5; ++k) has[k] = stuffed(static_cast<std::ptrdiff_t>(y) + k - 2, h, lh, rows[k]);
+      for (std::size_t j = 0; j < lw; ++j) {
+        float sum = -0.0F;
+        for (int k = 0; k < 5; ++k)
+          if (has[k]) sum += kTaps[k] * (p.v[rows[k] * p.w + j] * 4.0F);
+        tmp[y * lw + j] = sum;
       }
-      out.v[y * w + x] = sum;
     }
-  }
+  });
+  Plane out{w, h, std::vector<float>(w * h)};
+  par(h, w * h, [&](std::size_t first, std::size_t end) {
+    for (std::size_t y = first; y < end; ++y) {
+      const float* t = &tmp[y * lw];
+      for (std::size_t x = 0; x < w; ++x) {
+        float sum = -0.0F;
+        for (int k = 0; k < 5; ++k) {
+          std::size_t j;
+          if (stuffed(static_cast<std::ptrdiff_t>(x) + k - 2, w, lw, j)) sum += kTaps[k] * t[j];
+        }
+        out.v[y * w + x] = sum;
+      }
+    }
+  });
   return out;
 }
 
@@ -435,7 +565,8 @@ float quantile(const std::vector<float>& v, float q) {
 }
 
 // The local Laplacian filter of u with remap(value, reference); the coarsest level is kept.
-Plane llf(const Plane& u, const std::function<float(float, float)>& remap) {
+template <class Remap>
+Plane llf(const Plane& u, const Remap& remap) {
   const std::size_t n = depth(u.w, u.h);
   const auto g = gaussian(u, n);
   float hi = -std::numeric_limits<float>::infinity();
@@ -449,7 +580,9 @@ Plane llf(const Plane& u, const std::function<float(float, float)>& remap) {
   for (std::size_t k = 0; k < refs; ++k) {
     const float r = lo + step * static_cast<float>(k);
     Plane m = u;
-    for (float& v : m.v) v = remap(v, r);
+    par(u.h, m.v.size(), [&](std::size_t first, std::size_t end) {
+      for (std::size_t i = first * u.w; i < end * u.w; ++i) m.v[i] = remap(m.v[i], r);
+    });
     const auto gr = gaussian(std::move(m), n);
     for (std::size_t l = 0; l + 1 < n; ++l) {
       const auto& gl = g[l].v;
@@ -457,16 +590,19 @@ Plane llf(const Plane& u, const std::function<float(float, float)>& remap) {
       const Plane& coarse = gr[l + 1];
       const std::size_t lw = g[l].w, lh = g[l].h;
       const std::size_t clh = std::min(coarse.h, div_ceil(lh, 2));
-      for (std::size_t y = 0; y < lh; ++y) {
-        std::size_t rows[5];
-        bool has[5];
-        for (int t = 0; t < 5; ++t) has[t] = stuffed(static_cast<std::ptrdiff_t>(y) + t - 2, lh, clh, rows[t]);
-        for (std::size_t x = 0; x < lw; ++x) {
-          const std::size_t i = y * lw + x;
-          const float wgt = std::fmax(1.0F - std::fabs(std::clamp(gl[i], lo, hi) - r) / step, 0.0F);
-          if (wgt > 0.0F) lap[l][i] += wgt * (fine[i] - up_at(coarse, lw, rows, has, x));
+      auto& out = lap[l];
+      par(lh, lw * lh, [&](std::size_t first, std::size_t end) {
+        for (std::size_t y = first; y < end; ++y) {
+          std::size_t rows[5];
+          bool has[5];
+          for (int t = 0; t < 5; ++t) has[t] = stuffed(static_cast<std::ptrdiff_t>(y) + t - 2, lh, clh, rows[t]);
+          for (std::size_t x = 0; x < lw; ++x) {
+            const std::size_t i = y * lw + x;
+            const float wgt = std::fmax(1.0F - std::fabs(std::clamp(gl[i], lo, hi) - r) / step, 0.0F);
+            if (wgt > 0.0F) out[i] += wgt * (fine[i] - up_at(coarse, lw, rows, has, x));
+          }
         }
-      }
+      });
     }
   }
   Plane o = g[n - 1];
@@ -536,15 +672,17 @@ Plane shadows_pass(const Plane& u, float amount) {
 Plane shrink(const Plane& u, std::size_t f) {
   const std::size_t sw = div_ceil(u.w, f), sh = div_ceil(u.h, f);
   Plane out{sw, sh, std::vector<float>(sw * sh)};
-  for (std::size_t y = 0; y < sh; ++y) {
-    for (std::size_t x = 0; x < sw; ++x) {
-      const std::size_t x0 = x * f, y0 = y * f, x1 = std::min(x0 + f, u.w), y1 = std::min(y0 + f, u.h);
-      double s = 0.0;
-      for (std::size_t yy = y0; yy < y1; ++yy)
-        for (std::size_t xx = x0; xx < x1; ++xx) s += static_cast<double>(u.v[yy * u.w + xx]);
-      out.v[y * sw + x] = static_cast<float>(s / static_cast<double>((x1 - x0) * (y1 - y0)));
+  par(sh, u.v.size(), [&](std::size_t first, std::size_t end) {
+    for (std::size_t y = first; y < end; ++y) {
+      for (std::size_t x = 0; x < sw; ++x) {
+        const std::size_t x0 = x * f, y0 = y * f, x1 = std::min(x0 + f, u.w), y1 = std::min(y0 + f, u.h);
+        double s = 0.0;
+        for (std::size_t yy = y0; yy < y1; ++yy)
+          for (std::size_t xx = x0; xx < x1; ++xx) s += static_cast<double>(u.v[yy * u.w + xx]);
+        out.v[y * sw + x] = static_cast<float>(s / static_cast<double>((x1 - x0) * (y1 - y0)));
+      }
     }
-  }
+  });
   return out;
 }
 
@@ -566,13 +704,15 @@ std::vector<float> guided_upsample(const Plane& small, const std::vector<float>&
   const auto ma = mean(a), mb = mean(b);
   const float fx = static_cast<float>(sw) / static_cast<float>(full.w), fy = static_cast<float>(sh) / static_cast<float>(full.h);
   std::vector<float> out(full.w * full.h);
-  for (std::size_t y = 0; y < full.h; ++y) {
-    const float sy = (static_cast<float>(y) + 0.5F) * fy - 0.5F;
-    for (std::size_t x = 0; x < full.w; ++x) {
-      const float sx = (static_cast<float>(x) + 0.5F) * fx - 0.5F;
-      out[y * full.w + x] = bilinear(ma, sw, sh, sx, sy) * full.v[y * full.w + x] + bilinear(mb, sw, sh, sx, sy);
+  par(full.h, out.size(), [&](std::size_t first, std::size_t end) {
+    for (std::size_t y = first; y < end; ++y) {
+      const float sy = (static_cast<float>(y) + 0.5F) * fy - 0.5F;
+      for (std::size_t x = 0; x < full.w; ++x) {
+        const float sx = (static_cast<float>(x) + 0.5F) * fx - 0.5F;
+        out[y * full.w + x] = bilinear(ma, sw, sh, sx, sy) * full.v[y * full.w + x] + bilinear(mb, sw, sh, sx, sy);
+      }
     }
-  }
+  });
   return out;
 }
 
@@ -583,10 +723,12 @@ void localTone(Frame& frame, float shadows, float highlights) {
   if ((shadows == 0.0F && highlights == 0.0F) || w < 2 || h < 2) return;
   constexpr float kFloor = 1.0F / 65536.0F;
   Plane u{w, h, std::vector<float>(w * h)};
-  for (std::size_t i = 0; i < w * h; ++i) {
-    const auto& q = frame.px[i];
-    u.v[i] = std::log2(std::fmax(luma3(srgbToLinear(q[0]), srgbToLinear(q[1]), srgbToLinear(q[2])), 0.0F) + kFloor);
-  }
+  par(h, w * h, [&](std::size_t first, std::size_t end) {
+    for (std::size_t i = first * w; i < end * w; ++i) {
+      const auto& q = frame.px[i];
+      u.v[i] = std::log2(std::fmax(luma3(srgbToLinear(q[0]), srgbToLinear(q[1]), srgbToLinear(q[2])), 0.0F) + kFloor);
+    }
+  });
   const std::size_t f = std::max<std::size_t>(div_ceil(std::max(w, h), kWorkSide), 1);
   const Plane small = f == 1 ? u : shrink(u, f);
   Plane o = small;
@@ -600,11 +742,13 @@ void localTone(Frame& frame, float shadows, float highlights) {
     for (std::size_t i = 0; i < d.size(); ++i) d[i] = o.v[i] - small.v[i];
     change = guided_upsample(small, d, u);
   }
-  for (std::size_t i = 0; i < w * h; ++i) {
-    const float gain = std::exp2(change[i]);
-    auto& q = frame.px[i];
-    for (int c = 0; c < 3; ++c) q[c] = linearToSrgb(srgbToLinear(q[c]) * gain);
-  }
+  par(h, w * h, [&](std::size_t first, std::size_t end) {
+    for (std::size_t i = first * w; i < end * w; ++i) {
+      const float gain = std::exp2(change[i]);
+      auto& q = frame.px[i];
+      for (int c = 0; c < 3; ++c) q[c] = linearToSrgb(srgbToLinear(q[c]) * gain);
+    }
+  });
 }
 
 // ---- Whites and Blacks (camera_raw/whites_blacks.rs, camera_raw.rs luminance_points)
@@ -668,14 +812,17 @@ std::array<float, 2> luminancePoints(const Frame& frame) {
   const std::size_t f = std::max<std::size_t>(div_ceil(std::max(w, h), 256), 1);
   const std::size_t sw = div_ceil(w, f), sh = div_ceil(h, f);
   std::vector<std::array<double, 4>> sum(sw * sh, {0.0, 0.0, 0.0, 0.0});
-  for (std::size_t y = 0; y < h; ++y) {
-    for (std::size_t x = 0; x < w; ++x) {
-      const auto& q = frame.px[y * w + x];
-      auto& s = sum[(y / f) * sw + x / f];
-      for (int c = 0; c < 3; ++c) s[c] += static_cast<double>(std::clamp(srgbToLinear(q[c]), 0.0F, 1.0F));
-      s[3] += 1.0;
+  // In bands of cell rows: each cell still adds its pixels row by row, left to right.
+  par(sh, w * h, [&](std::size_t first, std::size_t end) {
+    for (std::size_t y = first * f; y < std::min(end * f, h); ++y) {
+      for (std::size_t x = 0; x < w; ++x) {
+        const auto& q = frame.px[y * w + x];
+        auto& s = sum[(y / f) * sw + x / f];
+        for (int c = 0; c < 3; ++c) s[c] += static_cast<double>(std::clamp(srgbToLinear(q[c]), 0.0F, 1.0F));
+        s[3] += 1.0;
+      }
     }
-  }
+  });
   std::vector<float> lum, brightest;
   for (const auto& s : sum) {
     if (!(s[3] > 0.0)) continue;
@@ -698,21 +845,24 @@ void whitesBlacks(Frame& frame, float whites, float blacks) {
     return bv != 0.0F ? curve(wb::kBlacks, kBlacksFrom, bv, v) : v;
   };
   const bool per_channel = w > 0.0F || b < 0.0F;
-  for (auto& q : frame.px) {
-    const float lin[3] = {srgbToLinear(q[0]), srgbToLinear(q[1]), srgbToLinear(q[2])};
-    if (per_channel) {
-      for (int c = 0; c < 3; ++c) {
-        const float over = std::fmax(lin[c] - 1.0F, 0.0F);
-        q[c] = linearToSrgb(srgbToLinear(grey(linearToSrgb(std::fmin(lin[c], 1.0F)))) + over);
+  par(frame.height, frame.px.size(), [&](std::size_t first, std::size_t end) {
+    for (std::size_t p = first * frame.width; p < end * frame.width; ++p) {
+      auto& q = frame.px[p];
+      const float lin[3] = {srgbToLinear(q[0]), srgbToLinear(q[1]), srgbToLinear(q[2])};
+      if (per_channel) {
+        for (int c = 0; c < 3; ++c) {
+          const float over = std::fmax(lin[c] - 1.0F, 0.0F);
+          q[c] = linearToSrgb(srgbToLinear(grey(linearToSrgb(std::fmin(lin[c], 1.0F)))) + over);
+        }
+      } else {
+        const float y = std::fmax(luma3(lin[0], lin[1], lin[2]), 0.0F);
+        if (y <= 1e-7F) continue;
+        const float y2 = srgbToLinear(grey(linearToSrgb(std::fmin(y, 1.0F)))) + std::fmax(y - 1.0F, 0.0F);
+        const float k = y2 / y;
+        for (int c = 0; c < 3; ++c) q[c] = linearToSrgb(lin[c] * k);
       }
-    } else {
-      const float y = std::fmax(luma3(lin[0], lin[1], lin[2]), 0.0F);
-      if (y <= 1e-7F) continue;
-      const float y2 = srgbToLinear(grey(linearToSrgb(std::fmin(y, 1.0F)))) + std::fmax(y - 1.0F, 0.0F);
-      const float k = y2 / y;
-      for (int c = 0; c < 3; ++c) q[c] = linearToSrgb(lin[c] * k);
     }
-  }
+  });
 }
 
 }  // namespace pixcake::gpu::camera_raw
