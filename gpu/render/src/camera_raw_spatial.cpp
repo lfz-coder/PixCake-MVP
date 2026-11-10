@@ -720,6 +720,33 @@ std::vector<float> guided_upsample(const Plane& small, const std::vector<float>&
 
 }  // namespace
 
+const LocalToneConstants& localToneConstants() {
+  static const LocalToneConstants c = [] {
+    LocalToneConstants k;
+    k.ref_step = kRefStep;
+    k.floor = 1.0F / 65536.0F;
+    k.work_side = kWorkSide;
+    for (std::size_t i = 0; i < kKnots; ++i) {
+      k.shadows_own[i] = kShadows.own[i];
+      k.shadows_around[i] = kShadows.around[i];
+      k.highlights_pull[i] = kHighlights.pull[i];
+      k.highlights_push[i] = kHighlights.push[i];
+    }
+    k.shadows_sigma = kShadows.sigma;
+    k.shadows_down = kShadows.down;
+    k.highlights_sigma = kHighlights.sigma;
+    return k;
+  }();
+  return c;
+}
+
+float quantileOf(const std::vector<float>& v, float q) { return quantile(v, q); }
+
+std::array<float, 2> localToneRange(const std::vector<float>& u, std::size_t w, std::size_t h) {
+  const auto r = range_of(Plane{w, h, u});
+  return {r.first, r.second};
+}
+
 void localTone(Frame& frame, float shadows, float highlights) {
   const std::size_t w = frame.width, h = frame.height;
   if ((shadows == 0.0F && highlights == 0.0F) || w < 2 || h < 2) return;

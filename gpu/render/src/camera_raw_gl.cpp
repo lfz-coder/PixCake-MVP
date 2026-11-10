@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <map>
 
 #include "camera_raw_gl_shaders.hpp"
@@ -170,12 +171,15 @@ bool box(Gl::Impl& g, const Plane& in, std::size_t r, Plane& out) {
 
 // The guided filter's last steps on (I, p, Ip, II) packed in `packed`, whose means are taken
 // with radius r; `guide` is I at full size and `scale` the subsampling (1: none).
-bool guided_from_packed(Gl::Impl& g, const Plane& packed, const Plane& guide, std::size_t r, float eps, float scale, Plane& out) {
+bool guided_from_packed(Gl::Impl& g, const Plane& packed, const Plane& guide, std::size_t r, float eps, float scale, Plane& out,
+                        std::array<float, 2> factor = {0.0F, 0.0F}) {
   Plane means, ab, mab, result;
   if (!box(g, packed, r, means) || !same_size_plane(g, packed, PixelFormat::Rgba32F, ab) ||
       !g.draw(shaders::kGuidedAb, ab, {&means}, [eps](gl::Program& p, std::string& e) { return p.setFloat("eps", eps, e); }) ||
       !box(g, ab, r, mab) || !same_size_plane(g, guide, PixelFormat::R32F, result) ||
-      !g.draw(shaders::kGuidedOut, result, {&mab, &guide}, [scale](gl::Program& p, std::string& e) { return p.setFloat("scale", scale, e); })) {
+      !g.draw(shaders::kGuidedOut, result, {&mab, &guide}, [scale, factor](gl::Program& p, std::string& e) {
+        return p.setFloat("scale", scale, e) && (scale != 0.0F || p.setVec4("factor_v", {factor[0], factor[1], 0.0F, 0.0F}, e));
+      })) {
     return false;
   }
   out = result;
@@ -385,6 +389,184 @@ bool toneDetail(Gl& gl_, Plane& rgba, float contrast, float texture, float clari
       })) {
     return false;
   }
+  rgba = out;
+  return true;
+}
+
+// ---- Highlights and Shadows (camera_raw::localTone, same steps)
+namespace {
+
+const char* with_pyramid(const char* body) {
+  static std::map<const char*, std::string> sources;
+  auto it = sources.find(body);
+  if (it == sources.end()) it = sources.emplace(body, std::string(shaders::kPyramid) + body).first;
+  return it->second.c_str();
+}
+
+std::size_t depth(std::size_t w, std::size_t h) {
+  std::size_t s = std::min(w, h), n = 1;
+  while (s > 2) {
+    s = div_ceil(s, 2);
+    ++n;
+  }
+  return n;
+}
+
+// blur_step(p, 2): columns at the even rows, then rows at the even columns.
+bool down(Gl::Impl& g, const Plane& p, Plane& out) {
+  const auto step = [](gl::Program& prog, std::string& e) { return prog.setInt("step_size", 2, e); };
+  Plane cols, rows;
+  if (!g.acquire(p.w, static_cast<std::uint32_t>(div_ceil(p.h, 2)), PixelFormat::R32F, cols) ||
+      !g.draw(with_pyramid(shaders::kBlurColumns), cols, {&p}, step) ||
+      !g.acquire(static_cast<std::uint32_t>(div_ceil(p.w, 2)), cols.h, PixelFormat::R32F, rows) ||
+      !g.draw(with_pyramid(shaders::kBlurRows), rows, {&cols}, step)) {
+    return false;
+  }
+  out = rows;
+  return true;
+}
+
+bool gaussian(Gl::Impl& g, const Plane& p, std::size_t n, std::vector<Plane>& levels) {
+  levels.assign(1, p);
+  for (std::size_t i = 1; i < n; ++i) {
+    Plane next;
+    if (!down(g, levels.back(), next)) return false;
+    levels.push_back(next);
+  }
+  return true;
+}
+
+struct Remap {
+  int mode = 0;  // 0 Highlights, 1 Shadows
+  float range_lo = 0, span = 1, amount = 0, sigma = 1;
+  std::array<float, 5> a{}, b{};
+};
+
+// The local Laplacian filter of u (lo/hi from the CPU, as llf computes them).
+bool llf(Gl::Impl& g, const Plane& u, const std::vector<float>& u_v, const Remap& remap, Plane& out) {
+  const std::size_t n = depth(u.w, u.h);
+  float hi = -std::numeric_limits<float>::infinity();
+  for (const float v : u_v) hi = std::fmax(hi, v);
+  const float lo = std::fmin(camera_raw::quantileOf(u_v, 0.001F), hi);
+  if (hi - lo <= 1e-6F || std::isnan(hi - lo)) {
+    out = u;
+    return true;
+  }
+  std::vector<Plane> gp;
+  if (!gaussian(g, u, n, gp)) return false;
+  const std::size_t refs =
+      std::clamp<std::size_t>(static_cast<std::size_t>(std::ceil((hi - lo) / camera_raw::localToneConstants().ref_step)) + 1, 2, 96);
+  const float step = (hi - lo) / static_cast<float>(refs - 1);
+  std::vector<Plane> lap(n - 1);
+  for (std::size_t l = 0; l + 1 < n; ++l)
+    if (!same_size_plane(g, gp[l], PixelFormat::R32F, lap[l]) || !g.draw(shaders::kZero, lap[l], {})) return false;
+  for (std::size_t k = 0; k < refs; ++k) {
+    const float r = lo + step * static_cast<float>(k);
+    Plane m;
+    if (!same_size_plane(g, u, PixelFormat::R32F, m) ||
+        !g.draw(shaders::kRemap, m, {&u}, [&](gl::Program& p, std::string& e) {
+          return p.setInt("mode", remap.mode, e) && p.setFloat("r", r, e) && p.setFloat("range_lo", remap.range_lo, e) &&
+                 p.setFloat("span", remap.span, e) && p.setFloat("amount", remap.amount, e) && p.setFloat("sigma", remap.sigma, e) &&
+                 p.setVec4("knot_a", {remap.a[0], remap.a[1], remap.a[2], remap.a[3]}, e) && p.setFloat("knot_a4", remap.a[4], e) &&
+                 (remap.mode == 0 || (p.setVec4("knot_b", {remap.b[0], remap.b[1], remap.b[2], remap.b[3]}, e) &&
+                                      p.setFloat("knot_b4", remap.b[4], e)));
+        })) {
+      return false;
+    }
+    std::vector<Plane> gr;
+    if (!gaussian(g, m, n, gr)) return false;
+    for (std::size_t l = 0; l + 1 < n; ++l) {
+      Plane next;
+      if (!same_size_plane(g, lap[l], PixelFormat::R32F, next) ||
+          !g.draw(with_pyramid(shaders::kLapAccum), next, {&lap[l], &gp[l], &gr[l], &gr[l + 1]}, [&](gl::Program& p, std::string& e) {
+            return p.setFloat("lo", lo, e) && p.setFloat("hi", hi, e) && p.setFloat("r", r, e) && p.setFloat("step_ref", step, e);
+          })) {
+        return false;
+      }
+      lap[l] = next;
+    }
+  }
+  Plane o = gp[n - 1];
+  for (std::size_t l = n - 1; l-- > 0;) {
+    Plane next;
+    if (!same_size_plane(g, gp[l], PixelFormat::R32F, next) || !g.draw(with_pyramid(shaders::kUpAdd), next, {&o, &lap[l]})) return false;
+    o = next;
+  }
+  out = o;
+  return true;
+}
+
+bool add(Gl::Impl& g, const Plane& p, float offset, Plane& out) {
+  Plane o;
+  if (!same_size_plane(g, p, PixelFormat::R32F, o) ||
+      !g.draw(shaders::kAdd, o, {&p}, [offset](gl::Program& prog, std::string& e) { return prog.setFloat("offset", offset, e); })) {
+    return false;
+  }
+  out = o;
+  return true;
+}
+
+// highlights_pass (mode 0) or shadows_pass (mode 1) on the work plane u.
+bool tone_pass(Gl& gl_, const Plane& u, int mode, float amount, Plane& out) {
+  auto& g = gl_.impl();
+  const auto& c = camera_raw::localToneConstants();
+  std::vector<float> u_v;
+  if (!download(gl_, u, u_v)) return false;
+  const auto range = camera_raw::localToneRange(u_v, u.w, u.h);
+  Remap remap;
+  remap.mode = mode;
+  remap.range_lo = range[0];
+  remap.span = std::fmax(range[1] - range[0], 1.0F);
+  if (mode == 0) {
+    remap.amount = amount;
+    remap.sigma = c.highlights_sigma;
+    remap.a = amount < 0.0F ? c.highlights_pull : c.highlights_push;
+  } else {
+    remap.amount = amount > 0.0F ? amount : amount * c.shadows_down;
+    remap.sigma = c.shadows_sigma;
+    remap.a = c.shadows_own;
+    remap.b = c.shadows_around;
+  }
+  Plane o;
+  std::vector<float> o_v;
+  if (!llf(g, u, u_v, remap, o) || !download(gl_, o, o_v)) return false;
+  const float q = mode == 0 ? 0.01F : 0.99F;
+  const float shift = camera_raw::quantileOf(u_v, q) - camera_raw::quantileOf(o_v, q);
+  return add(g, o, shift, out);
+}
+
+}  // namespace
+
+bool localTone(Gl& gl_, Plane& rgba, float shadows, float highlights) {
+  const std::size_t w = rgba.w, h = rgba.h;
+  if ((shadows == 0.0F && highlights == 0.0F) || w < 2 || h < 2) return true;
+  auto& g = gl_.impl();
+  const auto& c = camera_raw::localToneConstants();
+  Plane u;
+  if (!same_size_plane(g, rgba, PixelFormat::R32F, u) ||
+      !g.draw(shaders::kLogLuma, u, {&rgba}, [&](gl::Program& p, std::string& e) { return p.setFloat("floor_value", c.floor, e); })) {
+    return false;
+  }
+  const std::size_t f = std::max<std::size_t>(div_ceil(std::max(w, h), c.work_side), 1);
+  Plane small = u;
+  if (f > 1 && !block_mean(g, u, static_cast<std::uint32_t>(f), PixelFormat::R32F, small)) return false;
+  Plane o = small;
+  if (highlights != 0.0F && !tone_pass(gl_, o, 0, std::clamp(highlights, -100.0F, 100.0F) / 100.0F, o)) return false;
+  if (shadows != 0.0F && !tone_pass(gl_, o, 1, std::clamp(shadows, -100.0F, 100.0F) / 100.0F, o)) return false;
+  Plane change, d, out;
+  if (f == 1) {
+    if (!same_size_plane(g, u, PixelFormat::R32F, change) || !g.draw(shaders::kSubtract, change, {&o, &u})) return false;
+  } else {
+    // guided_upsample: the change fitted on the small copy, evaluated on the full plane.
+    Plane packed;
+    if (!same_size_plane(g, small, PixelFormat::R32F, d) || !g.draw(shaders::kSubtract, d, {&o, &small}) ||
+        !same_size_plane(g, small, PixelFormat::Rgba32F, packed) || !g.draw(shaders::kGuidedPack, packed, {&small, &d}) ||
+        !guided_from_packed(g, packed, u, 2, 0.01F, 0.0F, change,
+                            {static_cast<float>(small.w) / static_cast<float>(w), static_cast<float>(small.h) / static_cast<float>(h)})) {
+      return false;
+    }
+  }
+  if (!same_size_plane(g, rgba, PixelFormat::Rgba32F, out) || !g.draw(shaders::kGain, out, {&rgba, &change})) return false;
   rgba = out;
   return true;
 }

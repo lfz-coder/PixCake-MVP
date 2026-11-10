@@ -66,5 +66,8 @@ bool downloadFrame(Gl&, const Plane& rgba, camera_raw::Frame& out);
 // (dehaze's atmospheric light and means) are read back and computed on the CPU.
 bool dehaze(Gl&, Plane& rgba, float amount);
 bool toneDetail(Gl&, Plane& rgba, float contrast, float texture, float clarity, float pixel_scale);
+// Highlights and Shadows: the pyramids on the GPU; ranges, quantiles and shifts on the CPU from
+// read-back work planes (at most localToneConstants().work_side across).
+bool localTone(Gl&, Plane& rgba, float shadows, float highlights);
 
 }  // namespace pixcake::gpu::camera_raw_gl

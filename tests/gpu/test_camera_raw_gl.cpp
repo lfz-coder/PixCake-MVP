@@ -135,6 +135,7 @@ void test_rank_filter_gl(crgl::Gl& g) {
 // ---- Whole frames
 
 const char* const kFrames[] = {"detail", "grey", "block", "strip", "scene", "scaled"};
+// The 1700 x 12 frame (wider than local_tone's 1600 px work side) is for Highlights/Shadows.
 cr::Frame frame_named(const std::string& name) {
   return name == "scene" ? spatial_frames::frame_of_image(spatial_frames::scene(400, 300)) : spatial_frames::frame_of(name);
 }
@@ -190,6 +191,44 @@ void test_tone_detail_gl(crgl::Gl& g) {
   }
 }
 
+void test_local_tone_gl(crgl::Gl& g) {
+  struct Case {
+    const char* name;
+    float shadows, highlights;
+  };
+  const Case cases[] = {{"shadows 100", 100, 0}, {"highlights -100", 0, -100}, {"shadows -50 highlights 50", -50, 50}};
+  for (const char* frame : {"detail", "grey", "block", "strip", "scene", "scaled", "long"}) {
+    for (const auto& c : cases) {
+      expect_frame(g, c.name, frame, [&](crgl::Plane& p) { return crgl::localTone(g, p, c.shadows, c.highlights); },
+                   [&](cr::Frame& f) { cr::localTone(f, c.shadows, c.highlights); });
+    }
+  }
+}
+
+// Frames below 2 px on a side return untouched (the same bits); 2 px frames have a one-level
+// pyramid, whose change is 0 but whose sRGB round trip runs on the GPU's pow.
+void test_local_tone_gl_tiny(crgl::Gl& g) {
+  struct Size {
+    std::uint32_t w, h;
+    float tolerance;
+  };
+  for (const Size s : {Size{1, 1, 0.0F}, Size{1, 5, 0.0F}, Size{7, 1, 0.0F}, Size{2, 2, kTolerance}, Size{2, 7, kTolerance}}) {
+    cr::Frame cpu;
+    cpu.width = s.w;
+    cpu.height = s.h;
+    for (std::size_t i = 0; i < std::size_t{s.w} * s.h; ++i) cpu.px.push_back(spatial_frames::detail(i % s.w, i / s.w, s.w + 1, s.h + 1));
+    cr::Frame got;
+    crgl::Plane rgba;
+    CHECK(crgl::uploadFrame(g, cpu, rgba) && crgl::localTone(g, rgba, 60, -60) && crgl::downloadFrame(g, rgba, got));
+    cr::localTone(cpu, 60, -60);
+    float worst = 0.0F;
+    for (std::size_t i = 0; i < cpu.px.size(); ++i)
+      for (int c = 0; c < 4; ++c) worst = std::max(worst, std::fabs(got.px[i][c] - cpu.px[i][c]));
+    std::printf("localTone tiny %ux%u worst %.3g\n", s.w, s.h, worst);
+    CHECK(worst <= s.tolerance && g.ok());
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -212,6 +251,8 @@ int main() {
     test_rank_filter_gl(g);
     test_dehaze_gl(g);
     test_tone_detail_gl(g);
+    test_local_tone_gl(g);
+    test_local_tone_gl_tiny(g);
     if (!g.ok()) std::fprintf(stderr, "GL error: %s\n", g.error().c_str());
     CHECK(g.ok());
   }
